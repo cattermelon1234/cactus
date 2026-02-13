@@ -524,10 +524,6 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << colored("\n👋 Goodbye!\n", Color::MAGENTA + Color::BOLD);
-    if (result != 0) {
-        const char* err = cactus_get_last_error();
-        cactus::telemetry::recordTranscription(model_path ? model_path : nullptr, false, 0.0, 0.0, 0.0, 0, err ? err : "Transcription failed");
-    }
     cactus_destroy(model);
     return result >= 0 ? 0 : 1;
 }
