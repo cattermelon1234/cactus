@@ -1,4 +1,5 @@
 #include "../cactus/ffi/cactus_ffi.h"
+#include "../cactus/telemetry/telemetry.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -236,15 +237,14 @@ int main(int argc, char* argv[]) {
         messages_json << "]";
 
         std::string options = "{\"temperature\":0.7,\"top_p\":0.95,\"top_k\":40,\"max_tokens\":"
-                            + std::to_string(MAX_TOKENS)
-                            + ",\"stop_sequences\":[\"<|im_end|>\",\"<end_of_turn>\"]}";
+                    + std::to_string(MAX_TOKENS)
+                    + ",\"stop_sequences\":[\"<|im_end|>\",\"<end_of_turn>\"]}";
 
         std::vector<char> response_buffer(RESPONSE_BUFFER_SIZE, 0);
 
         std::cout << colored("Assistant: ", Color::GREEN + Color::BOLD);
 
         printer.reset();
-
         int result = cactus_complete(
             model,
             messages_json.str().c_str(),
@@ -258,6 +258,13 @@ int main(int argc, char* argv[]) {
 
         if (result >= 0) {
             printer.print_stats();
+            using namespace std::chrono;
+            auto end_time = steady_clock::now();
+            double total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - printer.start_time).count();
+            double ttft_ms = printer.time_to_first_token * 1000.0;
+            int tokens = printer.token_count;
+            double tps = (total_ms > 0.0) ? (tokens / (total_ms / 1000.0)) : 0.0;
+            cactus::telemetry::recordCompletion(model_path, true, ttft_ms, tps, total_ms, tokens, "");
         }
 
         std::cout << "\n";
