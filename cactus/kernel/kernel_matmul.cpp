@@ -5,7 +5,7 @@
 #include <cstring>
 
 // enable SME2 intrinsics if available
-// Compile SME2-capable builds with -march=armv9.2-a+sme2.
+// Compile SME2-capable builds with -march=armv9.2-a+sme2
 #if defined(__ARM_FEATURE_SME2)
 #include <arm_sme.h>
 #include <arm_sve.h>
@@ -83,24 +83,29 @@ static inline __fp16 hsum_f16x8(float16x8_t v) {
   return vget_lane_f16(sum1, 0);
 }
 
-static void cactus_matmul_f16_sme2_worker(
-    const __fp16 *a, const __fp16 *b_transposed, __fp16 *c, size_t M, size_t K,
-    size_t N, size_t row_block,
-    size_t col_block) __arm_streaming __arm_inout("za") {
+#if defined(__ARM_FEATURE_SME2) && defined(__ARM_FEATURE_SME)
+__arm_new("za") static void cactus_matmul_f16_sme2_tile(
+    const __fp16 *a, const __fp16 *b_transposed, __fp16 *c, size_t K, size_t N,
+    size_t row_block, size_t col_block, size_t row_limit,
+    size_t col_limit) __arm_streaming {
   const uint64_t za_tile = 0;
   const uint32_t TM = static_cast<uint32_t>(svcntsw());
   const uint32_t TN = static_cast<uint32_t>(svcntw());
-  const size_t m_end = std::min(row_block + TM, M);
-  const size_t n_end = std::min(col_block + TN, N);
+
+  const size_t m_end = std::min(row_block + TM, row_limit);
+  const size_t n_end = std::min(col_block + TN, col_limit);
   const uint32_t m_tile = static_cast<uint32_t>(m_end - row_block);
   const uint32_t n_tile = static_cast<uint32_t>(n_end - col_block);
 
   svzero_za();
-  std::vector<__fp16> a_packed(TM, (__fp16)(0));
-  std::vector<__fp16> b_packed(TN, (__fp16)(0));
+
+  std::vector<__fp16> a_packed(TM, (__fp16)0);
+  std::vector<__fp16> b_packed(TN, (__fp16)0);
+  std::vector<float> row_out(TN, 0.0f);
 
   const svbool_t pg16_m = svwhilelt_b16((uint64_t)0, (uint64_t)m_tile);
   const svbool_t pg16_n = svwhilelt_b16((uint64_t)0, (uint64_t)n_tile);
+  const svbool_t pg32_n = svwhilelt_b32((uint64_t)0, (uint64_t)n_tile);
 
   for (size_t k = 0; k < K; ++k) {
     for (uint32_t i = 0; i < m_tile; ++i) {
@@ -109,23 +114,36 @@ static void cactus_matmul_f16_sme2_worker(
     for (uint32_t j = 0; j < n_tile; ++j) {
       b_packed[j] = b_transposed[(col_block + j) * K + k];
     }
+
     const svfloat16_t a_vec = svld1(pg16_m, a_packed.data());
     const svfloat16_t b_vec = svld1(pg16_n, b_packed.data());
-
-    // compute outer product and accumulate into za_tile
-    svmopa_za32_m(za_tile, pg16_m, pg16_n, a_vec, b_vec);
+    svmopa_za32_f16_m(za_tile, pg16_m, pg16_n, a_vec, b_vec);
   }
-  const svbool_t pg32_n = svwhilelt_b32((uint64_t)0, (uint64_t)n_tile);
-  std::vector<float> row_out(TN, 0.0f);
+
   for (uint32_t i = 0; i < m_tile; ++i) {
     const svfloat32_t acc_row = svreadz_hor_za32_f32(za_tile, i);
     svst1(pg32_n, row_out.data(), acc_row);
-
     for (uint32_t j = 0; j < n_tile; ++j) {
       c[(row_block + i) * N + (col_block + j)] = (__fp16)row_out[j];
     }
   }
 }
+
+static void cactus_matmul_f16_sme2_worker(const __fp16 *a,
+                                          const __fp16 *b_transposed, __fp16 *c,
+                                          size_t /*M*/, size_t K, size_t N,
+                                          size_t start_row, size_t end_row) {
+  const size_t TM = static_cast<size_t>(svcntsw());
+  const size_t TN = static_cast<size_t>(svcntw());
+
+  for (size_t row_block = start_row; row_block < end_row; row_block += TM) {
+    for (size_t col_block = 0; col_block < N; col_block += TN) {
+      cactus_matmul_f16_sme2_tile(a, b_transposed, c, K, N, row_block,
+                                  col_block, end_row, N);
+    }
+  }
+}
+#endif
 
 static void cactus_matmul_f16_worker(const __fp16 *a,
                                      const __fp16 *b_transposed, __fp16 *c,
