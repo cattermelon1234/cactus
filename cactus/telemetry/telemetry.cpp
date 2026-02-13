@@ -45,7 +45,6 @@ struct Event {
     int session_tokens;
     char message[256];
     char error[256];
-    char response[2048];
     char function_calls[1024];
     std::chrono::system_clock::time_point timestamp;
 };
@@ -176,7 +175,6 @@ static Event make_event(EventType type, const char* model, bool success, double 
     std::memset(e.model, 0, sizeof(e.model));
     std::memset(e.message, 0, sizeof(e.message));
     std::memset(e.error, 0, sizeof(e.error));
-    std::memset(e.response, 0, sizeof(e.response));
     std::memset(e.function_calls, 0, sizeof(e.function_calls));
     std::string safe_model = model_basename(model);
     if (!safe_model.empty()) std::strncpy(e.model, safe_model.c_str(), sizeof(e.model)-1);
@@ -203,12 +201,10 @@ static Event make_event_extended(EventType type, const char* model, const Comple
     std::memset(e.model, 0, sizeof(e.model));
     std::memset(e.message, 0, sizeof(e.message));
     std::memset(e.error, 0, sizeof(e.error));
-    std::memset(e.response, 0, sizeof(e.response));
     std::memset(e.function_calls, 0, sizeof(e.function_calls));
     std::string safe_model = model_basename(model);
     if (!safe_model.empty()) std::strncpy(e.model, safe_model.c_str(), sizeof(e.model)-1);
     if (!metrics.success && metrics.error_message) std::strncpy(e.error, metrics.error_message, sizeof(e.error)-1);
-    if (metrics.success && metrics.response_text && !metrics.cloud_handoff) std::strncpy(e.response, metrics.response_text, sizeof(e.response)-1);
     if (metrics.function_calls_json) std::strncpy(e.function_calls, metrics.function_calls_json, sizeof(e.function_calls)-1);
     return e;
 }
@@ -258,8 +254,6 @@ static bool parse_event_line(const std::string& line, Event& out) {
     extract_string_field(line, "message", message);
     std::string error;
     extract_string_field(line, "error", error);
-    std::string response;
-    extract_string_field(line, "response", response);
     std::string function_calls;
     extract_string_field(line, "function_calls", function_calls);
     double ts_ms = 0.0;
@@ -292,7 +286,6 @@ static bool parse_event_line(const std::string& line, Event& out) {
     out.session_time_ms = session_time_ms;
     out.session_tokens = session_tokens;
     if (!error.empty()) std::strncpy(out.error, error.c_str(), sizeof(out.error)-1);
-    if (!response.empty()) std::strncpy(out.response, response.c_str(), sizeof(out.response)-1);
     if (!function_calls.empty()) std::strncpy(out.function_calls, function_calls.c_str(), sizeof(out.function_calls)-1);
     return true;
 }
@@ -334,6 +327,7 @@ static bool extract_string_field(const std::string& line, const std::string& key
     size_t end = line.find_first_of(",}", pos);
     if (end == std::string::npos) end = line.size();
     out = line.substr(pos, end - pos);
+    if (out == "null") out.clear();
     return true;
 }
 
@@ -585,7 +579,7 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
         payload << "\"model\":\"" << e.model << "\",";
         payload << "\"success\":" << (e.success ? "true" : "false") << ",";
         payload << "\"cloud_handoff\":" << (e.cloud_handoff ? "true" : "false") << ",";
-        if (e.type == INIT) {
+        if (e.type == INIT || !e.success) {
             payload << "\"ttft\":null,";
             payload << "\"prefill_tps\":null,";
             payload << "\"decode_tps\":null,";
@@ -596,16 +590,32 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
             payload << "\"decode_tps\":" << e.decode_tps << ",";
             payload << "\"tps\":" << e.tps << ",";
         }
-        payload << "\"response_time\":" << e.response_time_ms << ",";
-        payload << "\"confidence\":" << e.confidence << ",";
-        payload << "\"ram_usage_mb\":" << e.ram_usage_mb << ",";
-        payload << "\"tokens\":" << e.tokens << ",";
-        payload << "\"prefill_tokens\":" << e.prefill_tokens << ",";
-        payload << "\"decode_tokens\":" << e.decode_tokens << ",";
-        payload << "\"session_ttft\":" << e.session_ttft_ms << ",";
-        payload << "\"session_tps\":" << e.session_tps << ",";
-        payload << "\"session_time_ms\":" << e.session_time_ms << ",";
-        payload << "\"session_tokens\":" << e.session_tokens << ",";
+        if (!e.success) {
+            payload << "\"response_time\":null,";
+            payload << "\"ram_usage_mb\":null,";
+        } else {
+            payload << "\"response_time\":" << e.response_time_ms << ",";
+            payload << "\"ram_usage_mb\":" << e.ram_usage_mb << ",";
+        }
+        if (e.type == INIT || !e.success) {
+            payload << "\"confidence\":null,";
+            payload << "\"tokens\":null,";
+            payload << "\"prefill_tokens\":null,";
+            payload << "\"decode_tokens\":null,";
+            payload << "\"session_ttft\":null,";
+            payload << "\"session_tps\":null,";
+            payload << "\"session_time_ms\":null,";
+            payload << "\"session_tokens\":null,";
+        } else {
+            payload << "\"confidence\":" << e.confidence << ",";
+            payload << "\"tokens\":" << e.tokens << ",";
+            payload << "\"prefill_tokens\":" << e.prefill_tokens << ",";
+            payload << "\"decode_tokens\":" << e.decode_tokens << ",";
+            payload << "\"session_ttft\":" << e.session_ttft_ms << ",";
+            payload << "\"session_tps\":" << e.session_tps << ",";
+            payload << "\"session_time_ms\":" << e.session_time_ms << ",";
+            payload << "\"session_tokens\":" << e.session_tokens << ",";
+        }
         payload << "\"created_at\":\"" << format_timestamp(e.timestamp) << "\",";
         if (!project_id.empty()) {
             payload << "\"project_id\":\"" << project_id << "\",";
@@ -622,11 +632,6 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
             payload << ",\"error\":\"" << e.error << "\"";
         } else {
             payload << ",\"error\":null";
-        }
-        if (e.response[0] != '\0') {
-            payload << ",\"response\":\"" << e.response << "\"";
-        } else {
-            payload << ",\"response\":null";
         }
         if (e.function_calls[0] != '\0') {
             payload << ",\"function_calls\":" << e.function_calls;
@@ -650,7 +655,7 @@ static void write_events_to_cache(const std::vector<Event>& local) {
         oss << "\"model\":\"" << e.model << "\",";
         oss << "\"success\":" << (e.success ? "true" : "false") << ",";
         oss << "\"cloud_handoff\":" << (e.cloud_handoff ? "true" : "false") << ",";
-        if (e.type == INIT) {
+        if (e.type == INIT || !e.success) {
             oss << "\"ttft\":null,";
             oss << "\"prefill_tps\":null,";
             oss << "\"decode_tps\":null,";
@@ -661,16 +666,32 @@ static void write_events_to_cache(const std::vector<Event>& local) {
             oss << "\"decode_tps\":" << e.decode_tps << ",";
             oss << "\"tps\":" << e.tps << ",";
         }
-        oss << "\"response_time\":" << e.response_time_ms << ",";
-        oss << "\"confidence\":" << e.confidence << ",";
-        oss << "\"ram_usage_mb\":" << e.ram_usage_mb << ",";
-        oss << "\"tokens\":" << e.tokens << ",";
-        oss << "\"prefill_tokens\":" << e.prefill_tokens << ",";
-        oss << "\"decode_tokens\":" << e.decode_tokens << ",";
-        oss << "\"session_ttft\":" << e.session_ttft_ms << ",";
-        oss << "\"session_tps\":" << e.session_tps << ",";
-        oss << "\"session_time_ms\":" << e.session_time_ms << ",";
-        oss << "\"session_tokens\":" << e.session_tokens;
+        if (!e.success) {
+            oss << "\"response_time\":null,";
+            oss << "\"ram_usage_mb\":null,";
+        } else {
+            oss << "\"response_time\":" << e.response_time_ms << ",";
+            oss << "\"ram_usage_mb\":" << e.ram_usage_mb << ",";
+        }
+        if (e.type == INIT || !e.success) {
+            oss << "\"confidence\":null,";
+            oss << "\"tokens\":null,";
+            oss << "\"prefill_tokens\":null,";
+            oss << "\"decode_tokens\":null,";
+            oss << "\"session_ttft\":null,";
+            oss << "\"session_tps\":null,";
+            oss << "\"session_time_ms\":null,";
+            oss << "\"session_tokens\":null";
+        } else {
+            oss << "\"confidence\":" << e.confidence << ",";
+            oss << "\"tokens\":" << e.tokens << ",";
+            oss << "\"prefill_tokens\":" << e.prefill_tokens << ",";
+            oss << "\"decode_tokens\":" << e.decode_tokens << ",";
+            oss << "\"session_ttft\":" << e.session_ttft_ms << ",";
+            oss << "\"session_tps\":" << e.session_tps << ",";
+            oss << "\"session_time_ms\":" << e.session_time_ms << ",";
+            oss << "\"session_tokens\":" << e.session_tokens;
+        }
         oss << ",\"ts_ms\":" << std::chrono::duration_cast<std::chrono::milliseconds>(e.timestamp.time_since_epoch()).count();
         if (e.message[0] != '\0') {
             oss << ",\"message\":\"" << e.message << "\"";
@@ -679,11 +700,6 @@ static void write_events_to_cache(const std::vector<Event>& local) {
             oss << ",\"error\":\"" << e.error << "\"";
         } else {
             oss << ",\"error\":null";
-        }
-        if (e.response[0] != '\0') {
-            oss << ",\"response\":\"" << e.response << "\"";
-        } else {
-            oss << ",\"response\":null";
         }
         if (e.function_calls[0] != '\0') {
             oss << ",\"function_calls\":" << e.function_calls;

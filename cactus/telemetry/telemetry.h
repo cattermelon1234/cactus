@@ -17,7 +17,6 @@ struct CompletionMetrics {
     size_t prefill_tokens;
     size_t decode_tokens;
     const char* error_message;
-    const char* response_text;
     const char* function_calls_json;
 };
 

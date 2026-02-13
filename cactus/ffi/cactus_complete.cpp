@@ -295,7 +295,6 @@ int cactus_complete(
             metrics.prefill_tokens = prompt_tokens;
             metrics.decode_tokens = 0;
             metrics.error_message = nullptr;
-            metrics.response_text = nullptr;
             metrics.function_calls_json = "[]";
             cactus::telemetry::recordCompletion(handle->model_name.c_str(), metrics);
 
@@ -395,7 +394,6 @@ int cactus_complete(
         metrics.prefill_tokens = prompt_tokens;
         metrics.decode_tokens = completion_tokens;
         metrics.error_message = nullptr;
-        metrics.response_text = entropy.spike_handoff ? nullptr : regular_response.c_str();
         metrics.function_calls_json = function_calls_json.c_str();
         cactus::telemetry::recordCompletion(handle->model_name.c_str(), metrics);
 
@@ -417,7 +415,6 @@ int cactus_complete(
         metrics.prefill_tokens = 0;
         metrics.decode_tokens = 0;
         metrics.error_message = e.what();
-        metrics.response_text = nullptr;
         metrics.function_calls_json = "[]";
         auto* h = static_cast<CactusModelHandle*>(model);
         cactus::telemetry::recordCompletion(h ? h->model_name.c_str() : "unknown", metrics);
@@ -439,7 +436,6 @@ int cactus_complete(
         metrics.prefill_tokens = 0;
         metrics.decode_tokens = 0;
         metrics.error_message = "Unknown error during completion";
-        metrics.response_text = nullptr;
         metrics.function_calls_json = "[]";
         auto* h = static_cast<CactusModelHandle*>(model);
         cactus::telemetry::recordCompletion(h ? h->model_name.c_str() : "unknown", metrics);
