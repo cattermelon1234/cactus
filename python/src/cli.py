@@ -769,6 +769,8 @@ def cmd_test(args):
         cmd.append("--android")
     if args.ios:
         cmd.append("--ios")
+    if args.only:
+        cmd.extend(["--only", args.only])
 
     env = os.environ.copy()
     if getattr(args, 'no_cloud_tele', False):
@@ -1041,6 +1043,7 @@ def create_parser():
     --large                            use larger models (LFM2.5-VL-1.6B + whisper-small)
     --precision INT4|INT8|FP16         regenerates weights with precision
     --no-rebuild                       skip building library and tests
+    --only <test_name>                 run specific test (engine, graph, index, kernel, kv_cache, performance, etc)
     --ios                              run on connected iPhone
     --android                          run on connected Android
 
@@ -1149,6 +1152,7 @@ def create_parser():
                              help='Run tests on Android')
     test_parser.add_argument('--ios', action='store_true',
                              help='Run tests on iOS')
+    test_parser.add_argument('--only', help='Only run the specified test (engine, graph, index, kernel, kv_cache, performance, etc)')
     test_parser.add_argument('--no-cloud-tele', action='store_true',
                              help='Disable cloud telemetry (write to cache only)')
 
