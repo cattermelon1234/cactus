@@ -3,16 +3,21 @@
 #include <algorithm>
 #include <arm_neon.h>
 #include <cstring>
+#include <vector>
 
-// enable SME2 intrinsics if available
-// Compile SME2-capable builds with -march=armv9.2-a+sme2
-#if defined(__ARM_FEATURE_SME2)
+#if defined(__aarch64__) && __has_include(<arm_sve.h>) && __has_include(<arm_sme.h>)
 #include <arm_sme.h>
 #include <arm_sve.h>
+#define CACTUS_HAS_SME2_INTRINSICS 1
+#else
+#define CACTUS_HAS_SME2_INTRINSICS 0
 #endif
 
-using MatmulWorkerFn = void (*)(const __fp16 *, const __fp16 *, __fp16 *,
-                                size_t, size_t, size_t, size_t, size_t);
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+constexpr size_t ACCELERATE_M_THRESHOLD = 4;
+constexpr size_t ACCELERATE_K_THRESHOLD = 256;
+#endif
 
 // Do NOT Remove: Uncomment for testing on various paths
 // -----
@@ -82,68 +87,6 @@ static inline __fp16 hsum_f16x8(float16x8_t v) {
   float16x4_t sum1 = vadd_f16(sum2, vext_f16(sum2, sum2, 1));
   return vget_lane_f16(sum1, 0);
 }
-
-#if defined(__ARM_FEATURE_SME2) && defined(__ARM_FEATURE_SME)
-__arm_new("za") static void cactus_matmul_f16_sme2_tile(
-    const __fp16 *a, const __fp16 *b_transposed, __fp16 *c, size_t K, size_t N,
-    size_t row_block, size_t col_block, size_t row_limit,
-    size_t col_limit) __arm_streaming {
-  const uint64_t za_tile = 0;
-  const uint32_t TM = static_cast<uint32_t>(svcntsw());
-  const uint32_t TN = static_cast<uint32_t>(svcntw());
-
-  const size_t m_end = std::min(row_block + TM, row_limit);
-  const size_t n_end = std::min(col_block + TN, col_limit);
-  const uint32_t m_tile = static_cast<uint32_t>(m_end - row_block);
-  const uint32_t n_tile = static_cast<uint32_t>(n_end - col_block);
-
-  svzero_za();
-
-  std::vector<__fp16> a_packed(TM, (__fp16)0);
-  std::vector<__fp16> b_packed(TN, (__fp16)0);
-  std::vector<float> row_out(TN, 0.0f);
-
-  const svbool_t pg16_m = svwhilelt_b16((uint64_t)0, (uint64_t)m_tile);
-  const svbool_t pg16_n = svwhilelt_b16((uint64_t)0, (uint64_t)n_tile);
-  const svbool_t pg32_n = svwhilelt_b32((uint64_t)0, (uint64_t)n_tile);
-
-  for (size_t k = 0; k < K; ++k) {
-    for (uint32_t i = 0; i < m_tile; ++i) {
-      a_packed[i] = a[(row_block + i) * K + k];
-    }
-    for (uint32_t j = 0; j < n_tile; ++j) {
-      b_packed[j] = b_transposed[(col_block + j) * K + k];
-    }
-
-    const svfloat16_t a_vec = svld1(pg16_m, a_packed.data());
-    const svfloat16_t b_vec = svld1(pg16_n, b_packed.data());
-    svmopa_za32_f16_m(za_tile, pg16_m, pg16_n, a_vec, b_vec);
-  }
-
-  for (uint32_t i = 0; i < m_tile; ++i) {
-    const svfloat32_t acc_row = svreadz_hor_za32_f32(za_tile, i);
-    svst1(pg32_n, row_out.data(), acc_row);
-    for (uint32_t j = 0; j < n_tile; ++j) {
-      c[(row_block + i) * N + (col_block + j)] = (__fp16)row_out[j];
-    }
-  }
-}
-
-static void cactus_matmul_f16_sme2_worker(const __fp16 *a,
-                                          const __fp16 *b_transposed, __fp16 *c,
-                                          size_t /*M*/, size_t K, size_t N,
-                                          size_t start_row, size_t end_row) {
-  const size_t TM = static_cast<size_t>(svcntsw());
-  const size_t TN = static_cast<size_t>(svcntw());
-
-  for (size_t row_block = start_row; row_block < end_row; row_block += TM) {
-    for (size_t col_block = 0; col_block < N; col_block += TN) {
-      cactus_matmul_f16_sme2_tile(a, b_transposed, c, K, N, row_block,
-                                  col_block, end_row, N);
-    }
-  }
-}
-#endif
 
 static void cactus_matmul_f16_worker(const __fp16 *a,
                                      const __fp16 *b_transposed, __fp16 *c,
@@ -250,21 +193,35 @@ static void cactus_matmul_f16_worker(const __fp16 *a,
   }
 }
 
-static MatmulWorkerFn pick_worker() {
-#if defined(__ARM_FEATURE_SME2) && defined(__ARM_FEATURE_SME)
-  // runtime check
-  if (__arm_has_sme()) {
-    return cactus_matmul_f16_sme2_worker;
-  }
-#endif
-  return cactus_matmul_f16_worker;
-}
-
 void cactus_matmul_f16(const __fp16 *a, const __fp16 *b_transposed, __fp16 *c,
                        size_t M, size_t K, size_t N) {
+#ifdef __APPLE__
+  if (K >= ACCELERATE_K_THRESHOLD && M >= ACCELERATE_M_THRESHOLD) {
+    const size_t a_len = M * K;
+    const size_t b_len = N * K;
+    const size_t c_len = M * N;
+
+    std::vector<float> A_f32(a_len);
+    std::vector<float> BT_f32(b_len);
+    std::vector<float> C_f32(c_len);
+
+    for (size_t i = 0; i < a_len; i++)
+      A_f32[i] = (float)a[i];
+    for (size_t i = 0; i < b_len; i++)
+      BT_f32[i] = (float)b_transposed[i];
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)M, (int)N, (int)K,
+                1.0f, A_f32.data(), (int)K, BT_f32.data(), (int)K, 0.0f,
+                C_f32.data(), (int)N);
+
+    for (size_t i = 0; i < c_len; i++)
+      c[i] = (__fp16)C_f32[i];
+    return;
+  }
+#endif
+
   constexpr size_t TILE_M = 4;
   const size_t num_row_blocks = (M + TILE_M - 1) / TILE_M;
-  MatmulWorkerFn worker = pick_worker();
 
   CactusThreading::parallel_for(
       num_row_blocks, CactusThreading::Thresholds::SCALAR_EXPENSIVE,
@@ -274,7 +231,8 @@ void cactus_matmul_f16(const __fp16 *a, const __fp16 *b_transposed, __fp16 *c,
           size_t start_row = block_idx * TILE_M;
           size_t end_row = std::min(start_row + TILE_M, M);
 
-          worker(a, b_transposed, c, M, K, N, start_row, end_row);
+          cactus_matmul_f16_worker(a, b_transposed, c, M, K, N, start_row,
+                                   end_row);
         }
       });
 }
@@ -536,4 +494,179 @@ void cactus_matmul_int8(const int8_t *A, const float *A_scales, const int8_t *B,
   } else {
     cactus_gemm_int8(A, A_scales, B, B_scales, C, M, K, N, group_size);
   }
+}
+
+namespace {
+constexpr size_t SME2_PACK64 = 64;
+constexpr size_t SME2_TILE = 16;
+constexpr size_t SME2_QUAD = 4;
+constexpr size_t SME2_K_QUADS = SME2_PACK64 / SME2_QUAD;
+constexpr size_t SME2_PANEL_BYTES = SME2_K_QUADS * SME2_TILE * SME2_QUAD; // 1024
+} // namespace
+
+#if CACTUS_HAS_SME2_INTRINSICS
+
+__attribute__((target("arch=armv9-a+sve2+sme2")))
+static inline void cactus_sme2_pack64_dot_tile(
+    const int8_t *a_group_panel, const int8_t *b_group_panel, size_t m_active,
+    size_t n_active, int32_t *out_tile) __arm_streaming __arm_inout("za") {
+  svbool_t pg8 = svptrue_b8();
+  svbool_t pgm = svwhilelt_b32((uint64_t)0, (uint64_t)m_active);
+  svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n_active);
+
+  svzero_za();
+
+  for (size_t q = 0; q < SME2_K_QUADS; ++q) {
+    const int8_t *a_q = a_group_panel + q * SME2_TILE * SME2_QUAD;
+    const int8_t *b_q = b_group_panel + q * SME2_TILE * SME2_QUAD;
+    svint8_t az = svld1_s8(pg8, a_q);
+    svint8_t bz = svld1_s8(pg8, b_q);
+    svmopa_za32_s8_m(/*tile=*/0, pgm, pgn, az, bz);
+  }
+
+  for (size_t mi = 0; mi < m_active; ++mi) {
+    int32_t row_buf[SME2_TILE] = {0};
+    svint32_t zrow = svread_hor_za32_s32_m(svdup_n_s32(0), pgn, /*tile=*/0,
+                                           static_cast<uint32_t>(mi));
+    svst1_s32(pgn, row_buf, zrow);
+    std::memcpy(out_tile + mi * SME2_TILE, row_buf, n_active * sizeof(int32_t));
+  }
+}
+
+#endif
+
+#if CACTUS_HAS_SME2_INTRINSICS
+__attribute__((target("arch=armv9-a+sve2+sme2")))
+#endif
+void cactus_gemv_int8_sme2_pack64(const int8_t *A_pack, float A_scale,
+                                  const int8_t *B_pack, const __fp16 *B_scales,
+                                  __fp16 *C, size_t K, size_t N,
+                                  size_t group_size)
+#if CACTUS_HAS_SME2_INTRINSICS
+    __arm_locally_streaming __arm_inout("za")
+#endif
+{
+  if (K == 0 || N == 0)
+    return;
+  if (group_size != SME2_PACK64 || (K % SME2_PACK64) != 0)
+    return;
+
+  const size_t num_groups = K / SME2_PACK64;
+  const size_t n_blocks = (N + SME2_TILE - 1) / SME2_TILE;
+
+#if CACTUS_HAS_SME2_INTRINSICS
+  if (svcntb() != SME2_PACK64 || svcntw() != SME2_TILE) {
+    return;
+  }
+
+  for (size_t nb = 0; nb < n_blocks; ++nb) {
+    const size_t n_start = nb * SME2_TILE;
+    const size_t n_active = std::min(SME2_TILE, N - n_start);
+    float accum[SME2_TILE] = {0.0f};
+
+    for (size_t g = 0; g < num_groups; ++g) {
+      const int8_t *a_group_panel = A_pack + g * SME2_PANEL_BYTES;
+      const int8_t *b_group_panel =
+          B_pack + (nb * num_groups + g) * SME2_PANEL_BYTES;
+
+      int32_t tile_i32[SME2_TILE * SME2_TILE] = {0};
+      cactus_sme2_pack64_dot_tile(a_group_panel, b_group_panel, /*m_active=*/1,
+                                  n_active, tile_i32);
+
+      const __fp16 *scale_row = B_scales + n_start * num_groups + g;
+      for (size_t ni = 0; ni < n_active; ++ni) {
+        accum[ni] += static_cast<float>(tile_i32[ni]) *
+                     static_cast<float>(scale_row[ni * num_groups]);
+      }
+    }
+
+    for (size_t ni = 0; ni < n_active; ++ni) {
+      C[n_start + ni] = static_cast<__fp16>(accum[ni] * A_scale);
+    }
+  }
+#else
+  (void)A_pack;
+  (void)A_scale;
+  (void)B_pack;
+  (void)B_scales;
+  (void)C;
+  (void)num_groups;
+  (void)n_blocks;
+#endif
+}
+
+#if CACTUS_HAS_SME2_INTRINSICS
+__attribute__((target("arch=armv9-a+sve2+sme2")))
+#endif
+void cactus_gemm_int8_sme2_pack64(const int8_t *A_pack, const float *A_scales,
+                                  const int8_t *B_pack, const __fp16 *B_scales,
+                                  __fp16 *C, size_t M, size_t K, size_t N,
+                                  size_t group_size)
+#if CACTUS_HAS_SME2_INTRINSICS
+    __arm_locally_streaming __arm_inout("za")
+#endif
+{
+  if (M == 0 || K == 0 || N == 0)
+    return;
+  if (group_size != SME2_PACK64 || (K % SME2_PACK64) != 0)
+    return;
+
+  const size_t num_groups = K / SME2_PACK64;
+  const size_t m_blocks = (M + SME2_TILE - 1) / SME2_TILE;
+  const size_t n_blocks = (N + SME2_TILE - 1) / SME2_TILE;
+
+#if CACTUS_HAS_SME2_INTRINSICS
+  if (svcntb() != SME2_PACK64 || svcntw() != SME2_TILE) {
+    return;
+  }
+
+  for (size_t mb = 0; mb < m_blocks; ++mb) {
+    const size_t m_start = mb * SME2_TILE;
+    const size_t m_active = std::min(SME2_TILE, M - m_start);
+
+    for (size_t nb = 0; nb < n_blocks; ++nb) {
+      const size_t n_start = nb * SME2_TILE;
+      const size_t n_active = std::min(SME2_TILE, N - n_start);
+      float accum[SME2_TILE][SME2_TILE] = {{0.0f}};
+
+      for (size_t g = 0; g < num_groups; ++g) {
+        const int8_t *a_group_panel =
+            A_pack + (mb * num_groups + g) * SME2_PANEL_BYTES;
+        const int8_t *b_group_panel =
+            B_pack + (nb * num_groups + g) * SME2_PANEL_BYTES;
+
+        int32_t tile_i32[SME2_TILE * SME2_TILE] = {0};
+        cactus_sme2_pack64_dot_tile(a_group_panel, b_group_panel, m_active,
+                                    n_active, &tile_i32[0]);
+
+        for (size_t mi = 0; mi < m_active; ++mi) {
+          for (size_t ni = 0; ni < n_active; ++ni) {
+            const size_t n_idx = n_start + ni;
+            const float b_scale =
+                static_cast<float>(B_scales[n_idx * num_groups + g]);
+            accum[mi][ni] +=
+                static_cast<float>(tile_i32[mi * SME2_TILE + ni]) * b_scale;
+          }
+        }
+      }
+
+      for (size_t mi = 0; mi < m_active; ++mi) {
+        const float a_scale = A_scales[m_start + mi];
+        for (size_t ni = 0; ni < n_active; ++ni) {
+          C[(m_start + mi) * N + (n_start + ni)] =
+              static_cast<__fp16>(accum[mi][ni] * a_scale);
+        }
+      }
+    }
+  }
+#else
+  (void)A_pack;
+  (void)A_scales;
+  (void)B_pack;
+  (void)B_scales;
+  (void)C;
+  (void)num_groups;
+  (void)m_blocks;
+  (void)n_blocks;
+#endif
 }
