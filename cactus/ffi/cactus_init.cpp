@@ -398,6 +398,24 @@ cactus_model_t cactus_init(const char* model_path, const char* corpus_dir, bool 
             return nullptr;
         }
 
+        auto model_type = handle->model->get_config().model_type;
+        if (model_type == Config::ModelType::WHISPER || model_type == Config::ModelType::MOONSHINE) {
+            std::string vad_path = model_path_str + "/vad";
+            handle->vad_model = create_model(vad_path);
+            if (!handle->vad_model) {
+                last_error_message = "Failed to create VAD model - check VAD weights at: " + vad_path;
+                CACTUS_LOG_ERROR("init", last_error_message);
+                delete handle;
+                return nullptr;
+            }
+            if (!handle->vad_model->init(vad_path, 0, "", false)) {
+                last_error_message = "Failed to initialize VAD model - check VAD weight files at: " + vad_path;
+                CACTUS_LOG_ERROR("init", last_error_message);
+                delete handle;
+                return nullptr;
+            }
+        }
+
         if (corpus_dir != nullptr && strlen(corpus_dir) > 0) {
             handle->corpus_dir = std::string(corpus_dir);
 

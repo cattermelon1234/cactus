@@ -1,5 +1,6 @@
 #include "cactus_ffi.h"
 #include "cactus_utils.h"
+#include "../models/model.h"
 #include "telemetry/telemetry.h"
 #include "../../libs/audio/wav.h"
 #include <chrono>
@@ -99,57 +100,81 @@ int cactus_transcribe(
         float temperature, top_p, confidence_threshold;
         size_t top_k, max_tokens, tool_rag_top_k;
         std::vector<std::string> stop_sequences;
-        bool force_tools, include_stop_sequences, telemetry_enabled;
-        parse_options_json(options_json ? options_json : "", temperature, top_p, top_k, max_tokens, stop_sequences, force_tools, tool_rag_top_k, confidence_threshold, include_stop_sequences, telemetry_enabled);
+        bool force_tools, include_stop_sequences, use_vad, telemetry_enabled;
+        parse_options_json(
+            options_json ? options_json : "", temperature,
+            top_p, top_k, max_tokens, stop_sequences,
+            force_tools, tool_rag_top_k, confidence_threshold,
+            include_stop_sequences, use_vad, telemetry_enabled
+        );
 
-        std::vector<float> audio_features;
-        
         bool is_moonshine = handle->model->get_config().model_type == cactus::engine::Config::ModelType::MOONSHINE;
 
+        std::vector<float> audio_buffer;
         if (audio_file_path == nullptr) {
             const int16_t* pcm_samples = reinterpret_cast<const int16_t*>(pcm_buffer);
             size_t num_samples = pcm_buffer_size / 2;
-            
+
             std::vector<float> waveform_fp32(num_samples);
             for (size_t i = 0; i < num_samples; i++)
                 waveform_fp32[i] = static_cast<float>(pcm_samples[i]) / 32768.0f;
 
-            std::vector<float> waveform_16k = resample_to_16k_fp32(waveform_fp32, WHISPER_SAMPLE_RATE); 
-            
-            if (is_moonshine) {
-                 audio_features = waveform_16k;
-            } else {
-                 if (!waveform_16k.empty()) {
-                     auto cfg = get_whisper_spectrogram_config();
-                     AudioProcessor ap;
-                     ap.init_mel_filters(cfg.n_fft / 2 + 1, 80, 0.0f, 8000.0f, WHISPER_SAMPLE_RATE);
-                     std::vector<float> mel = ap.compute_spectrogram(waveform_16k, cfg);
-                     audio_features = normalize_mel(mel, 80);
-                 }
-            }
+            audio_buffer = resample_to_16k_fp32(waveform_fp32, WHISPER_SAMPLE_RATE);
         } else {
              AudioFP32 audio = load_wav(audio_file_path);
-             std::vector<float> waveform_16k = resample_to_16k_fp32(audio.samples, audio.sample_rate);
-             
-             if (is_moonshine) {
-                 audio_features = waveform_16k;
-             } else {
-                  auto cfg = get_whisper_spectrogram_config();
-                  AudioProcessor ap;
-                  ap.init_mel_filters(cfg.n_fft / 2 + 1, 80, 0.0f, 8000.0f, WHISPER_SAMPLE_RATE);
-                  std::vector<float> mel = ap.compute_spectrogram(waveform_16k, cfg);
-                  audio_features = normalize_mel(mel, 80);
-             }
+             audio_buffer = resample_to_16k_fp32(audio.samples, audio.sample_rate);
         }
 
-        if (audio_features.empty()) {
+        if (use_vad) {
+            auto* vad = static_cast<SileroVADModel*>(handle->vad_model.get());
+            auto segments = vad->get_speech_timestamps(audio_buffer, {});
+
+            std::vector<float> speech_audio;
+            for (const auto& segment : segments) {
+                speech_audio.insert(
+                    speech_audio.end(),
+                    audio_buffer.begin() + segment.start,
+                    audio_buffer.begin() + std::min(segment.end, audio_buffer.size())
+                );
+            }
+            audio_buffer = std::move(speech_audio);
+
+            if (audio_buffer.empty()) {
+                CACTUS_LOG_DEBUG("transcribe", "VAD detected only silence, returning empty transcription");
+
+                auto vad_end_time = std::chrono::high_resolution_clock::now();
+                double vad_total_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(vad_end_time - start_time).count() / 1000.0;
+
+                std::string json = construct_response_json("", {}, 0.0, vad_total_time_ms, 0.0, 0.0, 0, 0, 1.0f);
+
+                if (json.size() >= buffer_size) {
+                    handle_error_response("Response buffer too small", response_buffer, buffer_size);
+                    cactus::telemetry::recordTranscription(handle->model_name.c_str(), false, 0.0, 0.0, 0.0, 0, "Response buffer too small");
+                    return -1;
+                }
+
+                cactus::telemetry::recordTranscription(handle->model_name.c_str(), true, 0.0, 0.0, vad_total_time_ms, 0, "");
+                std::strcpy(response_buffer, json.c_str());
+                return static_cast<int>(json.size());
+            }
+        }
+
+        if (!is_moonshine) {
+            auto cfg = get_whisper_spectrogram_config();
+            AudioProcessor ap;
+            ap.init_mel_filters(cfg.n_fft / 2 + 1, 80, 0.0f, 8000.0f, WHISPER_SAMPLE_RATE);
+            std::vector<float> mel = ap.compute_spectrogram(audio_buffer, cfg);
+            audio_buffer = normalize_mel(mel, 80);
+        }
+
+        if (audio_buffer.empty()) {
             CACTUS_LOG_ERROR("transcribe", "Computed audio features are empty");
             handle_error_response("Computed audio features are empty", response_buffer, buffer_size);
             cactus::telemetry::recordTranscription(handle->model_name.c_str(), false, 0.0, 0.0, 0.0, 0, "Computed audio features are empty");
             return -1;
         }
 
-        CACTUS_LOG_DEBUG("transcribe", "Audio features prepared, size: " << audio_features.size());
+        CACTUS_LOG_DEBUG("transcribe", "Audio features prepared, size: " << audio_buffer.size());
 
         auto* tokenizer = handle->model->get_tokenizer();
         if (!tokenizer) {
@@ -189,13 +214,13 @@ int cactus_transcribe(
             max_tps = 100;
         }
 
-        float audio_length = audio_features.size() / 16000.0f;
+        float audio_length = audio_buffer.size() / 16000.0f;
         size_t max_tps_tokens = static_cast<size_t>(audio_length * max_tps);
         if (max_tokens > max_tps_tokens) {
             max_tokens = max_tps_tokens;
         }
 
-        uint32_t next_token = handle->model->decode_with_audio(tokens, audio_features, temperature, top_p, top_k, "", &first_token_entropy);
+        uint32_t next_token = handle->model->decode_with_audio(tokens, audio_buffer, temperature, top_p, top_k, "", &first_token_entropy);
         {
             auto t_first = std::chrono::high_resolution_clock::now();
             time_to_first_token = std::chrono::duration_cast<std::chrono::microseconds>(t_first - start_time).count() / 1000.0;
@@ -217,7 +242,7 @@ int cactus_transcribe(
                 if (handle->should_stop) break;
 
                 float token_entropy = 0.0f;
-                next_token = handle->model->decode_with_audio(tokens, audio_features, temperature, top_p, top_k, "", &token_entropy);
+                next_token = handle->model->decode_with_audio(tokens, audio_buffer, temperature, top_p, top_k, "", &token_entropy);
 
                 total_entropy_sum += token_entropy;
                 total_entropy_count++;

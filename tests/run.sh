@@ -8,9 +8,11 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 DEFAULT_MODEL="LiquidAI/LFM2-VL-450M"
 DEFAULT_TRANSCRIBE_MODEL="UsefulSensors/moonshine-base"
+DEFAULT_VAD_MODEL="silero-vad"
 
 MODEL_NAME="$DEFAULT_MODEL"
 TRANSCRIBE_MODEL_NAME="$DEFAULT_TRANSCRIBE_MODEL"
+VAD_MODEL_NAME="$DEFAULT_VAD_MODEL"
 ANDROID_MODE=false
 IOS_MODE=false
 NO_REBUILD=false
@@ -24,6 +26,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --transcribe_model)
             TRANSCRIBE_MODEL_NAME="$2"
+            shift 2
+            ;;
+        --vad_model)
+            VAD_MODEL_NAME="$2"
             shift 2
             ;;
         --android)
@@ -52,6 +58,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --model <name>            Model to use for tests (default: $DEFAULT_MODEL)"
             echo "  --transcribe_model <name> Transcribe model to use (default: $DEFAULT_TRANSCRIBE_MODEL)"
+            echo "  --vad_model <name>        VAD model to use (default: $DEFAULT_VAD_MODEL)"
             echo "  --precision <type>        Precision for model conversion (MIXED, FP16, INT8, INT4)"
             echo "  --android                 Run tests on Android device or emulator"
             echo "  --ios                     Run tests on iOS device or simulator"
@@ -71,6 +78,7 @@ done
 echo ""
 echo "Using model: $MODEL_NAME"
 echo "Using transcribe model: $TRANSCRIBE_MODEL_NAME"
+echo "Using vad model: $VAD_MODEL_NAME"
 if [ ! -z "$PRECISION" ]; then
     echo "Using precision: $PRECISION"
     PRECISION_FLAG="--precision $PRECISION"
@@ -90,13 +98,18 @@ if ! cactus download "$TRANSCRIBE_MODEL_NAME" $PRECISION_FLAG; then
     exit 1
 fi
 
+if ! cactus download "$VAD_MODEL_NAME" $PRECISION_FLAG; then
+    echo "Failed to download VAD model weights"
+    exit 1
+fi
+
 echo ""
 if [ "$ANDROID_MODE" = true ]; then
-    exec "$SCRIPT_DIR/android/run.sh" "$MODEL_NAME" "$TRANSCRIBE_MODEL_NAME"
+    exec "$SCRIPT_DIR/android/run.sh" "$MODEL_NAME" "$TRANSCRIBE_MODEL_NAME" "$VAD_MODEL_NAME"
 fi
 
 if [ "$IOS_MODE" = true ]; then
-    exec "$SCRIPT_DIR/ios/run.sh" "$MODEL_NAME" "$TRANSCRIBE_MODEL_NAME"
+    exec "$SCRIPT_DIR/ios/run.sh" "$MODEL_NAME" "$TRANSCRIBE_MODEL_NAME" "$VAD_MODEL_NAME"
 fi
 
 if [ "$NO_REBUILD" = false ]; then
@@ -135,14 +148,17 @@ echo "------------------------"
 # Set model path environment variables for tests
 MODEL_DIR=$(echo "$MODEL_NAME" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]')
 TRANSCRIBE_MODEL_DIR=$(echo "$TRANSCRIBE_MODEL_NAME" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]')
+VAD_MODEL_DIR=$(echo "$VAD_MODEL_NAME" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]')
 
 export CACTUS_TEST_MODEL="$PROJECT_ROOT/weights/$MODEL_DIR"
 export CACTUS_TEST_TRANSCRIBE_MODEL="$PROJECT_ROOT/weights/$TRANSCRIBE_MODEL_DIR"
+export CACTUS_TEST_VAD_MODEL="$PROJECT_ROOT/weights/$VAD_MODEL_DIR"
 export CACTUS_TEST_ASSETS="$PROJECT_ROOT/tests/assets"
 export CACTUS_INDEX_PATH="$PROJECT_ROOT/tests/assets"
 
 echo "Using model path: $CACTUS_TEST_MODEL"
 echo "Using transcribe model path: $CACTUS_TEST_TRANSCRIBE_MODEL"
+echo "Using VAD model path: $CACTUS_TEST_VAD_MODEL"
 echo "Using assets path: $CACTUS_TEST_ASSETS"
 echo "Using index path: $CACTUS_INDEX_PATH"
 

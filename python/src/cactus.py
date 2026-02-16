@@ -4,6 +4,7 @@ Cactus FFI Python Bindings
 Python bindings for Cactus Engine via FFI. Provides access to:
 - Text completion with LLMs (including cloud handoff detection)
 - Audio transcription with Whisper models
+- Voice Activity Detection (VAD) for speech segment detection
 - Text, image, and audio embeddings
 - RAG (Retrieval-Augmented Generation) queries
 - Tool RAG (automatic tool selection based on query relevance)
@@ -83,6 +84,12 @@ _lib.cactus_audio_embed.argtypes = [
     ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)
 ]
 _lib.cactus_audio_embed.restype = ctypes.c_int
+
+_lib.cactus_vad.argtypes = [
+    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+    ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t
+]
+_lib.cactus_vad.restype = ctypes.c_int
 
 _lib.cactus_reset.argtypes = [ctypes.c_void_p]
 _lib.cactus_reset.restype = None
@@ -387,6 +394,68 @@ def cactus_audio_embed(model, audio_path):
         buf, ctypes.sizeof(buf), ctypes.byref(dim)
     )
     return list(buf[:dim.value])
+
+
+def cactus_vad(model, audio_path=None, pcm_data=None, options=None):
+    """
+    Voice Activity Detection - detect speech segments in audio.
+
+    Args:
+        model: VAD model handle from cactus_init
+        audio_path: Path to audio file (WAV format), or None if using pcm_data
+        pcm_data: PCM audio data as bytes (int16, 16kHz), or None if using audio_path
+        options: Optional dict with VAD parameters:
+            - threshold: Speech threshold (default: 0.5)
+            - neg_threshold: Silence threshold (default: 0.35)
+            - min_speech_duration_ms: Minimum speech segment duration (default: 250)
+            - max_speech_duration_s: Maximum speech segment duration (default: inf)
+            - min_silence_duration_ms: Minimum silence between segments (default: 100)
+            - speech_pad_ms: Padding around speech segments (default: 30)
+            - window_size_samples: Analysis window size (default: 512)
+            - sampling_rate: Audio sample rate (default: 16000)
+
+    Returns:
+        JSON string with response format:
+        {
+            "success": bool,
+            "error": str|null,
+            "segments": [{"start": int, "end": int}, ...],  # Sample indices
+            "total_time_ms": float,
+            "ram_usage_mb": float
+        }
+
+    Raises:
+        ValueError: If both or neither audio_path and pcm_data are provided
+    """
+    if (audio_path is None) == (pcm_data is None):
+        raise ValueError("Must provide either audio_path or pcm_data (not both)")
+
+    options_json = None
+    if options:
+        options_json = json.dumps(options) if isinstance(options, dict) else options
+
+    buf = ctypes.create_string_buffer(65536)
+
+    if pcm_data is not None:
+        if isinstance(pcm_data, bytes):
+            arr = (ctypes.c_uint8 * len(pcm_data)).from_buffer_copy(pcm_data)
+        else:
+            arr = (ctypes.c_uint8 * len(pcm_data))(*pcm_data)
+        _lib.cactus_vad(
+            model, None, buf, len(buf),
+            options_json.encode() if options_json else None,
+            arr, len(arr)
+        )
+    else:
+        _lib.cactus_vad(
+            model,
+            audio_path.encode() if isinstance(audio_path, str) else audio_path,
+            buf, len(buf),
+            options_json.encode() if options_json else None,
+            None, 0
+        )
+
+    return buf.value.decode("utf-8", errors="ignore")
 
 
 def cactus_reset(model):

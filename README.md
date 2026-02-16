@@ -132,7 +132,8 @@ graph.hard_reset();
 | LiquidAI/LFM2.5-VL-1.6B | vision, txt & img embed, Apple NPU |                                                                                                               
 | UsefulSensors/moonshine-base | transcription, speech embed |                                                                                                         
 | openai/whisper-small | transcription, speech embed, Apple NPU |                                                                                                                 
-| openai/whisper-medium | transcribe, speech embed, Apple NPU |                                                                             
+| openai/whisper-medium | transcribe, speech embed, Apple NPU |
+| snakers4/silero-vad | vad |
 | nomic-ai/nomic-embed-text-v2-moe | embed |                                                                                                                    
 | Qwen/Qwen3-Embedding-0.6B | embed | 
 

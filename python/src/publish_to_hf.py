@@ -25,6 +25,7 @@ MODELS = [
     "UsefulSensors/moonshine-base",
     "openai/whisper-small",
     "openai/whisper-medium",
+    "snakers4/silero-vad",
     "nomic-ai/nomic-embed-text-v2-moe",
     "Qwen/Qwen3-Embedding-0.6B",
 ]

@@ -5,6 +5,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 MODEL_NAME="$1"
 TRANSCRIBE_MODEL_NAME="$2"
+VAD_MODEL_NAME="$3"
 
 echo "Running Cactus tests on iOS..."
 echo "============================"
@@ -264,8 +265,10 @@ fi
 
 model_dir=$(echo "$MODEL_NAME" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]')
 transcribe_model_dir=$(echo "$TRANSCRIBE_MODEL_NAME" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]')
+vad_model_dir=$(echo "$VAD_MODEL_NAME" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]')
 model_src="$PROJECT_ROOT/weights/$model_dir"
 transcribe_model_src="$PROJECT_ROOT/weights/$transcribe_model_dir"
+vad_model_src="$PROJECT_ROOT/weights/$vad_model_dir"
 assets_src="$PROJECT_ROOT/tests/assets"
 
 echo "Copying model weights to app bundle..."
@@ -274,6 +277,9 @@ if ! cp -R "$model_src" "$app_path/"; then
 fi
 if ! cp -R "$transcribe_model_src" "$app_path/"; then
     echo "Warning: Could not copy transcribe model weights"
+fi
+if ! cp -R "$vad_model_src" "$app_path/"; then
+    echo "Warning: Could not copy VAD model weights"
 fi
 
 echo "Copying test assets to app bundle..."
@@ -303,6 +309,7 @@ if [ "$device_type" = "simulator" ]; then
 
     SIMCTL_CHILD_CACTUS_TEST_MODEL="$model_dir" \
     SIMCTL_CHILD_CACTUS_TEST_TRANSCRIBE_MODEL="$transcribe_model_dir" \
+    SIMCTL_CHILD_CACTUS_TEST_VAD_MODEL="$vad_model_dir" \
     SIMCTL_CHILD_CACTUS_TEST_ASSETS="assets" \
     SIMCTL_CHILD_CACTUS_INDEX_PATH="assets" \
     xcrun simctl launch --console-pty "$device_uuid" "$bundle_id"
@@ -327,6 +334,7 @@ else
 
     launch_output=$(DEVICECTL_CHILD_CACTUS_TEST_MODEL="$model_dir" \
     DEVICECTL_CHILD_CACTUS_TEST_TRANSCRIBE_MODEL="$transcribe_model_dir" \
+    DEVICECTL_CHILD_CACTUS_TEST_VAD_MODEL="$vad_model_dir" \
     DEVICECTL_CHILD_CACTUS_TEST_ASSETS="assets" \
     DEVICECTL_CHILD_CACTUS_INDEX_PATH="assets" \
     xcrun devicectl device process launch --device "$device_uuid" "$bundle_id" 2>&1) || true

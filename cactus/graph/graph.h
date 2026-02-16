@@ -117,13 +117,15 @@ enum class OpType {
     SUM, MEAN, VARIANCE, MIN, MAX,
     RMS_NORM, ROPE, ROPE_GPTJ, SOFTMAX, ATTENTION, ATTENTION_INT8_HYBRID, CONV1D_CAUSAL, CONV1D_K3, CONV1D_K7S3, CONV1D,
     SCALAR_ADD, SCALAR_SUBTRACT, SCALAR_MULTIPLY, SCALAR_DIVIDE, SCALAR_EXP, SCALAR_SQRT, SCALAR_COS, SCALAR_SIN,
-    SILU, GELU, GELU_ERF, TANH,
+    RELU, SILU, GELU, GELU_ERF, SIGMOID, TANH,
     SAMPLE, CONCAT,
     SCATTER_TOPK,
     TOPK, LAYERNORM, GROUPNORM,
     INDEX,
     PERSISTENT,
-    QUANTIZE_ACTIVATIONS
+    QUANTIZE_ACTIVATIONS,
+    LSTM_CELL,
+    STFT_MAGNITUDE
 };
 
 struct PrecisionTraits {
@@ -318,6 +320,7 @@ struct OpParams {
     size_t cache_seq_len = 0;
     size_t num_kv_heads = 0;
     size_t head_dim = 0;
+    size_t num_fft_bins = 0;
 };
 
 struct GraphNode {
@@ -350,6 +353,7 @@ void compute_layernorm_node(GraphNode& node, const std::vector<std::unique_ptr<G
 void compute_groupnorm_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 void compute_persistent_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 void compute_index_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
+void compute_lstm_cell_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 
 void shrink_thread_local_buffers();
 
@@ -415,9 +419,11 @@ public:
     size_t scalar_cos(size_t input);
     size_t scalar_sin(size_t input);
     
+    size_t relu(size_t input);
     size_t silu(size_t input);
     size_t gelu(size_t input);
     size_t gelu_erf(size_t input);
+    size_t sigmoid(size_t input);
     size_t tanh(size_t input);
     
     size_t matmul(size_t input1, size_t input2, bool pretransposed_rhs = false, ComputeBackend backend = ComputeBackend::CPU);
@@ -468,7 +474,10 @@ public:
     size_t conv1d_k7s3(size_t input, size_t weight, size_t bias);
     size_t conv1d(size_t input, size_t weight, size_t stride);
     size_t conv1d(size_t input, size_t weight, size_t bias, size_t stride);
-    
+
+    size_t lstm_cell(size_t input, size_t h_prev, size_t c_prev, size_t weight_ih, size_t weight_hh, size_t bias_ih, size_t bias_hh);
+    size_t stft_magnitude(size_t input, size_t weight, size_t stride, size_t num_fft_bins);
+
     size_t sample(size_t logits, float temperature = 0.6f, float top_p = 0.95f, size_t top_k = 20,
                   const std::unordered_map<uint32_t, float>& logit_bias = {});
     
