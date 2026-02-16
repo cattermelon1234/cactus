@@ -1146,23 +1146,23 @@ static bool test_pcm_transcription() {
 
 int main() {
     TestUtils::TestRunner runner("Engine Tests");
-    // runner.run_test("1k_context", test_1k_context());
-    // runner.run_test("streaming", test_streaming());
-    // runner.run_test("tool_calls", test_tool_call());
-    // runner.run_test("tool_multiple_tool_call_invocations", test_multiple_tool_call_invocations());
-    // runner.run_test("tool_calls_with_two_tools", test_tool_call_with_two_tools());
-    // runner.run_test("tool_calls_with_three_tools", test_tool_call_with_three_tools());
-    // runner.run_test("cloud_handoff", test_cloud_handoff());
-    // runner.run_test("vlm_multiturn", test_vlm_multiturn());
-    // runner.run_test("embeddings", test_embeddings());
-    // runner.run_test("image_embeddings", test_image_embeddings());
-    // runner.run_test("audio_embeddings", test_audio_embeddings());
-    // runner.run_test("audio_processor", test_audio_processor());
+    runner.run_test("1k_context", test_1k_context());
+    runner.run_test("streaming", test_streaming());
+    runner.run_test("tool_calls", test_tool_call());
+    runner.run_test("tool_multiple_tool_call_invocations", test_multiple_tool_call_invocations());
+    runner.run_test("tool_calls_with_two_tools", test_tool_call_with_two_tools());
+    runner.run_test("tool_calls_with_three_tools", test_tool_call_with_three_tools());
+    runner.run_test("cloud_handoff", test_cloud_handoff());
+    runner.run_test("vlm_multiturn", test_vlm_multiturn());
+    runner.run_test("embeddings", test_embeddings());
+    runner.run_test("image_embeddings", test_image_embeddings());
+    runner.run_test("audio_embeddings", test_audio_embeddings());
+    runner.run_test("audio_processor", test_audio_processor());
     runner.run_test("vad_process", test_vad_process());
     runner.run_test("transcription", test_transcription());
-    // runner.run_test("pcm_transcription", test_pcm_transcription());
-    // runner.run_test("stream_transcription", test_stream_transcription());
-    // runner.run_test("rag_preprocessing", test_rag());
+    runner.run_test("pcm_transcription", test_pcm_transcription());
+    runner.run_test("stream_transcription", test_stream_transcription());
+    runner.run_test("rag_preprocessing", test_rag());
     runner.print_summary();
     return runner.all_passed() ? 0 : 1;
 }
