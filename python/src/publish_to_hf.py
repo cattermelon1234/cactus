@@ -9,34 +9,6 @@ from .cli import cmd_convert, get_weights_dir, PROJECT_ROOT
 
 STAGE_DIR = PROJECT_ROOT / "stage"
 
-MODELS = [
-    "google/gemma-3-270m-it",
-    "google/functiongemma-270m-it",
-    "LiquidAI/LFM2-350M",
-    "Qwen/Qwen3-0.6B",
-    "LiquidAI/LFM2-700M",
-    "google/gemma-3-1b-it",
-    "LiquidAI/LFM2.5-1.2B-Thinking",
-    "LiquidAI/LFM2.5-1.2B-Instruct",
-    "Qwen/Qwen3-1.7B",
-    "LiquidAI/LFM2-2.6B",
-    "LiquidAI/LFM2-VL-450M",
-    "LiquidAI/LFM2.5-VL-1.6B",
-    "UsefulSensors/moonshine-base",
-    "openai/whisper-small",
-    "openai/whisper-medium",
-    "snakers4/silero-vad",
-    "nomic-ai/nomic-embed-text-v2-moe",
-    "Qwen/Qwen3-Embedding-0.6B",
-]
-
-PRO_MODELS = [
-    "openai/whisper-small",
-    "LiquidAI/LFM2-VL-450M",
-    "openai/whisper-medium",
-    "LiquidAI/LFM2.5-VL-1.6B",
-]
-
 
 def sha256(file):
     h = hashlib.sha256()
@@ -96,7 +68,7 @@ def export_pro_weights(model_id, bits):
     return mlpackage if mlpackage.exists() else None
 
 
-def stage_model(model_id, weights_dir, precision, bits):
+def stage_model(model_id, weights_dir, precision, bits, export_apple):
     model_name = get_model_name(model_id)
     stage = STAGE_DIR / model_name
 
@@ -119,13 +91,13 @@ def stage_model(model_id, weights_dir, precision, bits):
         "precision": precision,
     }
 
-    if model_id in PRO_MODELS:
+    if export_apple:
         try:
             mlpackage = export_pro_weights(model_id, bits)
 
             shutil.move(mlpackage, weights_out)
 
-            model_pro_zip = stage / "weights" / f"{model_name_lower}-pro.zip"
+            model_pro_zip = stage / "weights" / f"{model_name_lower}-apple.zip"
             zip_dir(weights_out, model_pro_zip)
 
             fingerprint.update(sha256(model_pro_zip).encode())
@@ -171,7 +143,7 @@ def changed(curr, prev):
 def update_org_readme(api, org):
     readme = PROJECT_ROOT / "README.md"
     if not readme.exists():
-        return
+        return 1
 
     try:
         api.create_repo(repo_id=f"{org}/README", repo_type="space", exist_ok=True)
@@ -183,16 +155,74 @@ def update_org_readme(api, org):
             commit_message="Update organization README",
         )
         print("Updated organization README")
+        return 0
     except Exception:
         print("Failed to update organization README")
+        return 1
+
+
+def export_and_publish_model(args, api, token):
+    model_id = args.model
+    name = get_model_name(model_id)
+    repo_id = f"{args.org}/{name}"
+
+    stage_dir = None
+    try:
+        weights_dir = export_model(model_id, token, args.precision)
+        if not weights_dir:
+            print("Export failed")
+            return 1
+
+        stage_dir, config = stage_model(
+            model_id, weights_dir, args.precision, args.bits, args.apple
+        )
+        prev = get_prev_config(api, repo_id, args.version)
+
+        api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)
+
+        if changed(config, prev):
+            api.upload_folder(
+                folder_path=str(stage_dir),
+                path_in_repo=".",
+                repo_id=repo_id,
+                repo_type="model",
+                commit_message=f"Upload {args.version}",
+            )
+            print("Uploaded")
+        else:
+            print("Unchanged")
+
+        info = api.repo_info(repo_id=repo_id, repo_type="model")
+        api.create_tag(
+            repo_id=repo_id,
+            tag=args.version,
+            revision=info.sha,
+            repo_type="model",
+            tag_message=f"Release {args.version}",
+        )
+        print("Tagged release")
+        return 0
+
+    except Exception:
+        print("Model processing failed")
+        return 1
+    finally:
+        if stage_dir and stage_dir.exists():
+            shutil.rmtree(stage_dir)
+            print("Cleaned up stage directory")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--org", required=True)
-    parser.add_argument("--precision", required=True)
-    parser.add_argument("--bits", required=True)
+    parser.add_argument(
+        "--task", required=True, choices=["export_model", "update_org_readme"]
+    )
+    parser.add_argument("--version")
+    parser.add_argument("--org")
+    parser.add_argument("--model")
+    parser.add_argument("--precision")
+    parser.add_argument("--bits")
+    parser.add_argument("--apple", action="store_true")
     args = parser.parse_args()
 
     token = os.environ.get("HF_TOKEN")
@@ -202,54 +232,18 @@ def main():
 
     api = HfApi(token=token)
 
-    for model_id in MODELS:
-        name = get_model_name(model_id)
-        repo_id = f"{args.org}/{name}"
-
-        stage_dir = None
-        try:
-            weights_dir = export_model(model_id, token, args.precision)
-            if not weights_dir:
-                print("Export failed")
-                continue
-
-            stage_dir, config = stage_model(
-                model_id, weights_dir, args.precision, args.bits
+    if args.task == "export_model":
+        if not all([args.version, args.org, args.model, args.precision, args.bits]):
+            print(
+                "Error: export_model requires --version, --org, --model, --precision, and --bits"
             )
-            prev = get_prev_config(api, repo_id, args.version)
-
-            api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)
-
-            if changed(config, prev):
-                api.upload_folder(
-                    folder_path=str(stage_dir),
-                    path_in_repo=".",
-                    repo_id=repo_id,
-                    repo_type="model",
-                    commit_message=f"Upload {args.version}",
-                )
-                print("Uploaded")
-            else:
-                print("Unchanged")
-
-            info = api.repo_info(repo_id=repo_id, repo_type="model")
-            api.create_tag(
-                repo_id=repo_id,
-                tag=args.version,
-                revision=info.sha,
-                repo_type="model",
-                tag_message=f"Release {args.version}",
-            )
-            print("Tagged release")
-
-        except Exception:
-            print("Model processing failed")
-        finally:
-            if stage_dir and stage_dir.exists():
-                shutil.rmtree(stage_dir)
-                print("Cleaned up stage directory")
-
-    update_org_readme(api, args.org)
+            return 1
+        return export_and_publish_model(args, api, token)
+    elif args.task == "update_org_readme":
+        if not args.org:
+            print("Error: update_org_readme requires --org")
+            return 1
+        return update_org_readme(api, args.org)
 
 
 if __name__ == "__main__":

@@ -4,21 +4,74 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      model:
+        description: Model to publish (leave empty to publish all)
+        required: false
+        type: string
+      version:
+        description: Version tag
+        required: true
+        type: string
+      org:
+        description: Organization
+        required: false
+        default: Cactus-Compute
+        type: string
+      precision:
+        description: Precision
+        required: false
+        default: INT8
+        type: string
+      bits:
+        description: Bits
+        required: false
+        default: '8'
+        type: string
+      apple:
+        description: Export Apple weights
+        required: false
+        type: boolean
+        default: false
+
+env:
+  MODELS: |
+    google/gemma-3-270m-it
+    google/functiongemma-270m-it
+    LiquidAI/LFM2-350M
+    Qwen/Qwen3-0.6B
+    LiquidAI/LFM2-700M
+    google/gemma-3-1b-it
+    LiquidAI/LFM2.5-1.2B-Thinking
+    LiquidAI/LFM2.5-1.2B-Instruct
+    Qwen/Qwen3-1.7B
+    LiquidAI/LFM2-2.6B
+    LiquidAI/LFM2-VL-450M
+    LiquidAI/LFM2.5-VL-1.6B
+    UsefulSensors/moonshine-base
+    openai/whisper-small
+    openai/whisper-medium
+    snakers4/silero-vad
+    nomic-ai/nomic-embed-text-v2-moe
+    Qwen/Qwen3-Embedding-0.6B
+  APPLE_MODELS: |
+    openai/whisper-small
+    LiquidAI/LFM2-VL-450M
+    openai/whisper-medium
+    LiquidAI/LFM2.5-VL-1.6B
 
 jobs:
   publish:
     runs-on: macos-latest
     steps:
-      - name: Get release version
+      - name: Get version
         id: version
         run: |
           if [ "${{ github.event_name }}" == "release" ]; then
             echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName)" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           fi
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - uses: actions/checkout@v4
         with:
@@ -40,10 +93,33 @@ jobs:
       - name: Publish models
         run: |
           cd python
-          python -m src.publish_to_hf \
-            --version ${{ steps.version.outputs.tag }} \
-            --org Cactus-Compute \
-            --precision INT8 \
-            --bits 8
+          MODELS_TO_PUBLISH="${{ github.event.inputs.model || env.MODELS }}"
+          ORG="${{ github.event.inputs.org || 'Cactus-Compute' }}"
+          PRECISION="${{ github.event.inputs.precision || 'INT8' }}"
+          BITS="${{ github.event.inputs.bits || '8' }}"
+          echo "$MODELS_TO_PUBLISH" | while IFS= read -r model; do
+            [ -z "$model" ] && continue
+            APPLE_FLAG=""
+            if [ "${{ github.event.inputs.apple }}" == "true" ] || echo "$APPLE_MODELS" | grep -qx "$model"; then
+              APPLE_FLAG="--apple"
+            fi
+            python -m src.publish_to_hf \
+              --task export_model \
+              --version ${{ steps.version.outputs.tag }} \
+              --org "$ORG" \
+              --model "$model" \
+              --precision "$PRECISION" \
+              --bits "$BITS" \
+              $APPLE_FLAG
+          done
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Update organization README
+        if: "!github.event.inputs.model"
+        run: |
+          cd python
+          ORG="${{ github.event.inputs.org || 'Cactus-Compute' }}"
+          python -m src.publish_to_hf --task update_org_readme --org "$ORG"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
