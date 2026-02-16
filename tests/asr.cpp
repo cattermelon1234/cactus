@@ -447,7 +447,7 @@ int run_live_transcription(cactus_model_t model) {
                     }
 
                     if (!confirmed.empty() || !pending.empty()) {
-                        last_stats = colored("[Latency:" + std::to_string(int(latency_ms)) + " Decode speed:" + decode_tps + " tokens/sec] ", Color::GRAY);
+                        last_stats = colored("[Latency:" + std::to_string(int(latency_ms)) + "ms Decode speed:" + decode_tps + " tokens/sec] ", Color::GRAY);
                     }
 
                     int width = get_terminal_width();

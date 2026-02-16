@@ -632,7 +632,7 @@ def cmd_run(args):
     os.execv(str(chat_binary), [str(chat_binary), str(weights_dir)])
 
 
-DEFAULT_ASR_MODEL_ID = "UsefulSensors/moonshine-base"
+DEFAULT_ASR_MODEL_ID = "openai/whisper-small"
 
 
 def cmd_transcribe(args):
@@ -1094,7 +1094,7 @@ def create_parser():
   -----------------------------------------------------------------
 
   cactus transcribe [model]            live microphone transcription
-                                       default model: moonshine-base
+                                       default model: whisper-small
 
     Optional flags:
     --file <audio.wav>                 transcribe audio file instead of mic
