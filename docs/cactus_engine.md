@@ -12,6 +12,9 @@ cactus download LiquidAI/LFM2-1.2B
 cactus download LiquidAI/LFM2-VL-450M
 cactus download openai/whisper-small
 cactus download UsefulSensors/moonshine-base --precision FP16
+
+# Optional: set your Cactus Cloud API key for automatic cloud fallback
+cactus auth
 ```
 
 Weights are saved to the `weights/` directory and can be loaded using `cactus_init()`.

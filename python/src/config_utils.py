@@ -30,6 +30,11 @@ class CactusConfig:
         config["api_key"] = key
         self.save_config(config)
 
+    def clear_api_key(self):
+        config = self.load_config()
+        config.pop("api_key", None)
+        self.save_config(config)
+
 
 def cfg_get(c, key, default=None):
     """Get a config value from a dict or object, with fallback default."""

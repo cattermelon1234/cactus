@@ -152,6 +152,7 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 
 | Command | Description |
 |---------|-------------|
+| `cactus auth` | Setup Cactus cloud fallback (optional) (`--status`, `--clear`) |
 | `cactus run [model]` | Opens playground (auto downloads model) |
 | `cactus download [model]` | Downloads model to `./weights` |
 | `cactus convert [model] [dir]` | Converts model, supports LoRA merging (`--lora <path>`) |
