@@ -141,8 +141,7 @@ def cmd_download(args):
         print("Please run: ./setup")
         return 1
 
-    from .converter_llm import convert_hf_model_weights
-    from .converter_vlm import convert_processors
+    from .converter import convert_hf_model_weights
     from .tokenizer import convert_hf_tokenizer
     from .tensor_io import format_config_value
     from .config_utils import is_lfm2_vl, pick_dtype, vision_weight_sanity_check
@@ -220,11 +219,6 @@ def cmd_download(args):
                 print_color(RED, "Vision embeddings look randomly initialized.")
                 return 1
 
-            try:
-                convert_processors(processor, model_id, weights_dir, token=token)
-            except Exception as e:
-                print(f"  Warning: convert_processors failed: {e}")
-
         elif 'moonshine' in model_id.lower():
             from transformers import MoonshineForConditionalGeneration
             print(f"  Note: Loading Moonshine model using MoonshineForConditionalGeneration...")
@@ -243,7 +237,7 @@ def cmd_download(args):
                 print("Install with: pip install torchaudio")
                 return 1
 
-            from .converter_silero_vad import convert_silero_vad_weights
+            from .converter import convert_silero_vad_weights
 
             model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False)
             convert_silero_vad_weights(model, weights_dir, precision, args)
@@ -637,6 +631,26 @@ DEFAULT_ASR_MODEL_ID = "openai/whisper-small"
 
 def cmd_transcribe(args):
     """Download ASR model if needed and start transcription."""
+    from .config_utils import CactusConfig
+
+    config = CactusConfig()
+    api_key = config.get_api_key()
+
+    if not api_key:
+        print("\n" + "="*70)
+        print("  Cactus Cloud Setup (Optional)")
+        print("="*70 + "\n")
+        print("💡 Get your cloud key at \033[1;36mhttps://www.cactuscompute.com/dashboard/api-keys\033[0m")
+        print("   to enable automatic cloud fallback.\n")
+
+        api_key = input("Your Cactus Cloud key (press Enter to skip): ").strip()
+        if api_key:
+            config.set_api_key(api_key)
+        print()
+
+    if api_key:
+        os.environ["CACTUS_CLOUD_API_KEY"] = api_key
+
     model_id = getattr(args, 'model_id', DEFAULT_ASR_MODEL_ID)
     audio_file = getattr(args, 'audio_file', None)
 
