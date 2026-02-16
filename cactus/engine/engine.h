@@ -113,6 +113,7 @@ struct Config {
     float default_top_p = 0.95f;
     size_t default_top_k = 20;
     float default_max_tps = -1.0f;
+    float default_cloud_handoff_threshold = 0.0f;
 
     std::vector<std::string> layer_types;
     size_t conv_L_cache = 0;

@@ -7,7 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -arch arm64 -pthread -Wall -Wextra -pedantic -O3")
-    find_package(CURL REQUIRED)
 else()
 endif()
 
@@ -62,13 +61,6 @@ foreach(TEST_FILE ${TEST_SOURCES})
         message(STATUS "Test ${TEST_NAME} will link with SDL2")
     endif()
 
-    if(APPLE AND CURL_FOUND)
-        target_link_libraries(${TEST_NAME} PRIVATE ${CURL_LIBRARIES})
-        target_include_directories(${TEST_NAME} PRIVATE ${CURL_INCLUDE_DIRS})
-        message(STATUS "Test ${TEST_NAME} will link with libcurl")
-    endif()
-
-
     if(APPLE)
         target_link_libraries(${TEST_NAME} PRIVATE ${COREML_FRAMEWORK} ${FOUNDATION_FRAMEWORK})
     endif()
@@ -87,11 +79,6 @@ foreach(APP_NAME chat asr)
 
         if(MMAN_LIB)
             target_link_libraries(${APP_NAME} PRIVATE ${MMAN_LIB})
-        endif()
-
-        if(APPLE AND CURL_FOUND)
-            target_link_libraries(${APP_NAME} PRIVATE ${CURL_LIBRARIES})
-            target_include_directories(${APP_NAME} PRIVATE ${CURL_INCLUDE_DIRS})
         endif()
 
         if(APPLE)

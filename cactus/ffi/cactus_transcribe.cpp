@@ -101,12 +101,14 @@ int cactus_transcribe(
         size_t top_k, max_tokens, tool_rag_top_k;
         std::vector<std::string> stop_sequences;
         bool force_tools, include_stop_sequences, use_vad, telemetry_enabled;
+        float cloud_handoff_threshold = handle->model->get_config().default_cloud_handoff_threshold;
         parse_options_json(
             options_json ? options_json : "", temperature,
             top_p, top_k, max_tokens, stop_sequences,
             force_tools, tool_rag_top_k, confidence_threshold,
             include_stop_sequences, use_vad, telemetry_enabled
         );
+        (void)telemetry_enabled;
 
         bool is_moonshine = handle->model->get_config().model_type == cactus::engine::Config::ModelType::MOONSHINE;
 
@@ -208,6 +210,7 @@ int cactus_transcribe(
         float first_token_entropy = 0.0f;
         float total_entropy_sum = 0.0f;
         size_t total_entropy_count = 0;
+        float max_token_entropy_norm = 0.0f;
 
         float max_tps = handle->model->get_config().default_max_tps;
         if (max_tps < 0) {
@@ -228,6 +231,7 @@ int cactus_transcribe(
 
         total_entropy_sum += first_token_entropy;
         total_entropy_count++;
+        if (first_token_entropy > max_token_entropy_norm) max_token_entropy_norm = first_token_entropy;
 
         generated_tokens.push_back(next_token);
         tokens.push_back(next_token);
@@ -246,6 +250,7 @@ int cactus_transcribe(
 
                 total_entropy_sum += token_entropy;
                 total_entropy_count++;
+                if (token_entropy > max_token_entropy_norm) max_token_entropy_norm = token_entropy;
 
                 generated_tokens.push_back(next_token);
                 tokens.push_back(next_token);
@@ -290,7 +295,14 @@ int cactus_transcribe(
             cleaned_text.erase(0, 1);
         }
 
-        std::string json = construct_response_json(cleaned_text, {}, time_to_first_token, total_time_ms, prefill_tps, decode_tps, prompt_tokens, completion_tokens, confidence);
+        bool cloud_handoff = false;
+        if (!cleaned_text.empty() && cleaned_text.length() > 5) {
+             if (cloud_handoff_threshold > 0.0f && max_token_entropy_norm > cloud_handoff_threshold) {
+                 cloud_handoff = true;
+             }
+        }
+
+        std::string json = construct_response_json(cleaned_text, {}, time_to_first_token, total_time_ms, prefill_tps, decode_tps, prompt_tokens, completion_tokens, confidence, cloud_handoff);
 
         if (json.size() >= buffer_size) {
             handle_error_response("Response buffer too small", response_buffer, buffer_size);

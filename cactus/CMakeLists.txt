@@ -9,6 +9,8 @@ if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "CMAKE_BUILD_TYPE was not set, defaulting to Release.")
 endif()
 
+find_package(CURL QUIET)
+
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -25,7 +27,6 @@ if(APPLE)
     )
 
     enable_language(OBJCXX)
-    find_package(CURL REQUIRED)
     find_library(COREML_FRAMEWORK CoreML REQUIRED)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
@@ -89,9 +90,13 @@ function(configure_cactus_target target_name)
             ${COREML_FRAMEWORK}
             ${FOUNDATION_FRAMEWORK}
             ${ACCELERATE_FRAMEWORK}
-            ${CURL_LIBRARIES}
         )
-        target_include_directories(${target_name} PUBLIC ${CURL_INCLUDE_DIRS})
+    endif()
+
+    if(CURL_FOUND)
+        target_include_directories(${target_name} PRIVATE ${CURL_INCLUDE_DIRS})
+        target_link_libraries(${target_name} PUBLIC ${CURL_LIBRARIES})
+        target_compile_definitions(${target_name} PRIVATE CACTUS_USE_CURL)
     endif()
 endfunction()
 

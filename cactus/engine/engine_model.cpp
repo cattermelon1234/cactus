@@ -529,11 +529,13 @@ bool Config::from_json(const std::string& config_path) {
         default_temperature = 0.0f;
         default_top_p = 0.0f;
         default_top_k = 0;
+        default_cloud_handoff_threshold = 0.4f;
     } else if (model_type == ModelType::MOONSHINE) {
         default_temperature = 0.0f;
         default_top_p = 0.0f;
         default_top_k = 0;
         default_max_tps = 6.5f;
+        default_cloud_handoff_threshold = 0.35f;
     }
 
     return true;
