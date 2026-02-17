@@ -232,16 +232,10 @@ def cmd_download(args):
             model = AutoModel.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
 
         elif is_vad:
-            try:
-                import torchaudio
-            except ImportError:
-                print_color(RED, "Error: torchaudio is required for Silero-VAD")
-                print("Install with: pip install torchaudio")
-                return 1
-
             from .converter import convert_silero_vad_weights
+            from silero_vad import load_silero_vad
 
-            model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False)
+            model = load_silero_vad()
             convert_silero_vad_weights(model, weights_dir, precision, args)
 
             del model
