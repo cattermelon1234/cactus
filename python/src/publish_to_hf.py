@@ -24,7 +24,6 @@ def zip_dir(source_dir, output_path):
         cwd=source_dir,
         check=True,
     )
-
     subprocess.run(
         ["zip", "-X", "-o", "-r", "-9", str(output_path), "."],
         cwd=source_dir,
@@ -50,69 +49,18 @@ def export_pro_weights(model_id, bits):
     pro_repo = PROJECT_ROOT / "cactus-pro"
     if not pro_repo.exists():
         return None
-
     build_script = pro_repo / "apple" / "build.sh"
     if not build_script.exists():
         return None
-
     result = subprocess.run(
         ["bash", str(build_script), "--model", model_id, "--bits", bits],
         cwd=pro_repo,
         capture_output=True,
     )
-
     if result.returncode != 0:
         return None
-
     mlpackage = pro_repo / "apple" / "build" / "model.mlpackage"
     return mlpackage if mlpackage.exists() else None
-
-
-def stage_model(model_id, weights_dir, precision, bits, export_apple):
-    model_name = get_model_name(model_id)
-    stage = STAGE_DIR / model_name
-
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir(parents=True, exist_ok=True)
-
-    model_name_lower = model_name.lower()
-    weights_out = stage / "weights" / model_name_lower
-    shutil.move(str(weights_dir), str(weights_out))
-
-    model_zip = stage / "weights" / f"{model_name_lower}.zip"
-    zip_dir(weights_out, model_zip)
-
-    fingerprint = hashlib.sha256()
-    fingerprint.update(sha256(model_zip).encode())
-
-    config = {
-        "model_type": model_name,
-        "precision": precision,
-    }
-
-    if export_apple:
-        try:
-            mlpackage = export_pro_weights(model_id, bits)
-
-            shutil.move(mlpackage, weights_out)
-
-            model_pro_zip = stage / "weights" / f"{model_name_lower}-apple.zip"
-            zip_dir(weights_out, model_pro_zip)
-
-            fingerprint.update(sha256(model_pro_zip).encode())
-            config["bits"] = bits
-        except Exception:
-            print("Failed to export pro weights")
-
-    shutil.rmtree(weights_out)
-
-    config["fingerprint"] = fingerprint.hexdigest()
-
-    with open(stage / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-
-    return stage, config
 
 
 def get_prev_config(api, repo, current):
@@ -143,6 +91,7 @@ def changed(curr, prev):
 def update_org_readme(api, org):
     readme = PROJECT_ROOT / "README.md"
     if not readme.exists():
+        print("README.md not found")
         return 1
 
     try:
@@ -161,42 +110,79 @@ def update_org_readme(api, org):
         return 1
 
 
-def export_and_publish_model(args, api, token):
-    model_id = args.model
-    name = get_model_name(model_id)
-    repo_id = f"{args.org}/{name}"
+def export_and_publish_model(args, api):
+    model_name = get_model_name(args.model)
+    model_name_lower = model_name.lower()
+    repo_id = f"{args.org}/{model_name}"
 
-    stage_dir = None
+    precisions = []
+    if args.int4:
+        precisions.append(("int4", "4"))
+    if args.int8:
+        precisions.append(("int8", "8"))
+    if args.fp16:
+        precisions.append(("fp16", "16"))
+
+    stage = STAGE_DIR / model_name
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+    weights_dir = stage / "weights"
+    weights_dir.mkdir()
+
     try:
-        weights_dir = export_model(model_id, token, args.precision)
-        if not weights_dir:
-            print("Export failed")
-            return 1
+        fingerprint = hashlib.sha256()
+        precisions_list = []
 
-        stage_dir, config = stage_model(
-            model_id, weights_dir, args.precision, args.bits, args.apple
-        )
-        prev = get_prev_config(api, repo_id, args.version)
+        for precision, bits in precisions:
+            print(f"Exporting {args.model} with {precision}...")
+
+            exported = export_model(args.model, os.environ.get("HF_TOKEN"), precision.upper())
+            if not exported:
+                print(f"Failed to export {precision}")
+                continue
+
+            base_zip = weights_dir / f"{model_name_lower}-{precision}.zip"
+            zip_dir(exported, base_zip)
+            fingerprint.update(sha256(base_zip).encode())
+
+            if args.apple:
+                try:
+                    mlpackage = export_pro_weights(args.model, bits)
+                    if mlpackage:
+                        shutil.copytree(str(mlpackage), str(exported / mlpackage.name))
+                        apple_zip = weights_dir / f"{model_name_lower}-{precision}-apple.zip"
+                        zip_dir(exported, apple_zip)
+                        fingerprint.update(sha256(apple_zip).encode())
+                except Exception:
+                    print(f"Failed to export Apple weights for {precision}")
+
+            shutil.rmtree(exported)
+            precisions_list.append(precision)
+
+        config = {"model_type": model_name, "precisions": precisions_list, "fingerprint": fingerprint.hexdigest()}
+        with open(stage / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
 
         api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True)
 
-        if changed(config, prev):
+        if changed(config, get_prev_config(api, repo_id, args.version)):
             api.upload_folder(
-                folder_path=str(stage_dir),
+                folder_path=str(stage),
                 path_in_repo=".",
                 repo_id=repo_id,
                 repo_type="model",
                 commit_message=f"Upload {args.version}",
+                delete_patterns=["*"],
             )
             print("Uploaded")
         else:
             print("Unchanged")
 
-        info = api.repo_info(repo_id=repo_id, repo_type="model")
         api.create_tag(
             repo_id=repo_id,
             tag=args.version,
-            revision=info.sha,
+            revision=api.repo_info(repo_id=repo_id, repo_type="model").sha,
             repo_type="model",
             tag_message=f"Release {args.version}",
         )
@@ -207,21 +193,19 @@ def export_and_publish_model(args, api, token):
         print("Model processing failed")
         return 1
     finally:
-        if stage_dir and stage_dir.exists():
-            shutil.rmtree(stage_dir)
-            print("Cleaned up stage directory")
+        if stage.exists():
+            shutil.rmtree(stage)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--task", required=True, choices=["export_model", "update_org_readme"]
-    )
+    parser.add_argument("--task", required=True, choices=["export_model", "update_org_readme"])
     parser.add_argument("--version")
     parser.add_argument("--org")
     parser.add_argument("--model")
-    parser.add_argument("--precision")
-    parser.add_argument("--bits")
+    parser.add_argument("--int4", action="store_true")
+    parser.add_argument("--int8", action="store_true")
+    parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--apple", action="store_true")
     args = parser.parse_args()
 
@@ -229,16 +213,16 @@ def main():
     if not token:
         print("Error: HF_TOKEN not set")
         return 1
-
     api = HfApi(token=token)
 
     if args.task == "export_model":
-        if not all([args.version, args.org, args.model, args.precision, args.bits]):
-            print(
-                "Error: export_model requires --version, --org, --model, --precision, and --bits"
-            )
+        if not all([args.version, args.org, args.model]):
+            print("Error: export_model requires --version, --org, and --model")
             return 1
-        return export_and_publish_model(args, api, token)
+        if not any([args.int4, args.int8, args.fp16]):
+            print("Error: At least one precision flag must be set")
+            return 1
+        return export_and_publish_model(args, api)
     elif args.task == "update_org_readme":
         if not args.org:
             print("Error: update_org_readme requires --org")

@@ -18,16 +18,21 @@ on:
         required: false
         default: Cactus-Compute
         type: string
-      precision:
-        description: Precision
+      int4:
+        description: Export INT4
         required: false
-        default: INT8
-        type: string
-      bits:
-        description: Bits
+        type: boolean
+        default: false
+      int8:
+        description: Export INT8
         required: false
-        default: '8'
-        type: string
+        type: boolean
+        default: false
+      fp16:
+        description: Export FP16
+        required: false
+        type: boolean
+        default: false
       apple:
         description: Export Apple weights
         required: false
@@ -35,30 +40,27 @@ on:
         default: false
 
 env:
-  MODELS: |
-    google/gemma-3-270m-it
-    google/functiongemma-270m-it
-    LiquidAI/LFM2-350M
-    Qwen/Qwen3-0.6B
-    LiquidAI/LFM2-700M
-    google/gemma-3-1b-it
-    LiquidAI/LFM2.5-1.2B-Thinking
-    LiquidAI/LFM2.5-1.2B-Instruct
-    Qwen/Qwen3-1.7B
-    LiquidAI/LFM2-2.6B
-    LiquidAI/LFM2-VL-450M
-    LiquidAI/LFM2.5-VL-1.6B
-    UsefulSensors/moonshine-base
-    openai/whisper-small
-    openai/whisper-medium
-    snakers4/silero-vad
-    nomic-ai/nomic-embed-text-v2-moe
-    Qwen/Qwen3-Embedding-0.6B
-  APPLE_MODELS: |
-    openai/whisper-small
-    LiquidAI/LFM2-VL-450M
-    openai/whisper-medium
-    LiquidAI/LFM2.5-VL-1.6B
+  MODELS_CONFIG: |
+    [
+      {"model": "google/gemma-3-270m-it",           "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "google/functiongemma-270m-it",     "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "LiquidAI/LFM2-350M",               "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "Qwen/Qwen3-0.6B",                  "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "LiquidAI/LFM2-700M",               "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "google/gemma-3-1b-it",             "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "LiquidAI/LFM2.5-1.2B-Thinking",    "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "LiquidAI/LFM2.5-1.2B-Instruct",    "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "Qwen/Qwen3-1.7B",                  "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "LiquidAI/LFM2-2.6B",               "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "LiquidAI/LFM2-VL-450M",            "int4": true,  "int8": true,  "fp16": false, "apple": true},
+      {"model": "LiquidAI/LFM2.5-VL-1.6B",          "int4": true,  "int8": true,  "fp16": false, "apple": true},
+      {"model": "UsefulSensors/moonshine-base",     "int4": true,  "int8": true,  "fp16": false, "apple": true},
+      {"model": "openai/whisper-small",             "int4": true,  "int8": true,  "fp16": false, "apple": true},
+      {"model": "openai/whisper-medium",            "int4": true,  "int8": true,  "fp16": false, "apple": true},
+      {"model": "snakers4/silero-vad",              "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "nomic-ai/nomic-embed-text-v2-moe", "int4": true,  "int8": true,  "fp16": false, "apple": false},
+      {"model": "Qwen/Qwen3-Embedding-0.6B",        "int4": true,  "int8": true,  "fp16": false, "apple": false}
+    ]
 
 jobs:
   publish:
@@ -93,25 +95,36 @@ jobs:
       - name: Publish models
         run: |
           cd python
-          MODELS_TO_PUBLISH="${{ github.event.inputs.model || env.MODELS }}"
           ORG="${{ github.event.inputs.org || 'Cactus-Compute' }}"
-          PRECISION="${{ github.event.inputs.precision || 'INT8' }}"
-          BITS="${{ github.event.inputs.bits || '8' }}"
-          echo "$MODELS_TO_PUBLISH" | while IFS= read -r model; do
-            [ -z "$model" ] && continue
-            APPLE_FLAG=""
-            if [ "${{ github.event.inputs.apple }}" == "true" ] || echo "$APPLE_MODELS" | grep -qx "$model"; then
-              APPLE_FLAG="--apple"
-            fi
-            python -m src.publish_to_hf \
-              --task export_model \
-              --version ${{ steps.version.outputs.tag }} \
-              --org "$ORG" \
-              --model "$model" \
-              --precision "$PRECISION" \
-              --bits "$BITS" \
-              $APPLE_FLAG
-          done
+          VERSION="${{ steps.version.outputs.tag }}"
+
+          publish_model() {
+            local model=$1 int4=$2 int8=$3 fp16=$4 apple=$5
+            FLAGS="--version $VERSION --org $ORG --model $model"
+            [ "$int4" == "true" ] && FLAGS="$FLAGS --int4"
+            [ "$int8" == "true" ] && FLAGS="$FLAGS --int8"
+            [ "$fp16" == "true" ] && FLAGS="$FLAGS --fp16"
+            [ "$apple" == "true" ] && FLAGS="$FLAGS --apple"
+            python -m src.publish_to_hf --task export_model $FLAGS
+          }
+
+          if [ -n "${{ github.event.inputs.model }}" ]; then
+            publish_model \
+              "${{ github.event.inputs.model }}" \
+              "${{ github.event.inputs.int4 }}" \
+              "${{ github.event.inputs.int8 }}" \
+              "${{ github.event.inputs.fp16 }}" \
+              "${{ github.event.inputs.apple }}"
+          else
+            echo "$MODELS_CONFIG" | jq -c '.[]' | while read -r config; do
+              model=$(echo "$config" | jq -r '.model')
+              int4=$(echo "$config" | jq -r '.int4')
+              int8=$(echo "$config" | jq -r '.int8')
+              fp16=$(echo "$config" | jq -r '.fp16')
+              apple=$(echo "$config" | jq -r '.apple')
+              publish_model "$model" "$int4" "$int8" "$fp16" "$apple"
+            done
+          fi
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 

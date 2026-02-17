@@ -332,7 +332,9 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
         else:
             print(f"Bundling Silero VAD weights for {detected_model_type} model...")
             try:
-                vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False)
+                from silero_vad import load_silero_vad
+
+                vad_model = load_silero_vad()
                 vad_output_dir = str(Path(output_dir) / "vad")
                 convert_silero_vad_weights(vad_model, vad_output_dir, precision, args)
                 del vad_model
