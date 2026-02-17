@@ -951,6 +951,14 @@ def cmd_clean(args):
 
     remove_if_exists(PROJECT_ROOT / "weights")
 
+    # Clean telemetry cache
+    telemetry_cache = Path.home() / "Library" / "Caches" / "cactus" / "telemetry"
+    if telemetry_cache.exists():
+        print(f"Removing telemetry cache: {telemetry_cache}")
+        shutil.rmtree(telemetry_cache)
+    else:
+        print(f"Telemetry cache not found: {telemetry_cache}")
+
     print()
     print("Removing compiled libraries and frameworks...")
 

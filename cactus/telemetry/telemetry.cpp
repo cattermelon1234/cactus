@@ -197,6 +197,10 @@ static Event make_event_extended(EventType type, const char* model, const Comple
     e.tokens = static_cast<int>(metrics.prefill_tokens + metrics.decode_tokens);
     e.prefill_tokens = static_cast<int>(metrics.prefill_tokens);
     e.decode_tokens = static_cast<int>(metrics.decode_tokens);
+    e.session_ttft_ms = 0.0;
+    e.session_tps = 0.0;
+    e.session_time_ms = 0.0;
+    e.session_tokens = 0;
     e.timestamp = std::chrono::system_clock::now();
     std::memset(e.model, 0, sizeof(e.model));
     std::memset(e.message, 0, sizeof(e.message));
@@ -430,6 +434,33 @@ static std::string format_timestamp(const std::chrono::system_clock::time_point&
     return true;
 }
 
+static std::string escape_json_string(const char* str) {
+    if (!str) return "";
+    std::string result;
+    result.reserve(std::strlen(str));
+    for (const char* p = str; *p; ++p) {
+        switch (*p) {
+            case '"':  result += "\\\""; break;
+            case '\\': result += "\\\\"; break;
+            case '\b': result += "\\b"; break;
+            case '\f': result += "\\f"; break;
+            case '\n': result += "\\n"; break;
+            case '\r': result += "\\r"; break;
+            case '\t': result += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(*p) < 0x20) {
+                    char buf[7];
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(*p));
+                    result += buf;
+                } else {
+                    result += *p;
+                }
+                break;
+        }
+    }
+    return result;
+}
+
 static void collect_device_info() {
     struct utsname u;
     if (uname(&u) == 0) {
@@ -576,7 +607,7 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
         const Event& e = local[i];
         payload << "{";
         payload << "\"event_type\":\"" << event_type_to_string(e.type) << "\",";
-        payload << "\"model\":\"" << e.model << "\",";
+        payload << "\"model\":\"" << escape_json_string(e.model) << "\",";
         payload << "\"success\":" << (e.success ? "true" : "false") << ",";
         payload << "\"cloud_handoff\":" << (e.cloud_handoff ? "true" : "false") << ",";
         if (e.type == INIT || !e.success) {
@@ -626,10 +657,10 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
         payload << "\"framework\":\"cpp\",";
         payload << "\"device_id\":\"" << device_id << "\"";
         if (e.message[0] != '\0') {
-            payload << ",\"message\":\"" << e.message << "\"";
+            payload << ",\"message\":\"" << escape_json_string(e.message) << "\"";
         }
         if (e.error[0] != '\0') {
-            payload << ",\"error\":\"" << e.error << "\"";
+            payload << ",\"error\":\"" << escape_json_string(e.error) << "\"";
         } else {
             payload << ",\"error\":null";
         }
@@ -652,7 +683,7 @@ static void write_events_to_cache(const std::vector<Event>& local) {
     for (const auto &e : local) {
         std::ostringstream oss;
         oss << "{\"event_type\":\"" << event_type_to_string(e.type) << "\",";
-        oss << "\"model\":\"" << e.model << "\",";
+        oss << "\"model\":\"" << escape_json_string(e.model) << "\",";
         oss << "\"success\":" << (e.success ? "true" : "false") << ",";
         oss << "\"cloud_handoff\":" << (e.cloud_handoff ? "true" : "false") << ",";
         if (e.type == INIT || !e.success) {
@@ -694,10 +725,10 @@ static void write_events_to_cache(const std::vector<Event>& local) {
         }
         oss << ",\"ts_ms\":" << std::chrono::duration_cast<std::chrono::milliseconds>(e.timestamp.time_since_epoch()).count();
         if (e.message[0] != '\0') {
-            oss << ",\"message\":\"" << e.message << "\"";
+            oss << ",\"message\":\"" << escape_json_string(e.message) << "\"";
         }
         if (e.error[0] != '\0') {
-            oss << ",\"error\":\"" << e.error << "\"";
+            oss << ",\"error\":\"" << escape_json_string(e.error) << "\"";
         } else {
             oss << ",\"error\":null";
         }
