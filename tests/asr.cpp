@@ -25,6 +25,17 @@ static std::string get_cloud_api_key() {
     return key ? std::string(key) : "";
 }
 
+static std::string get_transcribe_options_json() {
+    const char* threshold = std::getenv("CACTUS_CLOUD_HANDOFF_THRESHOLD");
+    std::ostringstream oss;
+    oss << "{\"max_tokens\":500,\"telemetry_enabled\":true";
+    if (threshold && threshold[0] != '\0') {
+        oss << ",\"cloud_handoff_threshold\":" << threshold;
+    }
+    oss << "}";
+    return oss.str();
+}
+
 constexpr size_t RESPONSE_BUFFER_SIZE = 65536;
 
 namespace Color {
@@ -171,13 +182,15 @@ int transcribe_file(cactus_model_t model, const std::string& audio_path, const s
 
     auto start_time = std::chrono::steady_clock::now();
 
+    const std::string options_json = get_transcribe_options_json();
+
     int result = cactus_transcribe(
         model,
         audio_path.c_str(),
         prompt.c_str(),
         response_buffer.data(),
         response_buffer.size(),
-        R"({"max_tokens": 500, "telemetry_enabled": true})",
+        options_json.c_str(),
         print_token,
         nullptr,
         nullptr,
@@ -199,6 +212,7 @@ int transcribe_file(cactus_model_t model, const std::string& audio_path, const s
     }
 
     std::string json_str(response_buffer.data());
+    bool cloud_handoff = json_str.find("\"cloud_handoff\":true") != std::string::npos;
 
     std::string time_str;
     size_t time_pos = json_str.find("\"total_time_ms\":");
@@ -217,6 +231,9 @@ int transcribe_file(cactus_model_t model, const std::string& audio_path, const s
         stats << colored(" | model time: ", Color::GRAY) << model_time << "s";
     }
     stats << colored("]", Color::GRAY);
+    stats << "\n" << colored("[cloud_handoff: ", Color::GRAY)
+          << (cloud_handoff ? colored("true", Color::YELLOW) : colored("false", Color::GREEN))
+          << colored("]", Color::GRAY);
 
     std::cout << stats.str() << "\n";
 

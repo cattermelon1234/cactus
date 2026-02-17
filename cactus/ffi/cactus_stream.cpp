@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <future>
 #include <chrono>
+#include <atomic>
 
 #ifdef CACTUS_USE_CURL
 #include <curl/curl.h>
@@ -147,10 +148,32 @@ static void parse_stream_transcribe_init_options(const std::string& json,
 
 #ifdef CACTUS_USE_CURL
 static const std::string CLOUD_API_URL = "https://104.198.76.3/api/v1/transcribe";
+static std::atomic<bool> g_warned_missing_cloud_api_key{false};
 
 static std::string get_cloud_api_key() {
     const char* key = std::getenv("CACTUS_CLOUD_API_KEY");
     return key ? std::string(key) : "";
+}
+
+static bool cloud_insecure_ssl_enabled() {
+    const char* strict = std::getenv("CACTUS_CLOUD_STRICT_SSL");
+    return !(strict && strict[0] != '\0' && !(strict[0] == '0' && strict[1] == '\0'));
+}
+
+static void apply_curl_tls_trust(CURL* curl) {
+    if (!curl) return;
+    const char* ca_bundle = std::getenv("CACTUS_CA_BUNDLE");
+    if (ca_bundle && ca_bundle[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle);
+    }
+#if defined(__ANDROID__)
+    const char* ca_path = std::getenv("CACTUS_CA_PATH");
+    if (ca_path && ca_path[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_CAPATH, ca_path);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_CAPATH, "/system/etc/security/cacerts");
+    }
+#endif
 }
 
 static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -216,6 +239,9 @@ static std::vector<uint8_t> build_wav(const uint8_t* pcm, size_t pcm_bytes) {
 static std::string cloud_transcribe(const std::string& audio_b64, const std::string& original_text) {
     std::string api_key = get_cloud_api_key();
     if (api_key.empty()) {
+        if (!g_warned_missing_cloud_api_key.exchange(true)) {
+            CACTUS_LOG_WARN("cloud_handoff", "CACTUS_CLOUD_API_KEY is not set; cloud handoff requests will fall back to local transcript");
+        }
         return original_text;
     }
 
@@ -236,22 +262,39 @@ static std::string cloud_transcribe(const std::string& audio_b64, const std::str
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    if (cloud_insecure_ssl_enabled()) {// current default path is not verifying ssl certs
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        apply_curl_tls_trust(curl);
+    }
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
-    if (res != CURLE_OK) return original_text;
+    if (res != CURLE_OK) {
+        CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff request failed: " << curl_easy_strerror(res) << "; falling back to local transcript");
+        return original_text;
+    }
 
     std::string pattern = "\"transcript\":";
     size_t pos = response_body.find(pattern);
-    if (pos == std::string::npos) return original_text;
+    if (pos == std::string::npos) {
+        CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff response missing transcript field; falling back to local transcript");
+        return original_text;
+    }
 
     size_t i = pos + pattern.length();
     while (i < response_body.size() && (response_body[i] == ' ' || response_body[i] == '\t' || response_body[i] == '\n' || response_body[i] == '\r')) {
         ++i;
     }
-    if (i >= response_body.size() || response_body[i] != '"') return original_text;
+    if (i >= response_body.size() || response_body[i] != '"') {
+        CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff transcript field is not a string; falling back to local transcript");
+        return original_text;
+    }
     ++i;
 
     std::string out;
@@ -278,6 +321,7 @@ static std::string cloud_transcribe(const std::string& audio_b64, const std::str
         }
         out.push_back(c);
     }
+    CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff transcript string parse failed; falling back to local transcript");
     return original_text;
 }
 #endif

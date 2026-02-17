@@ -12,7 +12,9 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#if defined(__APPLE__)
 #include <sys/sysctl.h>
+#endif
 #include <curl/curl.h>
 #include <dirent.h>
 #include <functional>
@@ -144,12 +146,17 @@ static void persist_registered_flag(const std::string& file) {
 }
 
 static std::string sysctl_string(const char* key) {
+#if defined(__APPLE__)
     size_t size = 0;
     if (sysctlbyname(key, nullptr, &size, nullptr, 0) != 0 || size == 0) return {};
     std::string out(size, '\0');
     if (sysctlbyname(key, out.data(), &size, nullptr, 0) != 0) return {};
     if (!out.empty() && out.back() == '\0') out.pop_back();
     return out;
+#else
+    (void)key;
+    return {};
+#endif
 }
 
 static Event make_event(EventType type, const char* model, bool success, double ttft_ms, double tps, double response_time_ms, int tokens, const char* message) {
@@ -464,14 +471,38 @@ static std::string escape_json_string(const char* str) {
 static void collect_device_info() {
     struct utsname u;
     if (uname(&u) == 0) {
+        const std::string sysname = u.sysname;
+        device_os = (sysname == "Darwin") ? "macos" : sysname;
+        device_model = u.machine;
+        device_os_version = u.release;
+        device_brand = "unknown";
+#if defined(__APPLE__)
         // Prefer user-facing macOS info over Darwin kernel version.
         std::string hw_model = sysctl_string("hw.model");
         std::string os_product = sysctl_string("kern.osproductversion");
-        device_os = (std::string(u.sysname) == "Darwin") ? "macos" : u.sysname;
-        device_os_version = !os_product.empty() ? os_product : u.release;
-        device_model = !hw_model.empty() ? hw_model : u.machine;
+        if (!hw_model.empty()) device_model = hw_model;
+        if (!os_product.empty()) device_os_version = os_product;
         device_brand = "apple";
+#elif defined(__ANDROID__)
+        device_brand = "android";
+#endif
     }
+}
+
+static void apply_curl_tls_trust(CURL* curl) {
+    if (!curl) return;
+    const char* ca_bundle = std::getenv("CACTUS_CA_BUNDLE");
+    if (ca_bundle && ca_bundle[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle);
+    }
+#if defined(__ANDROID__)
+    const char* ca_path = std::getenv("CACTUS_CA_PATH");
+    if (ca_path && ca_path[0] != '\0') {
+        curl_easy_setopt(curl, CURLOPT_CAPATH, ca_path);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_CAPATH, "/system/etc/security/cacerts");
+    }
+#endif
 }
 
 static bool ensure_project_row(CURL* curl) {
@@ -506,6 +537,7 @@ static bool ensure_project_row(CURL* curl) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    apply_curl_tls_trust(curl);
     CURLcode res = curl_easy_perform(curl);
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
@@ -552,6 +584,7 @@ static bool ensure_device_row(CURL* curl) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    apply_curl_tls_trust(curl);
     CURLcode res = curl_easy_perform(curl);
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
@@ -582,6 +615,7 @@ static bool send_payload(CURL* curl, const std::string& url, const std::string& 
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    apply_curl_tls_trust(curl);
     CURLcode res = curl_easy_perform(curl);
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);

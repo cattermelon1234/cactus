@@ -9,6 +9,13 @@
 #include <algorithm>
 #include <cctype>
 
+#if __has_include(<curl/curl.h>)
+#include <curl/curl.h>
+#define CACTUS_ENGINE_TEST_HAS_CURL 1
+#else
+#define CACTUS_ENGINE_TEST_HAS_CURL 0
+#endif
+
 using namespace EngineTestUtils;
 
 const char* g_model_path = std::getenv("CACTUS_TEST_MODEL");
@@ -34,6 +41,33 @@ const char* g_options = R"({
     "stop_sequences": ["<|im_end|>", "<end_of_turn>"],
     "telemetry_enabled": false
     })";
+
+static bool test_curl_runtime() {
+#if !CACTUS_ENGINE_TEST_HAS_CURL
+    std::cout << "⊘ SKIP │ curl/curl.h not available\n";
+    return true;
+#else
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+        return false;
+    }
+
+    bool ok = true;
+    curl_version_info_data* info = curl_version_info(CURLVERSION_NOW);
+    ok = ok && info && info->version && info->host;
+
+    CURL* handle = curl_easy_init();
+    ok = ok && (handle != nullptr);
+    if (handle) {
+        ok = ok && (curl_easy_setopt(handle, CURLOPT_URL, "https://example.com/") == CURLE_OK);
+        ok = ok && (curl_easy_setopt(handle, CURLOPT_NOBODY, 1L) == CURLE_OK);
+        ok = ok && (curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, 200L) == CURLE_OK);
+        curl_easy_cleanup(handle);
+    }
+
+    curl_global_cleanup();
+    return ok;
+#endif
+}
 
 template<typename TestFunc>
 bool run_test(const char* title, const char* messages, TestFunc test_logic,
@@ -1146,6 +1180,7 @@ static bool test_pcm_transcription() {
 
 int main() {
     TestUtils::TestRunner runner("Engine Tests");
+    runner.run_test("curl_runtime", test_curl_runtime());
     runner.run_test("1k_context", test_1k_context());
     runner.run_test("streaming", test_streaming());
     runner.run_test("tool_calls", test_tool_call());

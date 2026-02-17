@@ -14,6 +14,19 @@ find_package(CURL QUIET)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CACTUS_CURL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../libs/curl" CACHE PATH "Path to vendored libcurl artifacts")
+
+function(cactus_require_vendored_curl include_dir library_path platform_label)
+    if(NOT EXISTS "${include_dir}/curl/curl.h" OR NOT EXISTS "${library_path}")
+        message(WARNING "==============================================================================")
+        message(WARNING " Vendored libcurl is required for ${platform_label} builds but is missing.")
+        message(WARNING " Expected header: ${include_dir}/curl/curl.h")
+        message(WARNING " Expected library: ${library_path}")
+        message(WARNING " Populate libs/curl from your local curl build before running cactus build.")
+        message(WARNING "==============================================================================")
+        message(FATAL_ERROR "Missing vendored libcurl artifacts for ${platform_label}")
+    endif()
+endfunction()
 
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64")
@@ -27,9 +40,15 @@ if(APPLE)
     )
 
     enable_language(OBJCXX)
+    set(CACTUS_CURL_INCLUDE_DIR "${CACTUS_CURL_ROOT}/include")
+    set(CACTUS_CURL_LIBRARY_MACOS "${CACTUS_CURL_ROOT}/macos/libcurl.a")
+    cactus_require_vendored_curl("${CACTUS_CURL_INCLUDE_DIR}" "${CACTUS_CURL_LIBRARY_MACOS}" "macOS")
     find_library(COREML_FRAMEWORK CoreML REQUIRED)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
+    find_library(SECURITY_FRAMEWORK Security REQUIRED)
+    find_library(SYSTEMCONFIGURATION_FRAMEWORK SystemConfiguration REQUIRED)
+    find_library(CFNETWORK_FRAMEWORK CFNetwork REQUIRED)
 else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8.2-a+fp16+simd+dotprod+i8mm -pthread -Wall -Wextra -pedantic -O3 -Wno-missing-field-initializers")
     add_compile_definitions(
@@ -90,10 +109,14 @@ function(configure_cactus_target target_name)
             ${COREML_FRAMEWORK}
             ${FOUNDATION_FRAMEWORK}
             ${ACCELERATE_FRAMEWORK}
+            ${SECURITY_FRAMEWORK}
+            ${SYSTEMCONFIGURATION_FRAMEWORK}
+            ${CFNETWORK_FRAMEWORK}
+            ${CACTUS_CURL_LIBRARY_MACOS}
         )
-    endif()
-
-    if(CURL_FOUND)
+        target_include_directories(${target_name} PUBLIC ${CACTUS_CURL_INCLUDE_DIR})
+        target_compile_definitions(${target_name} PRIVATE CACTUS_USE_CURL=1)
+    elseif(CURL_FOUND)
         target_include_directories(${target_name} PRIVATE ${CURL_INCLUDE_DIRS})
         target_link_libraries(${target_name} PUBLIC ${CURL_LIBRARIES})
         target_compile_definitions(${target_name} PRIVATE CACTUS_USE_CURL)
