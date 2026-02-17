@@ -230,10 +230,16 @@ def cmd_download(args):
             model = AutoModel.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
 
         elif is_vad:
-            from .converter import convert_silero_vad_weights
-            from silero_vad import load_silero_vad
+            try:
+                import torchaudio
+            except ImportError:
+                print_color(RED, "Error: torchaudio is required for Silero-VAD")
+                print("Install with: pip install torchaudio")
+                return 1
 
-            model = load_silero_vad()
+            from .converter import convert_silero_vad_weights
+
+            model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False)
             convert_silero_vad_weights(model, weights_dir, precision, args)
 
             del model
@@ -343,6 +349,7 @@ def cmd_build(args):
 
     cactus_dir = PROJECT_ROOT / "cactus"
     lib_path = cactus_dir / "build" / "libcactus.a"
+    vendored_curl = PROJECT_ROOT / "libs" / "curl" / "macos" / "libcurl.a"
 
     print_color(YELLOW, "Building Cactus library...")
     build_script = cactus_dir / "build.sh"
@@ -368,6 +375,10 @@ def cmd_build(args):
     is_darwin = platform.system() == "Darwin"
 
     if is_darwin:
+        if not vendored_curl.exists():
+            print_color(RED, f"Error: vendored libcurl not found at {vendored_curl}")
+            print("Build it first and place it in libs/curl/macos/libcurl.a")
+            return 1
         compiler = "clang++"
         cmd = [
             compiler, "-std=c++20", "-O3",
@@ -375,10 +386,13 @@ def cmd_build(args):
             str(chat_cpp),
             str(lib_path),
             "-o", "chat",
-            "-lcurl",
+            str(vendored_curl),
             "-framework", "Accelerate",
             "-framework", "CoreML",
-            "-framework", "Foundation"
+            "-framework", "Foundation",
+            "-framework", "Security",
+            "-framework", "SystemConfiguration",
+            "-framework", "CFNetwork",
         ]
     else:
         compiler = "g++"
@@ -448,10 +462,13 @@ def cmd_build(args):
                 str(asr_cpp),
                 str(lib_path),
                 "-o", "asr",
-                "-lcurl",
+                str(vendored_curl),
                 "-framework", "Accelerate",
                 "-framework", "CoreML",
-                "-framework", "Foundation"
+                "-framework", "Foundation",
+                "-framework", "Security",
+                "-framework", "SystemConfiguration",
+                "-framework", "CFNetwork",
             ])
             if sdl2_available:
                 cmd.extend(sdl2_lib.split())
@@ -1212,8 +1229,8 @@ def create_parser():
 
     Optional flags:
     --model <model>                    default: LFM2-VL-450M
-    --transcribe_model <model>         default: whisper-small
-    --large                            use larger models (LFM2.5-VL-1.6B + whisper-small)
+    --transcribe_model <model>         default: moonshine-base
+    --large                            use larger models (LFM2.5-VL-1.6B + openai/whisper-small)
     --precision INT4|INT8|FP16         regenerates weights with precision
     --reconvert                        force model weights reconversion from source
     --no-rebuild                       skip building library and tests
@@ -1326,7 +1343,7 @@ def create_parser():
     test_parser.add_argument('--vad_model', default='snakers4/silero-vad',
                              help='VAD model to use')
     test_parser.add_argument('--large', action='store_true',
-                             help='Use larger models (LFM2.5-VL-1.6B + whisper-small)')
+                             help='Use larger models (LFM2.5-VL-1.6B + openai/whisper-small)')
     test_parser.add_argument('--precision', choices=['INT4', 'INT8', 'FP16'],
                              help='Regenerate weights with this precision (deletes existing weights)')
     test_parser.add_argument('--no-rebuild', action='store_true',
