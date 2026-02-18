@@ -52,6 +52,31 @@ def run_command(cmd, cwd=None, check=True):
     return result
 
 
+def ensure_vad_weights(model_id, weights_dir, precision='INT8'):
+    """Bundle Silero VAD weights into <weights_dir>/vad/ for whisper/moonshine models."""
+    is_asr = 'whisper' in model_id.lower() or 'moonshine' in model_id.lower()
+    if not is_asr:
+        return
+    vad_dir = weights_dir / "vad"
+    if (vad_dir / "config.txt").exists():
+        return
+    try:
+        import torch
+        from .converter import convert_silero_vad_weights
+        from silero_vad import load_silero_vad
+
+        print_color(YELLOW, "Bundling VAD weights for speech model...")
+        vad_model = load_silero_vad()
+        convert_silero_vad_weights(vad_model, str(vad_dir), precision)
+        del vad_model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print_color(GREEN, "VAD weights bundled successfully")
+    except Exception as e:
+        print_color(RED, f"Warning: Failed to bundle VAD weights: {e}")
+        print("Transcription may fail without VAD. Try: cactus download snakers4/silero-vad")
+
+
 def download_from_hf(model_id, weights_dir, precision):
     """Download pre-converted model from Cactus-Compute HuggingFace."""
     try:
@@ -124,6 +149,7 @@ def cmd_download(args):
         shutil.rmtree(weights_dir)
 
     if weights_dir.exists() and (weights_dir / "config.txt").exists():
+        ensure_vad_weights(model_id, weights_dir, precision)
         print_color(GREEN, f"Model weights found at {weights_dir}")
         return 0
 
@@ -133,6 +159,7 @@ def cmd_download(args):
 
     if not reconvert:
         if download_from_hf(model_id, weights_dir, precision):
+            ensure_vad_weights(model_id, weights_dir, precision)
             return 0
 
     try:
