@@ -418,6 +418,7 @@ def cmd_build(args):
         compiler = "clang++"
         cmd = [
             compiler, "-std=c++20", "-O3",
+            "-DACCELERATE_NEW_LAPACK",
             f"-I{PROJECT_ROOT}",
             str(chat_cpp),
             str(lib_path),
@@ -490,6 +491,7 @@ def cmd_build(args):
         if is_darwin:
             cmd = [
                 compiler, "-std=c++20", "-O3",
+                "-DACCELERATE_NEW_LAPACK",
                 f"-I{PROJECT_ROOT}",
             ]
             if sdl2_available:
