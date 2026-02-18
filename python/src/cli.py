@@ -266,10 +266,16 @@ def cmd_download(args):
             model = AutoModel.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
 
         elif is_vad:
+            import urllib.request
+            import tempfile
             from .converter import convert_silero_vad_weights
-            from silero_vad import load_silero_vad
 
-            model = load_silero_vad()
+            vad_jit_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.jit"
+            with tempfile.NamedTemporaryFile(suffix='.jit', delete=False) as f:
+                jit_path = f.name
+            urllib.request.urlretrieve(vad_jit_url, jit_path)
+            model = torch.jit.load(jit_path, map_location='cpu')
+            os.unlink(jit_path)
             convert_silero_vad_weights(model, weights_dir, precision, args)
 
             del model
