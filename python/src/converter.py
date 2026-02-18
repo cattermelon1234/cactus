@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -332,9 +333,17 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
         else:
             print(f"Bundling Silero VAD weights for {detected_model_type} model...")
             try:
-                from silero_vad import load_silero_vad
+                import urllib.request
+                import tempfile
 
-                vad_model = load_silero_vad()
+                # Download silero VAD JIT model directly to avoid torchaudio import issues
+                vad_jit_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.jit"
+                with tempfile.NamedTemporaryFile(suffix='.jit', delete=False) as f:
+                    jit_path = f.name
+                urllib.request.urlretrieve(vad_jit_url, jit_path)
+                vad_model = torch.jit.load(jit_path, map_location='cpu')
+                os.unlink(jit_path)
+
                 vad_output_dir = str(Path(output_dir) / "vad")
                 convert_silero_vad_weights(vad_model, vad_output_dir, precision, args)
                 del vad_model
