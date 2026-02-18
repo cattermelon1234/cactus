@@ -62,11 +62,18 @@ def ensure_vad_weights(model_id, weights_dir, precision='INT8'):
         return
     try:
         import torch
+        import urllib.request
+        import tempfile
         from .converter import convert_silero_vad_weights
-        from silero_vad import load_silero_vad
 
         print_color(YELLOW, "Bundling VAD weights for speech model...")
-        vad_model = load_silero_vad()
+        vad_jit_url = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.jit"
+        with tempfile.NamedTemporaryFile(suffix='.jit', delete=False) as f:
+            jit_path = f.name
+        urllib.request.urlretrieve(vad_jit_url, jit_path)
+        vad_model = torch.jit.load(jit_path, map_location='cpu')
+        os.unlink(jit_path)
+
         convert_silero_vad_weights(vad_model, str(vad_dir), precision)
         del vad_model
         if torch.cuda.is_available():
