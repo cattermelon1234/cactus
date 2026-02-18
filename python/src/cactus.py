@@ -51,6 +51,10 @@ if not _LIB_PATH.exists():
 
 _lib = ctypes.CDLL(str(_LIB_PATH))
 
+_lib.cactus_set_telemetry_environment.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+_lib.cactus_set_telemetry_environment.restype = None
+_lib.cactus_set_telemetry_environment(b"python", None)
+
 _lib.cactus_init.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_bool]
 _lib.cactus_init.restype = ctypes.c_void_p
 
@@ -183,6 +187,11 @@ _lib.cactus_index_compact.restype = ctypes.c_int
 
 _lib.cactus_index_destroy.argtypes = [ctypes.c_void_p]
 _lib.cactus_index_destroy.restype = None
+
+
+def cactus_set_telemetry_environment(path):
+    """Set the telemetry cache directory."""
+    _lib.cactus_set_telemetry_environment(None, path.encode() if isinstance(path, str) else path)
 
 
 def cactus_init(model_path, corpus_dir=None, cache_index=False):

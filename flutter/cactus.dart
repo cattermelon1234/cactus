@@ -136,6 +136,8 @@ typedef CactusIndexDestroyNative = Void Function(CactusIndexT index);
 
 typedef CactusGetLastErrorNative = Pointer<Utf8> Function();
 
+typedef CactusSetTelemetryEnvironmentNative = Void Function(
+    Pointer<Utf8> framework, Pointer<Utf8> cacheLocation);
 
 typedef CactusInitDart = CactusModelT Function(
     Pointer<Utf8> modelPath, Pointer<Utf8> corpusDir);
@@ -261,6 +263,9 @@ typedef CactusIndexDestroyDart = void Function(CactusIndexT index);
 
 typedef CactusGetLastErrorDart = Pointer<Utf8> Function();
 
+typedef CactusSetTelemetryEnvironmentDart = void Function(
+    Pointer<Utf8> framework, Pointer<Utf8> cacheLocation);
+
 
 DynamicLibrary _loadLibrary() {
   if (Platform.isAndroid) {
@@ -332,6 +337,9 @@ final _cactusIndexDestroy =
     _lib.lookupFunction<CactusIndexDestroyNative, CactusIndexDestroyDart>('cactus_index_destroy');
 final _cactusGetLastError = _lib
     .lookupFunction<CactusGetLastErrorNative, CactusGetLastErrorDart>('cactus_get_last_error');
+final _cactusSetTelemetryEnvironment = _lib.lookupFunction<
+    CactusSetTelemetryEnvironmentNative,
+    CactusSetTelemetryEnvironmentDart>('cactus_set_telemetry_environment');
 
 // ----------------------------------------------------------------------------
 // Helper Extensions
@@ -604,10 +612,17 @@ class IndexResult {
 class Cactus {
   final CactusModelT _handle;
   bool _disposed = false;
+  static bool _frameworkSet = false;
 
   Cactus._(this._handle);
 
   static Cactus create(String modelPath, {String? corpusDir}) {
+    if (!_frameworkSet) {
+      final frameworkPtr = 'flutter'.toNativeUtf8();
+      _cactusSetTelemetryEnvironment(frameworkPtr, nullptr);
+      calloc.free(frameworkPtr);
+      _frameworkSet = true;
+    }
     final modelPathPtr = modelPath.toNativeUtf8();
     final corpusDirPtr = corpusDir?.toNativeUtf8() ?? nullptr;
 
@@ -621,6 +636,12 @@ class Cactus {
       calloc.free(modelPathPtr);
       if (corpusDirPtr != nullptr) calloc.free(corpusDirPtr);
     }
+  }
+
+  static void setTelemetryEnvironment(String path) {
+    final pathPtr = path.toNativeUtf8();
+    _cactusSetTelemetryEnvironment(nullptr, pathPtr);
+    calloc.free(pathPtr);
   }
 
   void _checkNotDisposed() {

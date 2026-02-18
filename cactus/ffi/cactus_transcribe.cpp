@@ -5,6 +5,7 @@
 #include "../../libs/audio/wav.h"
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <cctype>
@@ -123,6 +124,12 @@ int cactus_transcribe(
                 }
             }
         }
+
+        const char* force_handoff_env = std::getenv("CACTUS_FORCE_HANDOFF");
+        if (force_handoff_env && force_handoff_env[0] == '1' && force_handoff_env[1] == '\0') {
+            cloud_handoff_threshold = 0.0001f;
+        }
+
         (void)telemetry_enabled;
 
         bool is_moonshine = handle->model->get_config().model_type == cactus::engine::Config::ModelType::MOONSHINE;

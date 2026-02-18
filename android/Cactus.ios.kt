@@ -9,6 +9,8 @@ import platform.Foundation.NSLog
 actual class Cactus private constructor(private var handle: COpaquePointer?) : AutoCloseable {
 
     actual companion object {
+        private val _frameworkInitialized = run { cactus_set_telemetry_environment("kotlin", null) }
+
         actual fun create(modelPath: String, corpusDir: String?): Cactus {
             val handle = cactus_init(modelPath, corpusDir)
             if (handle == null) {
@@ -16,6 +18,10 @@ actual class Cactus private constructor(private var handle: COpaquePointer?) : A
                 throw CactusException(error)
             }
             return Cactus(handle)
+        }
+
+        actual fun setTelemetryEnvironment(cacheDir: String) {
+            cactus_set_telemetry_environment(null, cacheDir)
         }
     }
 

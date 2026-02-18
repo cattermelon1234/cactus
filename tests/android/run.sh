@@ -292,6 +292,7 @@ for test_exe in "${test_executables[@]}"; do
         export CACTUS_TEST_VAD_MODEL=$device_model_dir/$vad_model_dir && \
         export CACTUS_TEST_ASSETS=$device_assets_dir/assets && \
         export CACTUS_INDEX_PATH=$device_assets_dir/assets && \
+        export CACTUS_NO_CLOUD_TELE=${CACTUS_NO_CLOUD_TELE} && \
         ./$test_name"
 done
 

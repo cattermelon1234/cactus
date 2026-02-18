@@ -18,6 +18,12 @@ actual class Cactus private constructor(private var handle: Long) : AutoCloseabl
             return Cactus(handle)
         }
 
+        actual fun setTelemetryEnvironment(cacheDir: String) {
+            nativeSetCacheDir(cacheDir)
+        }
+
+        @JvmStatic
+        private external fun nativeSetCacheDir(cacheDir: String)
         @JvmStatic
         private external fun nativeInit(modelPath: String, corpusDir: String?): Long
         @JvmStatic

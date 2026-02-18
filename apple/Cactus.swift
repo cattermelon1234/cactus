@@ -235,8 +235,12 @@ public final class Cactus: @unchecked Sendable {
 
     private let handle: OpaquePointer
     private static let defaultBufferSize = 65536
+    private static let _frameworkInitialized: Void = {
+        cactus_set_telemetry_environment("swift", nil)
+    }()
 
     public init(modelPath: String, corpusDir: String? = nil, cacheIndex: Bool = false) throws {
+        _ = Self._frameworkInitialized
         guard let h = cactus_init(modelPath, corpusDir, cacheIndex) else {
             let error = String(cString: cactus_get_last_error())
             throw CactusError.initializationFailed(error.isEmpty ? "Unknown error" : error)
@@ -246,6 +250,10 @@ public final class Cactus: @unchecked Sendable {
 
     deinit {
         cactus_destroy(handle)
+    }
+
+    public static func setTelemetryEnvironment(_ path: String) {
+        cactus_set_telemetry_environment(nil, path)
     }
 
     public func complete(

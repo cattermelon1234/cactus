@@ -783,6 +783,7 @@ def _cmd_transcribe_android(weights_dir, audio_file, args):
     cloud_handoff_threshold = os.environ.get("CACTUS_CLOUD_HANDOFF_THRESHOLD", "")
     ca_bundle = os.environ.get("CACTUS_CA_BUNDLE", "")
     ca_path = os.environ.get("CACTUS_CA_PATH", "")
+    force_handoff = os.environ.get("CACTUS_FORCE_HANDOFF", "")
     env_exports = []
     if cloud_api_key:
         env_exports.append(f"export CACTUS_CLOUD_API_KEY='{cloud_api_key}'")
@@ -796,6 +797,8 @@ def _cmd_transcribe_android(weights_dir, audio_file, args):
         env_exports.append(f"export CACTUS_CA_PATH='{ca_path}'")
     if getattr(args, "no_cloud_tele", False):
         env_exports.append("export CACTUS_NO_CLOUD_TELE=1")
+    if force_handoff:
+        env_exports.append(f"export CACTUS_FORCE_HANDOFF='{force_handoff}'")
 
     shell_cmd = " && ".join(env_exports + [f"{device_bin_root}/asr {device_model} {device_audio}"])
     print_color(BLUE, "Running Android transcription...")
@@ -843,6 +846,11 @@ def cmd_transcribe(args):
 
     if getattr(args, 'no_cloud_tele', False):
         os.environ["CACTUS_NO_CLOUD_TELE"] = "1"
+
+    if getattr(args, 'force_handoff', False):
+        os.environ["CACTUS_FORCE_HANDOFF"] = "1"
+    else:
+        os.environ.pop("CACTUS_FORCE_HANDOFF", None)
 
     audio_extensions = ('.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac')
     if model_id and model_id.lower().endswith(audio_extensions):
@@ -1095,7 +1103,9 @@ def cmd_test(args):
         cmd.extend(["--only", args.only])
 
     env = os.environ.copy()
-    if getattr(args, 'no_cloud_tele', False):
+    if getattr(args, 'enable_telemetry', False):
+        env.pop("CACTUS_NO_CLOUD_TELE", None)
+    else:
         env["CACTUS_NO_CLOUD_TELE"] = "1"
 
     result = subprocess.run(cmd, cwd=PROJECT_ROOT / "tests", env=env)
@@ -1494,6 +1504,8 @@ def create_parser():
     transcribe_parser.add_argument('--token', help='HuggingFace API token')
     transcribe_parser.add_argument('--no-cloud-tele', action='store_true',
                                    help='Disable cloud telemetry (write to cache only)')
+    transcribe_parser.add_argument('--force-handoff', action='store_true',
+                                   help='Force cloud handoff by assuming low confidence')
     transcribe_parser.add_argument('--reconvert', action='store_true',
                                    help='Download original model and convert (instead of using pre-converted from Cactus-Compute)')
     transcribe_parser.add_argument('--android', action='store_true',
@@ -1539,8 +1551,8 @@ def create_parser():
     test_parser.add_argument('--ios', action='store_true',
                              help='Run tests on iOS')
     test_parser.add_argument('--only', help='Only run the specified test (engine, graph, index, kernel, kv_cache, performance, etc)')
-    test_parser.add_argument('--no-cloud-tele', action='store_true',
-                             help='Disable cloud telemetry (write to cache only)')
+    test_parser.add_argument('--enable-telemetry', action='store_true',
+                             help='Enable cloud telemetry (disabled by default in tests)')
     test_parser.add_argument('--reconvert', action='store_true',
                              help='Download original model and convert (instead of using pre-converted from Cactus-Compute)')
 
