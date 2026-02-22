@@ -580,20 +580,29 @@ def cactus_rag_query(model, query, top_k=5):
     return json.loads(buf.value.decode("utf-8", errors="ignore"))
 
 
-def cactus_stream_transcribe_start(model, options=None):
+def cactus_stream_transcribe_start(model, options=None, language="en"):
     """
     Initialize streaming transcription session.
 
     Args:
         model: Whisper model handle from cactus_init
-        options: Optional JSON string with options
+        options: Optional dict or JSON string with options
+        language: Language code (default: "en"). Examples: es, fr, de, zh, ja
 
     Returns:
         Stream handle for use with other stream_transcribe functions.
     """
+    if options is None:
+        options = {}
+    elif isinstance(options, str):
+        options = json.loads(options)
+
+    options["language"] = language
+    options_json = json.dumps(options)
+
     return _lib.cactus_stream_transcribe_start(
         model,
-        options.encode() if options else None
+        options_json.encode()
     )
 
 

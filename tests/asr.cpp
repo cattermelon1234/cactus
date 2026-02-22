@@ -159,25 +159,25 @@ void print_token(const char* token, uint32_t /*token_id*/, void* /*user_data*/) 
     std::cout << token << std::flush;
 }
 
-std::string get_transcribe_prompt(const std::string& model_path) {
+std::string get_transcribe_prompt(const std::string& model_path, const std::string& language = "en") {
     std::string path_lower = model_path;
     std::transform(path_lower.begin(), path_lower.end(), path_lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
     if (path_lower.find("whisper") != std::string::npos) {
-        return "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>";
+        return "<|startoftranscript|><|" + language + "|><|transcribe|><|notimestamps|>";
     }
-    return "";  // Moonshine uses empty prompt
+    return "";
 }
 
-int transcribe_file(cactus_model_t model, const std::string& audio_path, const std::string& model_path) {
+int transcribe_file(cactus_model_t model, const std::string& audio_path, const std::string& model_path, const std::string& language = "en") {
     if (!file_exists(audio_path)) {
         std::cerr << colored("Error: ", Color::RED + Color::BOLD)
                   << "File not found: " << audio_path << "\n";
         return -1;
     }
 
-    std::string prompt = get_transcribe_prompt(model_path);
+    std::string prompt = get_transcribe_prompt(model_path, language);
     std::vector<char> response_buffer(RESPONSE_BUFFER_SIZE, 0);
 
     auto start_time = std::chrono::steady_clock::now();
@@ -299,7 +299,7 @@ void audio_callback(void* /*userdata*/, Uint8* stream, int len) {
     g_audio_state.buffer.insert(g_audio_state.buffer.end(), stream, stream + len);
 }
 
-int run_live_transcription(cactus_model_t model) {
+int run_live_transcription(cactus_model_t model, const std::string& language = "en") {
     if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         std::cerr << colored("Error: ", Color::RED + Color::BOLD)
                   << "Failed to initialize SDL: " << SDL_GetError() << "\n";
@@ -343,9 +343,8 @@ int run_live_transcription(cactus_model_t model) {
                   << "Hz, will resample to " << TARGET_SAMPLE_RATE << "Hz\n";
     }
 
-    cactus_stream_transcribe_t stream = cactus_stream_transcribe_start(
-        model, R"({"confirmation_threshold": 0.99, "min_chunk_size": 16000, "telemetry_enabled": true})"
-    );
+    std::string options = R"({"confirmation_threshold": 0.99, "min_chunk_size": 16000, "telemetry_enabled": true, "language": ")" + language + R"("})";
+    cactus_stream_transcribe_t stream = cactus_stream_transcribe_start(model, options.c_str());
 
     if (!stream) {
         std::cerr << colored("Error: ", Color::RED + Color::BOLD)
@@ -584,15 +583,21 @@ int run_live_transcription(cactus_model_t model) {
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << colored("Error: ", Color::RED + Color::BOLD) << "Missing model path\n";
-        std::cerr << "Usage: " << argv[0] << " <model_path> [audio_file]\n";
-        std::cerr << "\nModes:\n";
-        std::cerr << "  " << argv[0] << " weights/whisper-small              # Live microphone transcription\n";
-        std::cerr << "  " << argv[0] << " weights/whisper-small audio.wav    # Transcribe single file\n";
+        std::cerr << "Usage: " << argv[0] << " <model_path> [audio_file] [--language <code>]\n";
         return 1;
     }
 
     const char* model_path = argv[1];
-    const char* audio_file = argc > 2 ? argv[2] : nullptr;
+    const char* audio_file = nullptr;
+    std::string language = "en";
+
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--language" && i + 1 < argc) {
+            language = argv[++i];
+        } else if (argv[i][0] != '-') {
+            audio_file = argv[i];
+        }
+    }
 
     std::cout << "\n" << colored("Loading model from ", Color::YELLOW)
               << colored(model_path, Color::CYAN) << colored("...", Color::YELLOW) << "\n";
@@ -615,10 +620,10 @@ int main(int argc, char* argv[]) {
     if (audio_file) {
         std::cout << "\n" << colored("Transcribing: ", Color::BLUE + Color::BOLD)
                   << audio_file << "\n\n";
-        result = transcribe_file(model, audio_file, model_path);
+        result = transcribe_file(model, audio_file, model_path, language);
     } else {
 #ifdef HAVE_SDL2
-        result = run_live_transcription(model);
+        result = run_live_transcription(model, language);
 #else
         std::cerr << colored("Error: ", Color::RED + Color::BOLD)
                   << "Live transcription requires SDL2.\n";

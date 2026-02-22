@@ -930,6 +930,8 @@ def cmd_transcribe(args):
     cmd_args = [str(asr_binary), str(weights_dir)]
     if audio_file:
         cmd_args.append(audio_file)
+    if hasattr(args, 'language') and args.language:
+        cmd_args.extend(['--language', args.language])
 
     os.execv(str(asr_binary), cmd_args)
 
@@ -1540,6 +1542,8 @@ def create_parser():
                                    help=f'HuggingFace model ID (default: {DEFAULT_ASR_MODEL_ID})')
     transcribe_parser.add_argument('--file', dest='audio_file', default=None,
                                    help='Audio file to transcribe (WAV format). Omit for live microphone.')
+    transcribe_parser.add_argument('--language', default='en',
+                                   help='Language code for transcription (default: en). Examples: es, fr, de, zh, ja')
     transcribe_parser.add_argument('--precision', choices=['INT4', 'INT8', 'FP16'], default='INT8',
                                    help='Quantization precision (default: INT8)')
     transcribe_parser.add_argument('--cache-dir', help='Cache directory for HuggingFace models')
