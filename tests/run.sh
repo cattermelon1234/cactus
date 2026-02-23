@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --android                 Run tests on Android device or emulator"
             echo "  --ios                     Run tests on iOS device or simulator"
             echo "  --no-rebuild              Skip building cactus library and tests"
-            echo "  --only <test_name>        Only run the specified test (engine, graph, index, kernel, kv_cache, performance, etc)"
+            echo "  --only <test_name>        Only run the specified test (llm, vlm, stt, embed, rag, graph, index, kernel, kv_cache, performance, etc)"
             echo "  --help, -h                Show this help message"
             exit 0
             ;;

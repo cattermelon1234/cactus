@@ -1556,7 +1556,7 @@ def create_parser():
     --precision INT4|INT8|FP16         regenerates weights with precision
     --reconvert                        force model weights reconversion from source
     --no-rebuild                       skip building library and tests
-    --only <test_name>                 run specific test (engine, graph, index, kernel, kv_cache, performance, etc)
+    --only <test_name>                 run specific test (llm, vlm, stt, embed, rag, graph, index, kernel, kv_cache, performance, etc)
     --ios                              run on connected iPhone
     --android                          run on connected Android
 
@@ -1685,7 +1685,7 @@ def create_parser():
                              help='Run tests on Android')
     test_parser.add_argument('--ios', action='store_true',
                              help='Run tests on iOS')
-    test_parser.add_argument('--only', help='Only run the specified test (engine, graph, index, kernel, kv_cache, performance, etc)')
+    test_parser.add_argument('--only', help='Only run the specified test (llm, vlm, stt, embed, rag, graph, index, kernel, kv_cache, performance, etc)')
     test_parser.add_argument('--enable-telemetry', action='store_true',
                              help='Enable cloud telemetry (disabled by default in tests)')
     test_parser.add_argument('--reconvert', action='store_true',

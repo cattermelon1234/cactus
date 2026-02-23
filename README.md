@@ -166,11 +166,11 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 ## Using in your apps 
 
 - [Python for Mac](/python/)
+- [Rust SDK](/rust/)
 - [React Native SDK](https://github.com/cactus-compute/cactus-react-native)
 - [Swift Multiplatform SDK](https://github.com/mhayes853/swift-cactus)
 - [Kotlin Multiplatform SDK](https://github.com/cactus-compute/cactus-kotlin)
 - [Flutter SDK](https://github.com/cactus-compute/cactus-flutter)
-- [Rust SDK](https://github.com/mrsarac/cactus-rs)
 
 ## Try demo apps 
 
@@ -178,7 +178,7 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 - [Android Demo](https://play.google.com/store/apps/details?id=com.rshemetsubuser.myapp)
 
 ## Maintaining Organisations
-1. [Cactus Compute, Inc](https://cactuscompute.com/) 
+1. [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/) 
 2. [UCLA's BruinAI](https://bruinai.org/) 
 3. [Yale's AI Society](https://www.yale-ai.org/team)
 4. [National Unoversity of Singapore's AI Society](https://www.nusaisociety.org/)
