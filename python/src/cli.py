@@ -1235,7 +1235,6 @@ def cmd_test(args):
         cmd.append("--ios")
     if args.only:
         cmd.extend(["--only", args.only])
-
     env = os.environ.copy()
     if getattr(args, 'enable_telemetry', False):
         env.pop("CACTUS_NO_CLOUD_TELE", None)

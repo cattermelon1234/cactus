@@ -25,3 +25,4 @@ __pycache__
 profile.txt
 *.dylib
 *.bin
+tmp

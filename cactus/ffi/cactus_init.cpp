@@ -353,10 +353,6 @@ const char* cactus_get_last_error() {
     return last_error_message.c_str();
 }
 
-void cactus_set_telemetry_environment(const char* framework, const char* cache_location) {
-    cactus::telemetry::setTelemetryEnvironment(framework, cache_location);
-}
-
 cactus_model_t cactus_init(const char* model_path, const char* corpus_dir, bool cache_index) {
     constexpr size_t DEFAULT_CONTEXT_SIZE = 512;  // matches default sliding window size
 

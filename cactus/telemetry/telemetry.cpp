@@ -1,5 +1,4 @@
 #include "telemetry/telemetry.h"
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -10,6 +9,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <deque>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #if defined(__APPLE__)
@@ -50,11 +53,12 @@ struct Event {
     char function_calls[1024];
     std::chrono::system_clock::time_point timestamp;
 };
-static std::atomic<bool> enabled{false};
-static std::atomic<int> inference_active{0};
-static std::atomic<bool> shutdown_called{false};
-static std::atomic<bool> atexit_registered{false};
-static std::atomic<bool> cloud_disabled{false};
+static bool enabled = false;
+static int inference_active = 0;
+static bool shutdown_called = false;
+static bool atexit_registered = false;
+static bool curl_initialized = false;
+static bool cloud_disabled = false;
 static std::string supabase_url = "https://vlqqczxwyaodtcdmdmlw.supabase.co";
 static std::string supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZscXFjenh3eWFvZHRjZG1kbWx3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE1MTg2MzIsImV4cCI6MjA2NzA5NDYzMn0.nBzqGuK9j6RZ6mOPWU2boAC_5H9XDs-fPpo5P3WZYbI";
 static std::string device_id;
@@ -70,10 +74,52 @@ static std::string framework = "cpp";
 static std::string custom_cache_location;
 static std::string device_registered_file;
 static std::string project_registered_file;
-static std::atomic<bool> device_registered{false};
-static std::atomic<bool> project_registered{false};
-static std::atomic<bool> ids_ready{false};
-static std::atomic<bool> in_stream_mode{false};
+static bool device_registered = false;
+static bool project_registered = false;
+static bool ids_ready = false;
+static bool in_stream_mode = false;
+
+static std::mutex telemetry_mutex;
+static std::condition_variable telemetry_lifecycle_cv;
+
+enum class TelemetryLifecycleState {
+    Stopped,
+    Running,
+    ShuttingDown,
+};
+
+static TelemetryLifecycleState lifecycle_state = TelemetryLifecycleState::Stopped;
+
+static bool can_record_event_locked() {
+    return enabled && ids_ready && lifecycle_state == TelemetryLifecycleState::Running;
+}
+
+struct CloudSendResult {
+    bool payload_ok = false;
+    bool project_registered_ok = false;
+    bool device_registered_ok = false;
+};
+
+struct CloudConfigurationStateSnapshot {
+    std::string supabase_url;
+    std::string supabase_key;
+    std::string device_id;
+    std::string project_id;
+    std::string cloud_key;
+    std::string project_scope;
+    std::string framework;
+    std::string cactus_version;
+    std::string device_model;
+    std::string device_os;
+    std::string device_os_version;
+    std::string device_brand;
+    std::string device_registered_file;
+    std::string project_registered_file;
+    bool enabled = false;
+    bool cloud_disabled = false;
+    bool device_registered = false;
+    bool project_registered = false;
+};
 
 static std::string new_uuid();
 static std::string format_timestamp(const std::chrono::system_clock::time_point& tp);
@@ -96,6 +142,127 @@ static bool extract_bool_field(const std::string& line, const std::string& key, 
 static bool extract_double_field(const std::string& line, const std::string& key, double& out);
 static bool extract_int_field(const std::string& line, const std::string& key, int& out);
 static bool extract_double_field_raw(const std::string& line, const std::string& key, double& out);
+static void process_events(const std::vector<Event>& fresh_events);
+static std::string get_telemetry_dir_locked();
+static CloudConfigurationStateSnapshot capture_cloud_configuration_state_snapshot_locked();
+
+class TelemetryDispatcher {
+public:
+    TelemetryDispatcher() = default;
+
+    static TelemetryDispatcher& instance() {
+        static std::once_flag once;
+        static TelemetryDispatcher* singleton = nullptr;
+        std::call_once(once, [] {
+            singleton = new TelemetryDispatcher();
+        });
+        return *singleton;
+    }
+
+    void start() {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (running_) return;
+        stop_ = false;
+        processing_ = false;
+        running_ = true;
+        worker_thread_ = std::thread([this] { worker_loop(); });
+    }
+
+    bool enqueue(const Event& event) {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (!running_) return false;
+        pending_events_.push_back(event);
+        enqueue_seq_ += 1;
+        queue_cv_.notify_one();
+        return true;
+    }
+
+    void flush() {
+        uint64_t target = 0;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            if (running_) {
+                target = enqueue_seq_;
+                queue_cv_.notify_one();
+                flush_cv_.wait(lock, [this, target] {
+                    return processed_seq_ >= target && !processing_;
+                });
+            }
+        }
+        process_with_io_lock({});
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            stop_ = true;
+            queue_cv_.notify_all();
+        }
+
+        if (worker_thread_.joinable()) {
+            worker_thread_.join();
+        }
+
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        running_ = false;
+        stop_ = false;
+        processing_ = false;
+        pending_events_.clear();
+        enqueue_seq_ = 0;
+        processed_seq_ = 0;
+    }
+
+private:
+    void process_with_io_lock(const std::vector<Event>& batch) {
+        std::lock_guard<std::mutex> io_guard(io_mutex_);
+        process_events(batch);
+    }
+
+    void worker_loop() {
+        while (true) {
+            std::vector<Event> batch;
+            uint64_t processed_count = 0;
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex_);
+                queue_cv_.wait(lock, [this] {
+                    return stop_ || !pending_events_.empty();
+                });
+                if (stop_ && pending_events_.empty()) {
+                    break;
+                }
+                batch.assign(pending_events_.begin(), pending_events_.end());
+                processed_count = static_cast<uint64_t>(batch.size());
+                pending_events_.clear();
+                processing_ = true;
+            }
+
+            process_with_io_lock(batch);
+
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                processed_seq_ += processed_count;
+                processing_ = false;
+                flush_cv_.notify_all();
+            }
+        }
+
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        running_ = false;
+        processing_ = false;
+        flush_cv_.notify_all();
+    }
+    std::mutex queue_mutex_;
+    std::mutex io_mutex_;
+    std::condition_variable queue_cv_;
+    std::condition_variable flush_cv_;
+    std::deque<Event> pending_events_;
+    std::thread worker_thread_;
+    bool stop_ = false;
+    bool running_ = false;
+    bool processing_ = false;
+    uint64_t enqueue_seq_ = 0;
+    uint64_t processed_seq_ = 0;
+};
 
 static void mkdir_p(const std::string& path) {
     if (path.empty()) return;
@@ -110,10 +277,11 @@ static void mkdir_p(const std::string& path) {
     mkdir(path.c_str(), 0755);
 }
 
-static std::string get_telemetry_dir() {
-    if (!custom_cache_location.empty()) {
-        mkdir_p(custom_cache_location);
-        return custom_cache_location;
+static std::string get_telemetry_dir_locked() {
+    const std::string& cache_location = custom_cache_location;
+    if (!cache_location.empty()) {
+        mkdir_p(cache_location);
+        return cache_location;
     }
 
     const char* home = getenv("HOME");
@@ -604,20 +772,20 @@ static void apply_curl_tls_trust(CURL* curl) {
 #endif
 }
 
-static bool ensure_project_row(CURL* curl) {
-    if (project_id.empty() || project_registered.load()) return true;
-    std::string url = supabase_url + "/rest/v1/projects";
+static bool ensure_project_row_remote(CURL* curl, const CloudConfigurationStateSnapshot& snapshot) {
+    if (snapshot.project_id.empty() || snapshot.project_registered) return true;
+    std::string url = snapshot.supabase_url + "/rest/v1/projects";
     std::ostringstream payload;
     payload << "[{";
-    payload << "\"project_key\":\"" << project_id << "\"";
-    if (!project_scope.empty()) {
-        payload << ",\"name\":\"" << project_scope << "\"";
+    payload << "\"project_key\":\"" << snapshot.project_id << "\"";
+    if (!snapshot.project_scope.empty()) {
+        payload << ",\"name\":\"" << snapshot.project_scope << "\"";
     }
     payload << "}]";
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    std::string apikey_hdr = std::string("apikey: ") + supabase_key;
-    std::string auth_hdr = std::string("Authorization: Bearer ") + supabase_key;
+    std::string apikey_hdr = std::string("apikey: ") + snapshot.supabase_key;
+    std::string auth_hdr = std::string("Authorization: Bearer ") + snapshot.supabase_key;
     headers = curl_slist_append(headers, apikey_hdr.c_str());
     headers = curl_slist_append(headers, auth_hdr.c_str());
     headers = curl_slist_append(headers, "Prefer: resolution=ignore-duplicates");
@@ -638,33 +806,26 @@ static bool ensure_project_row(CURL* curl) {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     if (headers) curl_slist_free_all(headers);
     bool ok = (res == CURLE_OK) && ((code >= 200 && code < 300) || code == 409);
-    if (ok) {
-        if (!project_registered_file.empty()) {
-            persist_registered_flag(project_registered_file);
-        }
-        project_registered.store(true);
-    }
     return ok;
 }
 
-static bool ensure_device_row(CURL* curl) {
-    if (device_registered.load()) return true;
-    if (device_id.empty()) device_id = new_uuid();
-    if (device_os.empty()) collect_device_info();
-    std::string url = supabase_url + "/rest/v1/devices";
+static bool ensure_device_row_remote(CURL* curl, const CloudConfigurationStateSnapshot& snapshot) {
+    if (snapshot.device_registered) return true;
+    if (snapshot.device_id.empty()) return false;
+    std::string url = snapshot.supabase_url + "/rest/v1/devices";
     std::ostringstream payload;
     payload << "[{";
-    payload << "\"id\":\"" << device_id << "\"";
-    payload << ",\"device_id\":\"" << device_id << "\"";
-    if (!device_model.empty()) payload << ",\"model\":\"" << device_model << "\"";
-    if (!device_os.empty()) payload << ",\"os\":\"" << device_os << "\"";
-    if (!device_os_version.empty()) payload << ",\"os_version\":\"" << device_os_version << "\"";
-    if (!device_brand.empty()) payload << ",\"brand\":\"" << device_brand << "\"";
+    payload << "\"id\":\"" << snapshot.device_id << "\"";
+    payload << ",\"device_id\":\"" << snapshot.device_id << "\"";
+    if (!snapshot.device_model.empty()) payload << ",\"model\":\"" << snapshot.device_model << "\"";
+    if (!snapshot.device_os.empty()) payload << ",\"os\":\"" << snapshot.device_os << "\"";
+    if (!snapshot.device_os_version.empty()) payload << ",\"os_version\":\"" << snapshot.device_os_version << "\"";
+    if (!snapshot.device_brand.empty()) payload << ",\"brand\":\"" << snapshot.device_brand << "\"";
     payload << "}]";
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    std::string apikey_hdr = std::string("apikey: ") + supabase_key;
-    std::string auth_hdr = std::string("Authorization: Bearer ") + supabase_key;
+    std::string apikey_hdr = std::string("apikey: ") + snapshot.supabase_key;
+    std::string auth_hdr = std::string("Authorization: Bearer ") + snapshot.supabase_key;
     headers = curl_slist_append(headers, apikey_hdr.c_str());
     headers = curl_slist_append(headers, auth_hdr.c_str());
     headers = curl_slist_append(headers, "Prefer: resolution=ignore-duplicates");
@@ -685,18 +846,14 @@ static bool ensure_device_row(CURL* curl) {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     if (headers) curl_slist_free_all(headers);
     bool ok = (res == CURLE_OK) && ((code >= 200 && code < 300) || code == 409);
-    if (ok) {
-        persist_registered_flag(device_registered_file);
-        device_registered.store(true);
-    }
     return ok;
 }
 
-static bool send_payload(CURL* curl, const std::string& url, const std::string& body) {
+static bool send_payload(CURL* curl, const std::string& url, const std::string& body, const CloudConfigurationStateSnapshot& snapshot) {
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    std::string apikey_hdr = std::string("apikey: ") + supabase_key;
-    std::string auth_hdr = std::string("Authorization: Bearer ") + supabase_key;
+    std::string apikey_hdr = std::string("apikey: ") + snapshot.supabase_key;
+    std::string auth_hdr = std::string("Authorization: Bearer ") + snapshot.supabase_key;
     headers = curl_slist_append(headers, apikey_hdr.c_str());
     headers = curl_slist_append(headers, auth_hdr.c_str());
     headers = curl_slist_append(headers, "Prefer: return=minimal");
@@ -718,18 +875,24 @@ static bool send_payload(CURL* curl, const std::string& url, const std::string& 
     return (res == CURLE_OK) && (code >= 200 && code < 300);
 }
 
-static bool send_batch_to_cloud(const std::vector<Event>& local) {
-    if (!enabled.load()) return false;
-    if (local.empty()) return true;
-    if (cloud_disabled.load()) return false;
-    if (device_id.empty()) device_id = new_uuid();
-    CURL* curl = curl_easy_init();
-    if (!curl) return false;
-    ensure_project_row(curl);
-    if (!device_registered.load()) {
-        ensure_device_row(curl);
+static CloudSendResult send_batch_to_cloud(const std::vector<Event>& local, const CloudConfigurationStateSnapshot& snapshot) {
+    CloudSendResult result;
+    if (!snapshot.enabled) return result;
+    if (local.empty()) {
+        result.payload_ok = true;
+        return result;
     }
-    std::string url = supabase_url + "/rest/v1/logs";
+    if (snapshot.cloud_disabled) return result;
+    if (snapshot.device_id.empty()) return result;
+    CURL* curl = curl_easy_init();
+    if (!curl) return result;
+    result.project_registered_ok = ensure_project_row_remote(curl, snapshot);
+    if (!snapshot.device_registered) {
+        result.device_registered_ok = ensure_device_row_remote(curl, snapshot);
+    } else {
+        result.device_registered_ok = true;
+    }
+    std::string url = snapshot.supabase_url + "/rest/v1/logs";
     std::ostringstream payload;
     payload << "[";
     for (size_t i = 0; i < local.size(); ++i) {
@@ -777,17 +940,17 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
             payload << "\"session_tokens\":" << e.session_tokens << ",";
         }
         payload << "\"created_at\":\"" << format_timestamp(e.timestamp) << "\",";
-        if (!project_id.empty()) {
-            payload << "\"project_id\":\"" << project_id << "\",";
+        if (!snapshot.project_id.empty()) {
+            payload << "\"project_id\":\"" << snapshot.project_id << "\",";
         }
-        if (!cloud_key.empty()) {
-            payload << "\"key_hash\":\"" << cloud_key << "\",";
+        if (!snapshot.cloud_key.empty()) {
+            payload << "\"key_hash\":\"" << snapshot.cloud_key << "\",";
         }
-        payload << "\"framework\":\"" << framework << "\",";
-        if (!cactus_version.empty()) {
-            payload << "\"framework_version\":\"" << cactus_version << "\",";
+        payload << "\"framework\":\"" << snapshot.framework << "\",";
+        if (!snapshot.cactus_version.empty()) {
+            payload << "\"framework_version\":\"" << snapshot.cactus_version << "\",";
         }
-        payload << "\"device_id\":\"" << device_id << "\"";
+        payload << "\"device_id\":\"" << snapshot.device_id << "\"";
         if (e.message[0] != '\0') {
             payload << ",\"message\":\"" << escape_json_string(e.message) << "\"";
         } else {
@@ -807,13 +970,12 @@ static bool send_batch_to_cloud(const std::vector<Event>& local) {
         if (i + 1 < local.size()) payload << ",";
     }
     payload << "]";
-    bool ok = send_payload(curl, url, payload.str());
+    result.payload_ok = send_payload(curl, url, payload.str(), snapshot);
     curl_easy_cleanup(curl);
-    return ok;
+    return result;
 }
 
-static void write_events_to_cache(const std::vector<Event>& local) {
-    std::string dir = get_telemetry_dir();
+static void write_events_to_cache_in_dir(const std::vector<Event>& local, const std::string& dir) {
     for (const auto &e : local) {
         std::ostringstream oss;
         oss << "{\"event_type\":\"" << event_type_to_string(e.type) << "\",";
@@ -882,9 +1044,9 @@ static void write_events_to_cache(const std::vector<Event>& local) {
         }
     }
 }
-static std::vector<Event> load_cached_events() {
+
+static std::vector<Event> load_cached_events_in_dir(const std::string& dir) {
     std::vector<Event> events;
-    std::string dir = get_telemetry_dir();
     DIR* d = opendir(dir.c_str());
     if (!d) return events;
     struct dirent* ent;
@@ -904,8 +1066,7 @@ static std::vector<Event> load_cached_events() {
     return events;
 }
 
-static void clear_cache_files() {
-    std::string dir = get_telemetry_dir();
+static void clear_cache_files_in_dir(const std::string& dir) {
     DIR* d = opendir(dir.c_str());
     if (!d) return;
     struct dirent* ent;
@@ -917,159 +1078,268 @@ static void clear_cache_files() {
     closedir(d);
 }
 
-static void flush_logs_with_event(const Event* latest) {
-    std::vector<Event> events = load_cached_events();
-    if (latest) events.push_back(*latest);
-    if (events.empty()) return;
-    bool cloud_ok = send_batch_to_cloud(events);
-    if (cloud_ok) {
-        clear_cache_files();
-    } else if (latest) {
-        write_events_to_cache({*latest});
+static CloudConfigurationStateSnapshot capture_cloud_configuration_state_snapshot_locked() {
+    CloudConfigurationStateSnapshot snapshot;
+    snapshot.supabase_url = supabase_url;
+    snapshot.supabase_key = supabase_key;
+    snapshot.device_id = device_id;
+    snapshot.project_id = project_id;
+    snapshot.cloud_key = cloud_key;
+    snapshot.project_scope = project_scope;
+    snapshot.framework = framework;
+    snapshot.cactus_version = cactus_version;
+    snapshot.device_model = device_model;
+    snapshot.device_os = device_os;
+    snapshot.device_os_version = device_os_version;
+    snapshot.device_brand = device_brand;
+    snapshot.device_registered_file = device_registered_file;
+    snapshot.project_registered_file = project_registered_file;
+    snapshot.enabled = enabled;
+    snapshot.cloud_disabled = cloud_disabled;
+    snapshot.device_registered = device_registered;
+    snapshot.project_registered = project_registered;
+    return snapshot;
+}
+
+static void process_events(const std::vector<Event>& fresh_events) {
+    std::vector<Event> events;
+    CloudConfigurationStateSnapshot snapshot;
+    std::string telemetry_dir;
+
+    {
+        std::lock_guard<std::mutex> guard(telemetry_mutex);
+        telemetry_dir = get_telemetry_dir_locked();
+        events = load_cached_events_in_dir(telemetry_dir);
+        if (!fresh_events.empty()) {
+            events.insert(events.end(), fresh_events.begin(), fresh_events.end());
+        }
+        if (events.empty()) return;
+        snapshot = capture_cloud_configuration_state_snapshot_locked();
+    }
+
+    CloudSendResult send_result = send_batch_to_cloud(events, snapshot);
+
+    {
+        std::lock_guard<std::mutex> guard(telemetry_mutex);
+        if (send_result.project_registered_ok && !project_registered) {
+            if (!project_registered_file.empty()) {
+                persist_registered_flag(project_registered_file);
+            }
+            project_registered = true;
+        }
+        if (send_result.device_registered_ok && !device_registered) {
+            if (!device_registered_file.empty()) {
+                persist_registered_flag(device_registered_file);
+            }
+            device_registered = true;
+        }
+
+        if (send_result.payload_ok) {
+            clear_cache_files_in_dir(telemetry_dir);
+        } else if (!fresh_events.empty()) {
+            write_events_to_cache_in_dir(fresh_events, telemetry_dir);
+        }
     }
 }
 
-void init(const char* project_id_param, const char* project_scope, const char* cloud_key_param) {
-    std::string scope = project_scope ? project_scope : "default";
+void init(const char* project_id_param, const char* project_scope_param, const char* cloud_key_param) {
+    std::unique_lock<std::mutex> lifecycle_guard(telemetry_mutex);
+    telemetry_lifecycle_cv.wait(lifecycle_guard, [] {
+        return lifecycle_state != TelemetryLifecycleState::ShuttingDown;
+    });
+
+    std::string scope = project_scope_param ? project_scope_param : "default";
+
+    bool cloud_disabled_from_env = false;
     if (const char* env = std::getenv("CACTUS_NO_CLOUD_TELE")) {
         if (env[0] != '\0' && !(env[0] == '0' && env[1] == '\0')) {
-            cloud_disabled.store(true);
+            cloud_disabled_from_env = true;
         }
     }
     const char* env_url = std::getenv("CACTUS_SUPABASE_URL");
     const char* env_key = std::getenv("CACTUS_SUPABASE_KEY");
-    if (env_url && *env_url) supabase_url = env_url;
-    if (env_key && *env_key) supabase_key = env_key;
-
     const char* env_project = std::getenv("CACTUS_PROJECT_ID");
-    std::string dir = get_telemetry_dir();
+    const char* env_cloud = std::getenv("CACTUS_CLOUD_KEY");
+
+    std::string dir = get_telemetry_dir_locked();
+    std::string resolved_project_id;
     if (project_id_param && *project_id_param) {
-        project_id = project_id_param;
+        resolved_project_id = project_id_param;
     } else if (env_project && *env_project) {
-        project_id = env_project;
+        resolved_project_id = env_project;
     } else {
         std::string file = dir + "/" + scoped_file_name("project_", scope);
-        project_id = load_or_create_id(file);
+        resolved_project_id = load_or_create_id(file);
     }
 
     std::string project_flag_file = dir + "/" + scoped_file_name("project_reg_", scope);
-    project_registered_file = project_flag_file;
-    project_registered.store(load_registered_flag(project_flag_file));
+    bool project_was_registered = load_registered_flag(project_flag_file);
 
-    const char* env_cloud = std::getenv("CACTUS_CLOUD_KEY");
+    std::string resolved_cloud_key;
     if (cloud_key_param && *cloud_key_param) {
-        cloud_key = cloud_key_param;
+        resolved_cloud_key = cloud_key_param;
     } else if (env_cloud && *env_cloud) {
-        cloud_key = env_cloud;
+        resolved_cloud_key = env_cloud;
     }
 
     std::string device_file = dir + "/device_id";
     std::string device_flag_file = dir + "/device_registered";
-    device_registered_file = device_flag_file;
-    device_registered.store(load_registered_flag(device_flag_file));
-    device_id = load_or_create_id(device_file);
+    bool device_was_registered = load_registered_flag(device_flag_file);
+    std::string resolved_device_id = load_or_create_id(device_file);
+
     collect_device_info();
     read_cactus_version();
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (!atexit_registered.exchange(true)) {
+    if (env_url && *env_url) supabase_url = env_url;
+    if (env_key && *env_key) supabase_key = env_key;
+    project_id = resolved_project_id;
+    project_scope = scope;
+    project_registered_file = project_flag_file;
+    cloud_key = resolved_cloud_key;
+    device_registered_file = device_flag_file;
+    device_id = resolved_device_id;
+
+    project_registered = project_was_registered;
+    device_registered = device_was_registered;
+    if (cloud_disabled_from_env) {
+        cloud_disabled = true;
+    }
+
+    if (!curl_initialized) {
+        if (curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK) {
+            curl_initialized = true;
+        }
+    }
+
+    if (!atexit_registered) {
+        atexit_registered = true;
         std::atexit([](){ shutdown(); });
     }
-    ids_ready.store(true);
-    setEnabled(true);
+
+    shutdown_called = false;
+    ids_ready = true;
+    enabled = true;
+    lifecycle_state = TelemetryLifecycleState::Running;
+    TelemetryDispatcher::instance().start();
 }
 
 void setEnabled(bool en) {
-    enabled.store(en);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    enabled = en;
 }
 
 void setCloudDisabled(bool disabled) {
-    cloud_disabled.store(disabled);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    cloud_disabled = disabled;
 }
 
 void setTelemetryEnvironment(const char* framework_str, const char* cache_location_str) {
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
     if (framework_str && framework_str[0] != '\0') {
         framework = framework_str;
     }
-
     if (cache_location_str && cache_location_str[0] != '\0') {
         custom_cache_location = cache_location_str;
     }
 }
 
 void setCloudKey(const char* key) {
-    if (key && key[0] != '\0') {
-        cloud_key = key;
-    }
+    if (!key || key[0] == '\0') return;
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    cloud_key = key;
 }
 
 void recordInit(const char* model, bool success, double response_time_ms, const char* message) {
-    if (!enabled.load() || !ids_ready.load()) return;
     double nan = std::numeric_limits<double>::quiet_NaN();
     Event e = make_event(INIT, model, success, nan, nan, response_time_ms, 0, message);
-    if (success) {
-        write_events_to_cache({e});
-    } else {
-        flush_logs_with_event(&e);
-    }
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (!can_record_event_locked()) return;
+    TelemetryDispatcher::instance().enqueue(e);
 }
 
 void recordCompletion(const char* model, const CompletionMetrics& metrics) {
-    if (!enabled.load() || !ids_ready.load()) return;
     Event e = make_event_extended(COMPLETION, model, metrics);
-    flush_logs_with_event(&e);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (!can_record_event_locked()) return;
+    TelemetryDispatcher::instance().enqueue(e);
 }
 
 void recordCompletion(const char* model, bool success, double ttft_ms, double tps, double response_time_ms, int tokens, const char* message) {
-    if (!enabled.load() || !ids_ready.load()) return;
     Event e = make_event(COMPLETION, model, success, ttft_ms, tps, response_time_ms, tokens, message);
-    flush_logs_with_event(&e);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (!can_record_event_locked()) return;
+    TelemetryDispatcher::instance().enqueue(e);
 }
 
 void recordEmbedding(const char* model, bool success, const char* message) {
-    if (!enabled.load() || !ids_ready.load()) return;
     Event e = make_event(EMBEDDING, model, success, 0.0, 0.0, 0.0, 0, message);
-    flush_logs_with_event(&e);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (!can_record_event_locked()) return;
+    TelemetryDispatcher::instance().enqueue(e);
 }
 
 void recordTranscription(const char* model, bool success, double ttft_ms, double tps, double response_time_ms, int tokens, const char* message) {
-    if (!enabled.load() || !ids_ready.load()) return;
-    if (in_stream_mode.load()) return;
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (in_stream_mode) return;
     Event e = make_event(TRANSCRIPTION, model, success, ttft_ms, tps, response_time_ms, tokens, message);
-    flush_logs_with_event(&e);
+    if (!can_record_event_locked()) return;
+    TelemetryDispatcher::instance().enqueue(e);
 }
 
 void recordStreamTranscription(const char* model, bool success, double ttft_ms, double tps, double response_time_ms, int tokens, double session_ttft_ms, double session_tps, double session_time_ms, int session_tokens, const char* message) {
-    if (!enabled.load() || !ids_ready.load()) return;
     Event e = make_event(STREAM_TRANSCRIBE, model, success, ttft_ms, tps, response_time_ms, tokens, message);
     e.session_ttft_ms = session_ttft_ms;
     e.session_tps = session_tps;
     e.session_time_ms = session_time_ms;
     e.session_tokens = session_tokens;
-    flush_logs_with_event(&e);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (!can_record_event_locked()) return;
+    TelemetryDispatcher::instance().enqueue(e);
 }
 
 void setStreamMode(bool in_stream) {
-    in_stream_mode.store(in_stream);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    in_stream_mode = in_stream;
 }
 
 void markInference(bool active) {
-    if (active) inference_active.fetch_add(1);
-    else {
-        int v = inference_active.load();
-        if (v > 0) inference_active.fetch_sub(1);
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    if (active) {
+        inference_active += 1;
+    } else if (inference_active > 0) {
+        inference_active -= 1;
     }
 }
 
 void flush() {
-    flush_logs_with_event(nullptr);
+    TelemetryDispatcher::instance().flush();
 }
 
 void shutdown() {
-    if (!shutdown_called.exchange(true)) {
-        flush();
+    {
+        std::lock_guard<std::mutex> lifecycle_guard(telemetry_mutex);
+        if (shutdown_called) {
+            return;
+        }
+
+        shutdown_called = true;
+        lifecycle_state = TelemetryLifecycleState::ShuttingDown;
+        enabled = false;
+        ids_ready = false;
     }
-    curl_global_cleanup();
+
+    flush();
+    TelemetryDispatcher::instance().stop();
+
+    {
+        std::lock_guard<std::mutex> lifecycle_guard(telemetry_mutex);
+        if (curl_initialized) {
+            curl_initialized = false;
+            curl_global_cleanup();
+        }
+        lifecycle_state = TelemetryLifecycleState::Stopped;
+        telemetry_lifecycle_cv.notify_all();
+    }
 }
 
 } // namespace telemetry
