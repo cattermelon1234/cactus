@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from huggingface_hub import HfApi, hf_hub_download
 from .cli import cmd_convert, get_weights_dir, PROJECT_ROOT
 
@@ -66,7 +67,11 @@ def export_pro_weights(model_id, bits):
 def get_prev_config(api, repo, current):
     try:
         tags = api.list_repo_refs(repo_id=repo, repo_type="model").tags
-        versions = sorted([t.name for t in tags], reverse=True)
+        versions = sorted(
+            [t.name for t in tags],
+            key=lambda v: tuple(int(x) for x in v.lstrip("v").split(".")),
+            reverse=True,
+        )
         prev_ver = next((v for v in versions if v != current), None)
         if not prev_ver:
             return None
@@ -173,20 +178,18 @@ def export_and_publish_model(args, api):
                 repo_id=repo_id,
                 repo_type="model",
                 commit_message=f"Upload {args.version}",
-                delete_patterns=["*"],
             )
-            print("Uploaded")
+            api.create_tag(
+                repo_id=repo_id,
+                tag=args.version,
+                revision=api.repo_info(repo_id=repo_id, repo_type="model").sha,
+                repo_type="model",
+                tag_message=f"Release {args.version}",
+                exist_ok=True,
+            )
+            print("Uploaded and tagged")
         else:
             print("Unchanged")
-
-        api.create_tag(
-            repo_id=repo_id,
-            tag=args.version,
-            revision=api.repo_info(repo_id=repo_id, repo_type="model").sha,
-            repo_type="model",
-            tag_message=f"Release {args.version}",
-        )
-        print("Tagged release")
         return 0
 
     except Exception:
@@ -231,4 +234,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
