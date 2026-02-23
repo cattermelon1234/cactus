@@ -285,6 +285,103 @@ size_t CactusGraph::topk(size_t input, size_t k) {
     return add_node(OpType::TOPK, {input}, output_shape, params);
 }
 
+size_t CactusGraph::moe_layer(size_t hidden,
+                              size_t routing_probs,
+                              size_t topk_indices,
+                              const std::vector<size_t>& w1_weights,
+                              const std::vector<size_t>& w3_weights,
+                              const std::vector<size_t>& w2_weights,
+                              size_t num_experts,
+                              size_t num_experts_per_tok,
+                              bool normalize_routing,
+                              float epsilon,
+                              float routed_scaling_factor) {
+    const auto& hidden_buffer = get_output_buffer(hidden);
+    const auto& routing_buffer = get_output_buffer(routing_probs);
+    const auto& topk_buffer = get_output_buffer(topk_indices);
+
+    if (hidden_buffer.shape.size() != 2) {
+        throw std::runtime_error("moe_layer expects [tokens, hidden_dim] for hidden");
+    }
+    if (routing_buffer.shape.size() != 2 || topk_buffer.shape.size() != 2) {
+        throw std::runtime_error("moe_layer expects 2D routing_probs and topk_indices");
+    }
+    if (routing_buffer.shape[0] != hidden_buffer.shape[0] || topk_buffer.shape[0] != hidden_buffer.shape[0]) {
+        throw std::runtime_error("moe_layer token dimension mismatch across inputs");
+    }
+    if (w1_weights.size() != num_experts || w3_weights.size() != num_experts || w2_weights.size() != num_experts) {
+        throw std::runtime_error("moe_layer expects num_experts weight tensors for each of w1, w3, w2");
+    }
+
+    std::vector<size_t> input_ids;
+    input_ids.reserve(3 + 3 * num_experts);
+    input_ids.push_back(hidden);
+    input_ids.push_back(routing_probs);
+    input_ids.push_back(topk_indices);
+    for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w1_weights[i]);
+    for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w3_weights[i]);
+    for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w2_weights[i]);
+
+    OpParams params;
+    params.num_experts = num_experts;
+    params.num_experts_per_tok = num_experts_per_tok;
+    params.normalize_routing = normalize_routing;
+    params.epsilon = epsilon;
+    params.scalar = routed_scaling_factor;
+    params.output_precision = hidden_buffer.precision;
+
+    return add_node(OpType::MOE_LAYER, input_ids, hidden_buffer.shape, params);
+}
+
+size_t CactusGraph::moe_layer(size_t hidden,
+                              size_t routing_probs,
+                              size_t topk_indices,
+                              const std::vector<size_t>& w1_weights,
+                              const std::vector<size_t>& w2_weights,
+                              size_t num_experts,
+                              size_t num_experts_per_tok,
+                              bool normalize_routing,
+                              float epsilon,
+                              float routed_scaling_factor,
+                              Activation activation) {
+    const auto& hidden_buffer = get_output_buffer(hidden);
+    const auto& routing_buffer = get_output_buffer(routing_probs);
+    const auto& topk_buffer = get_output_buffer(topk_indices);
+
+    if (hidden_buffer.shape.size() != 2) {
+        throw std::runtime_error("moe_layer expects [tokens, hidden_dim] for hidden");
+    }
+    if (routing_buffer.shape.size() != 2 || topk_buffer.shape.size() != 2) {
+        throw std::runtime_error("moe_layer expects 2D routing_probs and topk_indices");
+    }
+    if (routing_buffer.shape[0] != hidden_buffer.shape[0] || topk_buffer.shape[0] != hidden_buffer.shape[0]) {
+        throw std::runtime_error("moe_layer token dimension mismatch across inputs");
+    }
+    if (w1_weights.size() != num_experts || w2_weights.size() != num_experts) {
+        throw std::runtime_error("moe_layer expects num_experts weight tensors for each of w1, w2");
+    }
+
+    std::vector<size_t> input_ids;
+    input_ids.reserve(3 + 2 * num_experts);
+    input_ids.push_back(hidden);
+    input_ids.push_back(routing_probs);
+    input_ids.push_back(topk_indices);
+    for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w1_weights[i]);
+    for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w2_weights[i]);
+
+    OpParams params;
+    params.num_experts = num_experts;
+    params.num_experts_per_tok = num_experts_per_tok;
+    params.normalize_routing = normalize_routing;
+    params.epsilon = epsilon;
+    params.scalar = routed_scaling_factor;
+    params.output_precision = hidden_buffer.precision;
+    params.moe_gated = false;
+    params.activation = activation;
+
+    return add_node(OpType::MOE_LAYER, input_ids, hidden_buffer.shape, params);
+}
+
 size_t CactusGraph::layernorm(size_t input, size_t weight, size_t bias, float epsilon) {
     OpParams params{.epsilon = epsilon};
     return add_node(OpType::LAYERNORM, {input, weight, bias}, {}, params);

@@ -21,6 +21,7 @@ void cactus_add_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num
 void cactus_add_f16_clipped(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
 void cactus_subtract_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
 void cactus_multiply_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
+void cactus_add_scaled_f16(const __fp16* base, const __fp16* src, __fp16* output, size_t num_elements, float scale);
 void cactus_divide_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
 
 void cactus_add_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* output,

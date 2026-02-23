@@ -80,6 +80,15 @@ def detect_model_type(cfg, config, output_dir=None):
 
 def extract_base_config(cfg, config):
     """Extract base model configuration parameters."""
+    rope_parameters = cfg_get(cfg, 'rope_parameters', {})
+    rope_theta = cfg_get(cfg, 'rope_theta', None)
+    if rope_theta is None and isinstance(rope_parameters, dict):
+        rope_theta = rope_parameters.get('rope_theta', None)
+    if rope_theta is None:
+        rope_theta = cfg_get(config, 'rope_theta', 10000.0)
+
+    num_experts_per_tok = cfg_get(cfg, 'num_experts_per_tok', cfg_get(cfg, 'moe_top_k', cfg_get(cfg, 'num_top_experts', 0)))
+
     return {
         'vocab_size': cfg_get(cfg, 'vocab_size', cfg_get(config, 'vocab_size', 0)),
         'hidden_dim': cfg_get(cfg, 'hidden_size', cfg_get(cfg, 'hidden_dim', 0)),
@@ -88,12 +97,13 @@ def extract_base_config(cfg, config):
         'attention_kv_heads': cfg_get(cfg, 'num_key_value_heads', cfg_get(cfg, 'num_attention_heads', 0)),
         'ffn_intermediate_dim': cfg_get(cfg, 'intermediate_size', cfg_get(cfg, 'n_inner', 0)),
         'context_length': cfg_get(cfg, 'max_position_embeddings', cfg_get(cfg, 'max_sequence_length', 0)),
-        'rope_theta': cfg_get(cfg, 'rope_theta', cfg_get(config, 'rope_theta', 10000.0)),
+        'rope_theta': rope_theta,
         'attention_head_dim': int(cfg_get(cfg, 'head_dim', int(cfg_get(cfg, 'hidden_size', cfg_get(cfg, 'hidden_dim', 0)) // max(1, cfg_get(cfg, 'num_attention_heads', 1))))),
-        'layer_norm_eps': cfg_get(cfg, 'layer_norm_eps', cfg_get(cfg, 'layer_norm_epsilon', cfg_get(cfg, 'rms_norm_eps', 1e-6))),
+        'layer_norm_eps': cfg_get(cfg, 'layer_norm_eps', cfg_get(cfg, 'layer_norm_epsilon', cfg_get(cfg, 'rms_norm_eps', cfg_get(cfg, 'norm_eps', 1e-6)))),
         'num_experts': cfg_get(cfg, 'num_experts', 0),
         'num_shared_experts': cfg_get(cfg, 'num_shared_experts', 0),
-        'num_top_experts': cfg_get(cfg, 'moe_top_k', cfg_get(cfg, 'num_top_experts', 0)),
+        'num_top_experts': num_experts_per_tok,
+        'num_experts_per_tok': num_experts_per_tok,
         'moe_every_n_layers': cfg_get(cfg, 'moe_every_n_layers', 0),
     }
 
@@ -136,11 +146,23 @@ def extract_vision_config(config, vision_cfg):
 
 def extract_lfm2_config(cfg):
     """Extract LFM2-specific configuration parameters."""
-    layer_types = getattr(cfg, 'layer_types', [])
-    conv_L_cache = getattr(cfg, 'conv_L_cache', 0)
+    layer_types = cfg_get(cfg, 'layer_types', [])
+    conv_L_cache = cfg_get(cfg, 'conv_L_cache', 0)
+    moe_intermediate_size = cfg_get(cfg, 'moe_intermediate_size', 0)
+    num_dense_layers = cfg_get(cfg, 'num_dense_layers', 0)
+    num_experts_per_tok = cfg_get(cfg, 'num_experts_per_tok', 0)
+    norm_topk_prob = bool(cfg_get(cfg, 'norm_topk_prob', False))
+    use_expert_bias = bool(cfg_get(cfg, 'use_expert_bias', False))
+    routed_scaling_factor = float(cfg_get(cfg, 'routed_scaling_factor', 1.0))
     return {
         'layer_types': layer_types,
         'conv_L_cache': conv_L_cache,
+        'moe_intermediate_size': int(moe_intermediate_size),
+        'num_dense_layers': int(num_dense_layers),
+        'num_experts_per_tok': int(num_experts_per_tok),
+        'norm_topk_prob': norm_topk_prob,
+        'use_expert_bias': use_expert_bias,
+        'routed_scaling_factor': routed_scaling_factor,
     }
 
 def extract_moonshine_config(cfg):

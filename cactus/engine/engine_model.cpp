@@ -431,6 +431,12 @@ bool Config::from_json(const std::string& config_path) {
         else if (key == "num_shared_experts") num_shared_experts = static_cast<uint32_t>(std::stoul(value));
         else if (key == "num_top_experts") num_top_experts = static_cast<uint32_t>(std::stoul(value));
         else if (key == "moe_every_n_layers") moe_every_n_layers = static_cast<uint32_t>(std::stoul(value));
+        else if (key == "moe_intermediate_dim" || key == "moe_intermediate_size") moe_intermediate_dim = static_cast<uint32_t>(std::stoul(value));
+        else if (key == "num_dense_layers") num_dense_layers = static_cast<uint32_t>(std::stoul(value));
+        else if (key == "num_experts_per_tok") num_experts_per_tok = static_cast<uint32_t>(std::stoul(value));
+        else if (key == "norm_topk_prob") norm_topk_prob = (value == "true" || value == "1");
+        else if (key == "use_expert_bias") use_expert_bias = (value == "true" || value == "1");
+        else if (key == "routed_scaling_factor") routed_scaling_factor = std::stof(value);
         else if (key == "tie_word_embeddings") tie_word_embeddings = (value == "true" || value == "1");
         else if (key == "vision_hidden_dim") vision_hidden_dim = static_cast<uint32_t>(std::stoul(value));
         else if (key == "vision_num_layers") vision_num_layers = static_cast<uint32_t>(std::stoul(value));
@@ -466,7 +472,7 @@ bool Config::from_json(const std::string& config_path) {
         }
         else if (key == "model_type") {
             if (value == "gemma" || value == "GEMMA") model_type = ModelType::GEMMA;
-            else if (value == "lfm2" || value == "LFM2") model_type = ModelType::LFM2;
+            else if (value == "lfm2" || value == "LFM2" || value == "lfm2_moe" || value == "LFM2_MOE") model_type = ModelType::LFM2;
             else if (value == "bert" || value == "BERT") model_type = ModelType::NOMIC;
             else if (value == "whisper" || value == "WHISPER") model_type = ModelType::WHISPER;
             else if (value == "moonshine" || value == "MOONSHINE") model_type = ModelType::MOONSHINE;
@@ -572,6 +578,9 @@ std::unique_ptr<Model> create_model(const std::string& model_folder) {
         case Config::ModelType::GEMMA:
             return std::make_unique<GemmaModel>(config);
         case Config::ModelType::LFM2:
+            if (config.num_experts > 0 && config.moe_intermediate_dim > 0 && config.num_experts_per_tok > 0) {
+                return std::make_unique<LFM2MoEModel>(config);
+            }
             return std::make_unique<LFM2Model>(config);
         case Config::ModelType::NOMIC:
             return std::make_unique<NomicModel>(config);

@@ -109,6 +109,15 @@ enum class ComputeBackend {
     NPU
 };
 
+enum class Activation {
+    SILU,
+    GELU,
+    GELU_ERF,
+    RELU,
+    SIGMOID,
+    TANH
+};
+
 enum class OpType {
     INPUT, PRECISION_CAST,
     ADD, ADD_CLIPPED, SUBTRACT, MULTIPLY, DIVIDE,
@@ -121,6 +130,7 @@ enum class OpType {
     SAMPLE, CONCAT,
     SCATTER_TOPK,
     TOPK, LAYERNORM, GROUPNORM,
+    MOE_LAYER,
     INDEX,
     PERSISTENT,
     QUANTIZE_ACTIVATIONS,
@@ -309,6 +319,11 @@ struct OpParams {
     size_t num_groups = 0;
     size_t dst_height = 0;
     size_t dst_width = 0;
+    bool normalize_routing = false;
+    size_t num_experts = 0;
+    size_t num_experts_per_tok = 0;
+    bool moe_gated = true; 
+    Activation activation = Activation::SILU;
 
     std::vector<float> bias_values;
     std::vector<uint32_t> bias_indices;
@@ -356,7 +371,6 @@ void compute_index_node(GraphNode& node, const std::vector<std::unique_ptr<Graph
 void compute_lstm_cell_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 
 void shrink_thread_local_buffers();
-
 class BufferPool {
 public:
     BufferPool() = default;
@@ -456,6 +470,28 @@ public:
     size_t layernorm(size_t input, size_t weight, float epsilon = 1e-5f);  // No bias version
     size_t groupnorm(size_t input, size_t weight, size_t bias, size_t num_groups = 32, float epsilon = 1e-5f);
     size_t topk(size_t input, size_t k);
+    size_t moe_layer(size_t hidden,
+                     size_t routing_probs,
+                     size_t topk_indices,
+                     const std::vector<size_t>& w1_weights,
+                     const std::vector<size_t>& w3_weights,
+                     const std::vector<size_t>& w2_weights,
+                     size_t num_experts,
+                     size_t num_experts_per_tok,
+                     bool normalize_routing,
+                     float epsilon,
+                     float routed_scaling_factor);
+    size_t moe_layer(size_t hidden,
+                     size_t routing_probs,
+                     size_t topk_indices,
+                     const std::vector<size_t>& w1_weights,
+                     const std::vector<size_t>& w2_weights,
+                     size_t num_experts,
+                     size_t num_experts_per_tok,
+                     bool normalize_routing,
+                     float epsilon,
+                     float routed_scaling_factor,
+                     Activation activation);
     size_t rms_norm(size_t input, size_t weight, float epsilon = 1e-5f);
     size_t rope(size_t input, float theta, size_t position_offset = 0, ComputeBackend backend = ComputeBackend::CPU);
     size_t rope_gptj(size_t input, float theta, size_t position_offset = 0, size_t rot_dim = 0, ComputeBackend backend = ComputeBackend::CPU);

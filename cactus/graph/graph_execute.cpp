@@ -47,6 +47,7 @@ extern void compute_bilinear_interpolation_node(GraphNode& node, const std::vect
 extern void compute_sample_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 extern void compute_topk_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 extern void compute_scatter_topk_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
+extern void compute_moe_layer_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 extern void compute_persistent_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 extern void compute_quantize_activations_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
 
@@ -63,6 +64,7 @@ static const char* op_type_names[] = {
     "SAMPLE", "CONCAT",
     "SCATTER_TOPK",
     "TOPK", "LAYERNORM", "GROUPNORM",
+    "MOE_LAYER",
     "INDEX",
     "PERSISTENT",
     "QUANTIZE_ACTIVATIONS",
@@ -219,6 +221,10 @@ void compute_node_optimized(GraphNode& node, const std::vector<std::unique_ptr<G
             compute_scatter_topk_node(node, nodes, node_index_map);
             break;
 
+        case OpType::MOE_LAYER:
+            compute_moe_layer_node(node, nodes, node_index_map);
+            break;
+
         case OpType::QUANTIZE_ACTIVATIONS:
             compute_quantize_activations_node(node, nodes, node_index_map);
             break;
@@ -328,11 +334,11 @@ void CactusGraph::execute(const std::string& profile_file) {
 
     if (enable_profiling) {
         *out << "=== Graph Execution Profile ===" << std::endl;
-        *out << std::left << std::setw(15) << "Operation"
+        *out << std::left << std::setw(24) << "Operation"
              << std::setw(12) << "Time (ms)"
              << std::setw(20) << "Output Shape"
              << "Backend" << std::endl;
-        *out << std::string(60, '-') << std::endl;
+        *out << std::string(72, '-') << std::endl;
     }
 
     for (size_t node_idx = 0; node_idx < nodes_.size(); ++node_idx) {
@@ -438,7 +444,7 @@ void CactusGraph::execute(const std::string& profile_file) {
                 }
             }
 
-            *out << std::left << std::setw(15) << get_op_name(node->op_type)
+            *out << std::left << std::setw(24) << get_op_name(node->op_type)
                  << std::setw(12) << std::fixed << std::setprecision(3) << ms
                  << std::setw(20) << shape_str
                  << values_str << weights_str << std::endl;
@@ -693,7 +699,7 @@ void CactusGraph::execute(const std::string& profile_file) {
         auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start);
         double total_ms = total_duration.count() / 1000.0;
 
-        *out << std::string(60, '-') << std::endl;
+        *out << std::string(72, '-') << std::endl;
         *out << "Total execution time: " << std::fixed << std::setprecision(3) << total_ms << " ms" << std::endl;
         *out << "================================" << std::endl;
 

@@ -6,6 +6,7 @@ import re
 import subprocess
 import shutil
 import platform
+import json
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -192,6 +193,59 @@ def cmd_download(args):
 
     from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor, AutoModelForImageTextToText, AutoModel, AutoConfig
 
+    def _download_config_json(repo_id):
+        from huggingface_hub import hf_hub_download
+        config_path = hf_hub_download(repo_id=repo_id, filename="config.json", cache_dir=cache_dir, token=token)
+        with open(config_path, 'r', encoding='utf-8') as fh:
+            return json.load(fh)
+
+    def _load_raw_hf_state_dict(repo_id):
+        from huggingface_hub import snapshot_download
+        from safetensors.torch import load_file as load_safetensors_file
+
+        snapshot_path = Path(snapshot_download(
+            repo_id=repo_id,
+            cache_dir=cache_dir,
+            token=token,
+            allow_patterns=["*.safetensors", "*.safetensors.index.json", "*.bin", "*.bin.index.json"],
+        ))
+
+        index_candidates = [
+            "model.safetensors.index.json",
+            "pytorch_model.bin.index.json",
+        ]
+
+        shard_files = []
+        for index_name in index_candidates:
+            index_path = snapshot_path / index_name
+            if index_path.exists():
+                with open(index_path, 'r', encoding='utf-8') as fh:
+                    index_data = json.load(fh)
+                shard_files = sorted(set(index_data.get("weight_map", {}).values()))
+                if shard_files:
+                    break
+
+        if not shard_files:
+            shard_files = sorted([p.name for p in snapshot_path.glob("*.safetensors")])
+        if not shard_files:
+            shard_files = sorted([p.name for p in snapshot_path.glob("*.bin")])
+
+        if not shard_files:
+            raise RuntimeError("No checkpoint shard files found in HuggingFace snapshot.")
+
+        merged_state_dict = {}
+        for shard_name in shard_files:
+            shard_path = snapshot_path / shard_name
+            if shard_name.endswith(".safetensors"):
+                shard_state = load_safetensors_file(str(shard_path), device="cpu")
+            elif shard_name.endswith(".bin"):
+                shard_state = torch.load(str(shard_path), map_location="cpu")
+            else:
+                continue
+            merged_state_dict.update(shard_state)
+
+        return merged_state_dict
+
     try:
         from transformers import Lfm2VlForConditionalGeneration
     except ImportError:
@@ -287,11 +341,37 @@ def cmd_download(args):
             return 0
 
         else:
-            tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
+            config_json = _download_config_json(model_id)
+            model_type = str(config_json.get('model_type', '')).lower()
+
             try:
-                model = AutoModelForCausalLM.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
-            except ValueError:
-                model = AutoModel.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
+                tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
+            except Exception as tok_err:
+                if "TokenizersBackend" in str(tok_err) or "does not exist or is not currently imported" in str(tok_err):
+                    from transformers import PreTrainedTokenizerFast
+                    print("  Note: Using PreTrainedTokenizerFast fallback for invalid tokenizer_class...")
+                    tokenizer = PreTrainedTokenizerFast.from_pretrained(model_id, cache_dir=cache_dir, token=token)
+                else:
+                    raise
+
+            if model_type == 'lfm2_moe':
+                print("  Note: Loading raw checkpoint tensors for lfm2_moe conversion...")
+                raw_state_dict = _load_raw_hf_state_dict(model_id)
+
+                class _RawModelWrapper:
+                    def __init__(self, state_dict, config):
+                        self._state_dict = state_dict
+                        self.config = config
+
+                    def state_dict(self):
+                        return self._state_dict
+
+                model = _RawModelWrapper(raw_state_dict, config_json)
+            else:
+                try:
+                    model = AutoModelForCausalLM.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
+                except ValueError:
+                    model = AutoModel.from_pretrained(model_id, cache_dir=cache_dir, trust_remote_code=True, token=token)
 
         config = convert_hf_model_weights(model, weights_dir, precision, args)
 
