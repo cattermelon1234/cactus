@@ -47,6 +47,28 @@ void cactus_sum_axis_f16(const __fp16 *input, __fp16 *output, size_t outer_size,
         constexpr size_t SIMD_WIDTH = 8;
         const size_t vectorized_axis = (axis_size / SIMD_WIDTH) * SIMD_WIDTH;
 
+        if (inner_size == 1) {
+          const __fp16 *ptr = input + outer * axis_size; // inner == 0
+          size_t a = 0;
+          float tail_sum = 0.0f;
+
+          for (; a < vectorized_axis; a += SIMD_WIDTH) {
+            sum_vec = vaddq_f16(sum_vec, vld1q_f16(ptr + a));
+          }
+          for (; a < axis_size; ++a) {
+            tail_sum += (float)ptr[a];
+          }
+
+          // reduce vector to scalar
+          __fp16 sum_array[8];
+          vst1q_f16(sum_array, sum_vec);
+          float total_sum = tail_sum;
+          for (int j = 0; j < 8; ++j)
+            total_sum += (float)sum_array[j];
+
+          output[outer] = (__fp16)total_sum; // inner_size==1
+          return;
+        }
         for (size_t a = 0; a < vectorized_axis; a += SIMD_WIDTH) {
           __fp16 values[SIMD_WIDTH];
           for (size_t j = 0; j < SIMD_WIDTH; j++) {
