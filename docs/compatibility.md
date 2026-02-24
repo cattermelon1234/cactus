@@ -21,6 +21,6 @@ Runtime v1.15 -> new tag v1.15 (changed!) - must update
 ## Checking Compatibility
 
 1. Open your model on [huggingface.co/Cactus-Compute](https://huggingface.co/Cactus-Compute)
-2. Click **Files and versions → Tags**
+2. Click **Files and versions → open branch dropdown from Main**
 3. Find the latest tag that is ≤ your runtime version
 4. If your local weights use an older tag, re-download them
