@@ -118,10 +118,52 @@ void cactus_sigmoid_f16(const __fp16* input, __fp16* output, size_t num_elements
 
 void cactus_tanh_f16(const __fp16* input, __fp16* output, size_t num_elements);
 
+void cactus_glu_f16(
+    const __fp16* input,
+    __fp16* output,
+    size_t outer_size,
+    size_t split_size,
+    size_t inner_size
+);
+
+void cactus_glu_f32(
+    const float* input,
+    float* output,
+    size_t outer_size,
+    size_t split_size,
+    size_t inner_size
+);
+
+void cactus_batchnorm_f16(
+    const __fp16* input,
+    const float* weight,
+    const float* bias,
+    const float* running_mean,
+    const float* running_var,
+    __fp16* output,
+    size_t outer_size,
+    size_t channels,
+    size_t inner_size,
+    float epsilon
+);
+
+void cactus_batchnorm_f32(
+    const float* input,
+    const float* weight,
+    const float* bias,
+    const float* running_mean,
+    const float* running_var,
+    float* output,
+    size_t outer_size,
+    size_t channels,
+    size_t inner_size,
+    float epsilon
+);
+
 void cactus_attention_f16(const __fp16* queries, const __fp16* keys, const __fp16* values, __fp16* output,
                           size_t batch_size, size_t seq_len, size_t kv_seq_len, size_t num_q_heads, size_t num_kv_heads,
                           size_t head_dim, float scale, const __fp16* mask, size_t position_offset = 0, size_t window_size = 0,
-                          bool is_causal = true);
+                          bool is_causal = true, bool mask_is_additive = false, bool mask_per_head = false);
 
 void cactus_attention_hybrid_int8_fp16(
     const __fp16* queries,        
@@ -184,6 +226,62 @@ void cactus_stft_f16(
 void cactus_conv1d_f16_k7s3_oc8(
     const __fp16* input,
     const __fp16* Wpack,
+    const __fp16* bias,
+    __fp16* output,
+    size_t N,
+    size_t L,
+    size_t C_in,
+    size_t C_out
+);
+
+void cactus_conv1d_same_depthwise_f16_k9(
+    const __fp16* input,
+    const __fp16* weight,
+    const __fp16* bias,
+    __fp16* output,
+    size_t N,
+    size_t L,
+    size_t C
+);
+
+void cactus_conv2d_f16_k3s2p1_nchw(
+    const __fp16* input,
+    const __fp16* weight,
+    const __fp16* bias,
+    __fp16* output,
+    size_t N,
+    size_t C_in,
+    size_t H,
+    size_t W,
+    size_t C_out
+);
+
+void cactus_conv2d_depthwise_f16_k3s2p1_nchw(
+    const __fp16* input,
+    const __fp16* weight,
+    const __fp16* bias,
+    __fp16* output,
+    size_t N,
+    size_t C,
+    size_t H,
+    size_t W
+);
+
+void cactus_conv2d_pointwise_f16_1x1_nchw_gemm(
+    const __fp16* input,
+    const __fp16* weight,
+    const __fp16* bias,
+    __fp16* output,
+    size_t N,
+    size_t C_in,
+    size_t H,
+    size_t W,
+    size_t C_out
+);
+
+void cactus_conv1d_pointwise_f16_gemm(
+    const __fp16* input,
+    const __fp16* weight,
     const __fp16* bias,
     __fp16* output,
     size_t N,

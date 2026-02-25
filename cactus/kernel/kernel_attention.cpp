@@ -371,7 +371,9 @@ void cactus_attention_f16(
     const __fp16* mask,
     size_t position_offset,
     size_t window_size,
-    bool is_causal
+    bool is_causal,
+    bool mask_is_additive,
+    bool mask_per_head
 ) {
     if (scale == 0.0f) {
         scale = 1.0f / sqrtf(static_cast<float>(head_dim));
@@ -399,7 +401,9 @@ void cactus_attention_f16(
     const size_t q_seq_stride = num_q_heads * head_dim;
     const size_t kv_seq_stride = num_kv_heads * head_dim;
     const size_t o_seq_stride = num_q_heads * head_dim;
-    const size_t mask_batch_stride = mask ? seq_len * kv_seq_len : 0;
+    const size_t mask_batch_stride = mask
+        ? (mask_per_head ? (num_q_heads * seq_len * kv_seq_len) : (seq_len * kv_seq_len))
+        : 0;
 
     CactusThreading::parallel_for(batch_size * num_q_heads * seq_len, CactusThreading::Thresholds::ATTENTION,
         [=](size_t start_idx, size_t end_idx) {
@@ -517,8 +521,20 @@ void cactus_attention_f16(
                             else if (window_size > 0 && kv_pos < absolute_q_pos && (absolute_q_pos - kv_pos) > window_size) {
                                 score = NEG_INF;
                             }
-                            else if (M && static_cast<float>(M[q_pos * kv_seq_len + kv_pos]) == 0.0f) {
-                                score = NEG_INF;
+                            else if (M) {
+                                const size_t mask_index = mask_per_head
+                                    ? ((q_head_idx * seq_len + q_pos) * kv_seq_len + kv_pos)
+                                    : (q_pos * kv_seq_len + kv_pos);
+                                const float mask_value = static_cast<float>(M[mask_index]);
+                                if (mask_is_additive) {
+                                    if (!std::isfinite(mask_value)) {
+                                        score = NEG_INF;
+                                    } else {
+                                        score += mask_value;
+                                    }
+                                } else if (mask_value == 0.0f) {
+                                    score = NEG_INF;
+                                }
                             }
                             
                             block_scores[kv_idx] = score;

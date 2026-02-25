@@ -213,6 +213,200 @@ void cactus_tanh_f16(const __fp16* input, __fp16* output, size_t num_elements) {
         });
 }
 
+void cactus_glu_f16(
+    const __fp16* input,
+    __fp16* output,
+    size_t outer_size,
+    size_t split_size,
+    size_t inner_size
+) {
+    if (outer_size == 0 || split_size == 0 || inner_size == 0) return;
+
+    const size_t axis_size = split_size * 2;
+    const size_t rows = outer_size * split_size;
+
+    CactusThreading::parallel_for(rows, CactusThreading::Thresholds::ELEMENT_WISE,
+        [&](size_t row_start, size_t row_end) {
+            const float32x4_t one = vdupq_n_f32(1.0f);
+
+            for (size_t row = row_start; row < row_end; ++row) {
+                const size_t outer_idx = row / split_size;
+                const size_t split_idx = row - outer_idx * split_size;
+                const size_t in_base = outer_idx * axis_size * inner_size;
+                const size_t out_base = outer_idx * split_size * inner_size;
+
+                const __fp16* a = input + in_base + split_idx * inner_size;
+                const __fp16* b = input + in_base + (split_idx + split_size) * inner_size;
+                __fp16* y = output + out_base + split_idx * inner_size;
+
+                size_t i = 0;
+                for (; i + 8 <= inner_size; i += 8) {
+                    const float16x8_t av = vld1q_f16(a + i);
+                    const float16x8_t bv = vld1q_f16(b + i);
+
+                    const float32x4_t a_lo = vcvt_f32_f16(vget_low_f16(av));
+                    const float32x4_t a_hi = vcvt_f32_f16(vget_high_f16(av));
+                    const float32x4_t b_lo = vcvt_f32_f16(vget_low_f16(bv));
+                    const float32x4_t b_hi = vcvt_f32_f16(vget_high_f16(bv));
+
+                    const float32x4_t exp_lo = fast_exp_f32x4(vnegq_f32(b_lo));
+                    const float32x4_t exp_hi = fast_exp_f32x4(vnegq_f32(b_hi));
+                    const float32x4_t gate_lo = vdivq_f32(one, vaddq_f32(one, exp_lo));
+                    const float32x4_t gate_hi = vdivq_f32(one, vaddq_f32(one, exp_hi));
+
+                    const float32x4_t y_lo = vmulq_f32(a_lo, gate_lo);
+                    const float32x4_t y_hi = vmulq_f32(a_hi, gate_hi);
+                    vst1q_f16(y + i, vcombine_f16(vcvt_f16_f32(y_lo), vcvt_f16_f32(y_hi)));
+                }
+
+                for (; i < inner_size; ++i) {
+                    const float gate = 1.0f / (1.0f + expf(-static_cast<float>(b[i])));
+                    y[i] = static_cast<__fp16>(static_cast<float>(a[i]) * gate);
+                }
+            }
+        });
+}
+
+void cactus_glu_f32(
+    const float* input,
+    float* output,
+    size_t outer_size,
+    size_t split_size,
+    size_t inner_size
+) {
+    if (outer_size == 0 || split_size == 0 || inner_size == 0) return;
+
+    const size_t axis_size = split_size * 2;
+    const size_t rows = outer_size * split_size;
+
+    CactusThreading::parallel_for(rows, CactusThreading::Thresholds::ELEMENT_WISE,
+        [&](size_t row_start, size_t row_end) {
+            const float32x4_t one = vdupq_n_f32(1.0f);
+
+            for (size_t row = row_start; row < row_end; ++row) {
+                const size_t outer_idx = row / split_size;
+                const size_t split_idx = row - outer_idx * split_size;
+                const size_t in_base = outer_idx * axis_size * inner_size;
+                const size_t out_base = outer_idx * split_size * inner_size;
+
+                const float* a = input + in_base + split_idx * inner_size;
+                const float* b = input + in_base + (split_idx + split_size) * inner_size;
+                float* y = output + out_base + split_idx * inner_size;
+
+                size_t i = 0;
+                for (; i + 4 <= inner_size; i += 4) {
+                    const float32x4_t av = vld1q_f32(a + i);
+                    const float32x4_t bv = vld1q_f32(b + i);
+                    const float32x4_t expv = fast_exp_f32x4(vnegq_f32(bv));
+                    const float32x4_t gate = vdivq_f32(one, vaddq_f32(one, expv));
+                    vst1q_f32(y + i, vmulq_f32(av, gate));
+                }
+
+                for (; i < inner_size; ++i) {
+                    const float gate = 1.0f / (1.0f + expf(-b[i]));
+                    y[i] = a[i] * gate;
+                }
+            }
+        });
+}
+
+void cactus_batchnorm_f16(
+    const __fp16* input,
+    const float* weight,
+    const float* bias,
+    const float* running_mean,
+    const float* running_var,
+    __fp16* output,
+    size_t outer_size,
+    size_t channels,
+    size_t inner_size,
+    float epsilon
+) {
+    if (outer_size == 0 || channels == 0 || inner_size == 0) return;
+
+    std::vector<float> scale(channels);
+    std::vector<float> shift(channels);
+    for (size_t c = 0; c < channels; ++c) {
+        const float inv_std = 1.0f / std::sqrt(running_var[c] + epsilon);
+        scale[c] = weight[c] * inv_std;
+        shift[c] = bias[c] - running_mean[c] * scale[c];
+    }
+
+    const size_t rows = outer_size * channels;
+    CactusThreading::parallel_for(rows, CactusThreading::Thresholds::ELEMENT_WISE,
+        [&](size_t row_start, size_t row_end) {
+            for (size_t row = row_start; row < row_end; ++row) {
+                const size_t c = row % channels;
+                const float32x4_t scv = vdupq_n_f32(scale[c]);
+                const float32x4_t shv = vdupq_n_f32(shift[c]);
+
+                const __fp16* x = input + row * inner_size;
+                __fp16* y = output + row * inner_size;
+
+                size_t i = 0;
+                for (; i + 8 <= inner_size; i += 8) {
+                    const float16x8_t xv = vld1q_f16(x + i);
+                    float32x4_t lo = vcvt_f32_f16(vget_low_f16(xv));
+                    float32x4_t hi = vcvt_f32_f16(vget_high_f16(xv));
+                    lo = vfmaq_f32(shv, lo, scv);
+                    hi = vfmaq_f32(shv, hi, scv);
+                    const float16x8_t yv = vcombine_f16(vcvt_f16_f32(lo), vcvt_f16_f32(hi));
+                    vst1q_f16(y + i, yv);
+                }
+
+                for (; i < inner_size; ++i) {
+                    y[i] = static_cast<__fp16>(static_cast<float>(x[i]) * scale[c] + shift[c]);
+                }
+            }
+        });
+}
+
+void cactus_batchnorm_f32(
+    const float* input,
+    const float* weight,
+    const float* bias,
+    const float* running_mean,
+    const float* running_var,
+    float* output,
+    size_t outer_size,
+    size_t channels,
+    size_t inner_size,
+    float epsilon
+) {
+    if (outer_size == 0 || channels == 0 || inner_size == 0) return;
+
+    std::vector<float> scale(channels);
+    std::vector<float> shift(channels);
+    for (size_t c = 0; c < channels; ++c) {
+        const float inv_std = 1.0f / std::sqrt(running_var[c] + epsilon);
+        scale[c] = weight[c] * inv_std;
+        shift[c] = bias[c] - running_mean[c] * scale[c];
+    }
+
+    const size_t rows = outer_size * channels;
+    CactusThreading::parallel_for(rows, CactusThreading::Thresholds::ELEMENT_WISE,
+        [&](size_t row_start, size_t row_end) {
+            for (size_t row = row_start; row < row_end; ++row) {
+                const size_t c = row % channels;
+                const float32x4_t scv = vdupq_n_f32(scale[c]);
+                const float32x4_t shv = vdupq_n_f32(shift[c]);
+
+                const float* x = input + row * inner_size;
+                float* y = output + row * inner_size;
+
+                size_t i = 0;
+                for (; i + 4 <= inner_size; i += 4) {
+                    const float32x4_t xv = vld1q_f32(x + i);
+                    vst1q_f32(y + i, vfmaq_f32(shv, xv, scv));
+                }
+
+                for (; i < inner_size; ++i) {
+                    y[i] = x[i] * scale[c] + shift[c];
+                }
+            }
+        });
+}
+
 void kernel_softmax_f16_single(const __fp16* input, __fp16* output, size_t vocab_size) {
 
     constexpr size_t SIMD_WIDTH = 8;
