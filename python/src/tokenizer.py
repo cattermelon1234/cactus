@@ -143,6 +143,12 @@ def convert_hf_tokenizer(tokenizer, output_dir, token=None):
         special_token_ids['unk_token_id'] = tokenizer.unk_token_id
         special_tokens[tokenizer.unk_token_id] = tokenizer.unk_token or "<|unknown|>"
 
+    model_name_l = getattr(tokenizer, 'name_or_path', '').lower()
+    if 'eos_token_id' not in special_token_ids and 'parakeet' in model_name_l:
+        pad_id = special_token_ids.get('pad_token_id')
+        if pad_id is not None:
+            special_token_ids['eos_token_id'] = pad_id
+
     additional_special_tokens = []
     if hasattr(tokenizer, 'additional_special_tokens'):
         for token_str in tokenizer.additional_special_tokens or []:

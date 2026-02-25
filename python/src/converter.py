@@ -16,6 +16,13 @@ from .weight_patterns import (
 )
 
 
+def _find_first_key(state_dict, candidates):
+    for key in candidates:
+        if key in state_dict:
+            return key
+    return None
+
+
 def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     """Convert HuggingFace model weights to Cactus binary format."""
     quantization_stats = create_quantization_stats()
@@ -51,6 +58,43 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
         model_config.update(extract_lfm2_config(cfg))
     elif detected_model_type == 'moonshine':
         model_config.update(extract_moonshine_config(cfg))
+    elif detected_model_type == 'parakeet':
+        encoder_cfg = cfg_get(cfg, 'encoder_config', None)
+        if encoder_cfg is None:
+            raise ValueError("Parakeet conversion requires encoder_config in model config")
+
+        hidden_dim = int(cfg_get(encoder_cfg, 'hidden_size', 0))
+        num_layers = int(cfg_get(encoder_cfg, 'num_hidden_layers', 0))
+        attention_heads = int(cfg_get(encoder_cfg, 'num_attention_heads', 0))
+        attention_kv_heads = int(cfg_get(encoder_cfg, 'num_key_value_heads', attention_heads))
+        head_dim = int(hidden_dim // max(1, attention_heads))
+        layer_norm_eps = cfg_get(encoder_cfg, 'layer_norm_eps', cfg_get(encoder_cfg, 'norm_eps', 1e-5))
+        if layer_norm_eps is None:
+            layer_norm_eps = 1e-5
+        rope_theta = cfg_get(encoder_cfg, 'rope_theta', 0.0)
+        if rope_theta is None:
+            rope_theta = 0.0
+
+        model_config.update({
+            'vocab_size': int(cfg_get(cfg, 'vocab_size', cfg_get(config, 'vocab_size', 0))),
+            'hidden_dim': hidden_dim,
+            'num_layers': num_layers,
+            'attention_heads': attention_heads,
+            'attention_kv_heads': attention_kv_heads,
+            'attention_head_dim': head_dim,
+            'ffn_intermediate_dim': int(cfg_get(encoder_cfg, 'intermediate_size', 0)),
+            'context_length': int(cfg_get(encoder_cfg, 'max_position_embeddings', 0)),
+            'layer_norm_eps': float(layer_norm_eps),
+            'rope_theta': float(rope_theta),
+            'conv_kernel_size': int(cfg_get(encoder_cfg, 'conv_kernel_size', 9)),
+            'subsampling_conv_kernel_size': int(cfg_get(encoder_cfg, 'subsampling_conv_kernel_size', 3)),
+            'subsampling_conv_stride': int(cfg_get(encoder_cfg, 'subsampling_conv_stride', 2)),
+            'subsampling_conv_channels': int(cfg_get(encoder_cfg, 'subsampling_conv_channels', 256)),
+            'subsampling_factor': int(cfg_get(encoder_cfg, 'subsampling_factor', 8)),
+            'num_mel_bins': int(cfg_get(encoder_cfg, 'num_mel_bins', 80)),
+            'pad_token_id': int(cfg_get(cfg, 'pad_token_id', cfg_get(config, 'pad_token_id', 0))),
+            'encoder_hidden_act': cfg_get(encoder_cfg, 'hidden_act', 'silu'),
+        })
 
     num_layers = model_config['num_layers']
 
@@ -163,72 +207,214 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                     save_tensor_with_header(state_dict[fname], output_dir / out, precision, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                     saved_tensor_full_names.add(fname)
     missing_tensors = []
-    for i in range(num_layers):
-        layer_prefixes = [p.format(i=i) for p in LAYER_PREFIXES]
+    if detected_model_type == 'parakeet':
+        global_mappings = [
+            (['encoder.subsampling.layers.0.weight'], 'subsampling_conv0_weight.weights'),
+            (['encoder.subsampling.layers.0.bias'], 'subsampling_conv0_bias.bias'),
+            (['encoder.subsampling.layers.2.weight'], 'subsampling_depthwise1_weight.weights'),
+            (['encoder.subsampling.layers.2.bias'], 'subsampling_depthwise1_bias.bias'),
+            (['encoder.subsampling.layers.3.weight'], 'subsampling_pointwise1_weight.weights'),
+            (['encoder.subsampling.layers.3.bias'], 'subsampling_pointwise1_bias.bias'),
+            (['encoder.subsampling.layers.5.weight'], 'subsampling_depthwise2_weight.weights'),
+            (['encoder.subsampling.layers.5.bias'], 'subsampling_depthwise2_bias.bias'),
+            (['encoder.subsampling.layers.6.weight'], 'subsampling_pointwise2_weight.weights'),
+            (['encoder.subsampling.layers.6.bias'], 'subsampling_pointwise2_bias.bias'),
+            (['encoder.subsampling.linear.weight'], 'subsampling_linear_weight.weights'),
+            (['encoder.subsampling.linear.bias'], 'subsampling_linear_bias.bias'),
+            (['ctc_head.weight'], 'ctc_head_weight.weights'),
+            (['ctc_head.bias'], 'ctc_head_bias.bias'),
+        ]
 
-        existing_prefixes = set()
-        for prefix in layer_prefixes:
-            for key in state_dict.keys():
-                if key.startswith(prefix):
-                    existing_prefixes.add(prefix)
+        for candidate_keys, out_name in global_mappings:
+            key = _find_first_key(state_dict, candidate_keys)
+            if key is None:
+                missing_tensors.append((-1, out_name, candidate_keys))
+                continue
+            save_tensor_with_header(
+                state_dict[key], output_dir / out_name, precision, transpose=False,
+                stats_tracker=quantization_stats, args=args, model_type=detected_model_type
+            )
+            saved_tensor_full_names.add(key)
 
-        if not existing_prefixes:
-            missing_tensors.append((i, "<no-layer-prefix>", ["<no-matching-prefix>"]))
-            continue
+        layer_mappings = [
+            ('feed_forward1.linear1.weight', 'ff1_linear1.weights'),
+            ('feed_forward1.linear1.bias', 'ff1_linear1.bias'),
+            ('feed_forward1.linear2.weight', 'ff1_linear2.weights'),
+            ('feed_forward1.linear2.bias', 'ff1_linear2.bias'),
+            ('feed_forward2.linear1.weight', 'ff2_linear1.weights'),
+            ('feed_forward2.linear1.bias', 'ff2_linear1.bias'),
+            ('feed_forward2.linear2.weight', 'ff2_linear2.weights'),
+            ('feed_forward2.linear2.bias', 'ff2_linear2.bias'),
+            ('self_attn.q_proj.weight', 'self_attn_q.weights'),
+            ('self_attn.q_proj.bias', 'self_attn_q.bias'),
+            ('self_attn.k_proj.weight', 'self_attn_k.weights'),
+            ('self_attn.k_proj.bias', 'self_attn_k.bias'),
+            ('self_attn.v_proj.weight', 'self_attn_v.weights'),
+            ('self_attn.v_proj.bias', 'self_attn_v.bias'),
+            ('self_attn.o_proj.weight', 'self_attn_output.weights'),
+            ('self_attn.o_proj.bias', 'self_attn_output.bias'),
+            ('self_attn.relative_k_proj.weight', 'self_attn_relative_k.weights'),
+            ('self_attn.bias_u', 'self_attn_bias_u.weights'),
+            ('self_attn.bias_v', 'self_attn_bias_v.weights'),
+            ('conv.pointwise_conv1.weight', 'conv_pointwise1.weights'),
+            ('conv.pointwise_conv1.bias', 'conv_pointwise1.bias'),
+            ('conv.depthwise_conv.weight', 'conv_depthwise.weights'),
+            ('conv.depthwise_conv.bias', 'conv_depthwise.bias'),
+            ('conv.pointwise_conv2.weight', 'conv_pointwise2.weights'),
+            ('conv.pointwise_conv2.bias', 'conv_pointwise2.bias'),
+            ('conv.norm.weight', 'conv_batchnorm_weight.weights'),
+            ('conv.norm.bias', 'conv_batchnorm_bias.bias'),
+            ('conv.norm.running_mean', 'conv_batchnorm_running_mean.weights'),
+            ('conv.norm.running_var', 'conv_batchnorm_running_var.weights'),
+            ('norm_feed_forward1.weight', 'norm_ff1.weights'),
+            ('norm_feed_forward1.bias', 'norm_ff1.bias'),
+            ('norm_self_att.weight', 'norm_self_attn.weights'),
+            ('norm_self_att.bias', 'norm_self_attn.bias'),
+            ('norm_conv.weight', 'norm_conv.weights'),
+            ('norm_conv.bias', 'norm_conv.bias'),
+            ('norm_feed_forward2.weight', 'norm_ff2.weights'),
+            ('norm_feed_forward2.bias', 'norm_ff2.bias'),
+            ('norm_out.weight', 'norm_out.weights'),
+            ('norm_out.bias', 'norm_out.bias'),
+        ]
 
-        weight_patterns = get_layer_weight_patterns(i, precision, model_type_str)
+        for i in range(num_layers):
+            layer_prefix = f'encoder.layers.{i}.'
+            for suffix, out_suffix in layer_mappings:
+                key = layer_prefix + suffix
+                out_name = f'layer_{i}_{out_suffix}'
+                if key not in state_dict:
+                    if suffix.endswith('num_batches_tracked'):
+                        continue
+                    missing_tensors.append((i, out_name, [key]))
+                    continue
+                save_tensor_with_header(
+                    state_dict[key], output_dir / out_name, precision, transpose=False,
+                    stats_tracker=quantization_stats, args=args, model_type=detected_model_type
+                )
+                saved_tensor_full_names.add(key)
+            tracked_key = layer_prefix + 'conv.norm.num_batches_tracked'
+            if tracked_key in state_dict:
+                saved_tensor_full_names.add(tracked_key)
+    else:
+        for i in range(num_layers):
+            layer_prefixes = [p.format(i=i) for p in LAYER_PREFIXES]
 
-        for layer_prefix in existing_prefixes:
-            for name_patterns, tensor_precision, output_name, should_transpose in weight_patterns:
-                found = False
-                for pattern in name_patterns:
-                    if '{channel}' in pattern:
-                        num_channels = int(model_config.get('num_experts', 0))
-                        if num_channels <= 0:
-                            continue
+            existing_prefixes = set()
+            for prefix in layer_prefixes:
+                for key in state_dict.keys():
+                    if key.startswith(prefix):
+                        existing_prefixes.add(prefix)
 
-                        matched_any_channel = False
-                        for channel_idx in range(num_channels):
-                            full_name = layer_prefix + pattern.replace('{channel}', str(channel_idx))
-                            if full_name not in state_dict:
-                                continue
+            if not existing_prefixes:
+                missing_tensors.append((i, "<no-layer-prefix>", ["<no-matching-prefix>"]))
+                continue
 
-                            channel_output_name = output_name.replace('{channel}', str(channel_idx))
+            weight_patterns = get_layer_weight_patterns(i, precision, model_type_str)
+
+            for layer_prefix in existing_prefixes:
+                for name_patterns, tensor_precision, output_name, should_transpose in weight_patterns:
+                    found = False
+                    for pattern in name_patterns:
+                        full_name = layer_prefix + pattern
+                        if full_name in state_dict:
                             tensor = state_dict[full_name]
+
+                            if 'mlp.fc1.weight' in pattern and model_type_str == 'moonshine':
+                                activation = model_config.get('enc_hidden_act', 'gelu') if 'encoder' in layer_prefix else model_config.get('dec_hidden_act', 'gelu')
+                                if activation == 'silu':
+                                    w = tensor
+                                    b_name = full_name.replace('weight', 'bias')
+                                    b = state_dict.get(b_name)
+
+                                    inter_size = model_config.get('intermediate_size', 0)
+                                    if inter_size == 0:
+                                        inter_size = model_config.get('ffn_intermediate_dim', 0)
+
+                                    half_dim = w.shape[0] // 2
+                                    w_up = w[:half_dim, :]
+                                    w_gate = w[half_dim:, :]
+
+                                    save_name_prefix = output_name.replace('mlp_fc1.weights', '')
+                                    if 'encoder' in layer_prefix:
+                                        save_name_prefix = "encoder_" + save_name_prefix
+
+                                    save_tensor_with_header(w_gate, output_dir / (save_name_prefix + "ffn_gate.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    save_tensor_with_header(w_up, output_dir / (save_name_prefix + "ffn_up.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+
+                                    if b is not None:
+                                        b_up = b[:half_dim]
+                                        b_gate = b[half_dim:]
+                                        save_tensor_with_header(b_gate, output_dir / (save_name_prefix + "ffn_gate.bias"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                        save_tensor_with_header(b_up, output_dir / (save_name_prefix + "ffn_up.bias"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+
+                                    saved_tensor_full_names.add(full_name)
+                                    if b is not None:
+                                        saved_tensor_full_names.add(b_name)
+                                    found = True
+                                    break
+
+                            if pattern.startswith('attn.Wqkv.') and model_type_str == 'nomic_bert':
+                                if tensor.ndim == 1:
+                                    tensor = tensor.reshape(3, -1)
+                                elif tensor.ndim == 2:
+                                    tensor = tensor.reshape(3, -1, tensor.size(-1))
+                                else:
+                                    raise ValueError(f"Invalid tensor shape: {tensor.shape}")
+                                for j, ch in enumerate(['q', 'k', 'v']):
+                                    channel_output_name = output_name.replace('{channel}', ch)
+                                    save_tensor_with_header(tensor[j], output_dir / channel_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    saved_tensor_full_names.add(full_name)
+                                found = True
+                                break
+                            elif model_type_str == 'nomic_bert' and pattern.startswith('mlp.experts.') and 'bias' not in pattern:
+                                num_experts = model_config['num_experts']
+                                if tensor.ndim != 2:
+                                    raise ValueError(f"Invalid tensor shape: {tensor.shape}")
+                                tensor = tensor.reshape(num_experts, -1, tensor.size(-1))
+                                for expert_idx in range(num_experts):
+                                    expert_tensor = tensor[expert_idx]
+                                    expert_output_name = output_name.replace('{channel}', str(expert_idx))
+                                    save_tensor_with_header(expert_tensor, output_dir / expert_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    saved_tensor_full_names.add(full_name)
+                                found = True
+                                break
                             if model_type_str == 'whisper':
-                                temp = layer_prefix[:layer_prefix.find('.')] + "." + channel_output_name
+                                temp = layer_prefix[:layer_prefix.find('.')] + "." + output_name
                                 save_tensor_with_header(tensor, output_dir / temp, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                             elif model_type_str == 'moonshine' and 'encoder' in layer_prefix:
-                                enc_output_name = "encoder_" + channel_output_name
+                                enc_output_name = "encoder_" + output_name
                                 save_tensor_with_header(tensor, output_dir / enc_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                             else:
-                                save_tensor_with_header(tensor, output_dir / channel_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                save_tensor_with_header(tensor, output_dir / output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                             saved_tensor_full_names.add(full_name)
-                            matched_any_channel = True
-
-                        if matched_any_channel:
                             found = True
                             break
 
-                    full_name = layer_prefix + pattern
-                    if full_name in state_dict:
-                        tensor = state_dict[full_name]
+                    if not found and 'mlp.fc1.weight' in output_name and model_type_str == 'moonshine':
+                        activation = model_config.get('enc_hidden_act', 'gelu') if 'encoder' in layer_prefix else model_config.get('dec_hidden_act', 'gelu')
 
-                        if 'mlp.fc1.weight' in pattern and model_type_str == 'moonshine':
-                             activation = model_config.get('enc_hidden_act', 'gelu') if 'encoder' in layer_prefix else model_config.get('dec_hidden_act', 'gelu')
-                             if activation == 'silu':
-                                w = tensor
-                                b_name = full_name.replace('weight', 'bias')
-                                b = state_dict.get(b_name)
-                                
+                        if activation == 'silu':
+                            full_name = layer_prefix + name_patterns[0][0]
+                            w_name = layer_prefix + 'mlp.fc1.weight'
+                            b_name = layer_prefix + 'mlp.fc1.bias'
+
+                            if w_name in state_dict:
+                                w = state_dict[w_name]
+                                if b_name in state_dict:
+                                    b = state_dict[b_name]
+                                else:
+                                    b = None
+
                                 inter_size = model_config.get('intermediate_size', 0)
                                 if inter_size == 0:
                                     inter_size = model_config.get('ffn_intermediate_dim', 0)
-                                
+
                                 half_dim = w.shape[0] // 2
+
                                 w_up = w[:half_dim, :]
                                 w_gate = w[half_dim:, :]
-                                
+
                                 save_name_prefix = output_name.replace('mlp_fc1.weights', '')
                                 if 'encoder' in layer_prefix:
                                     save_name_prefix = "encoder_" + save_name_prefix
@@ -241,113 +427,30 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                                     b_gate = b[half_dim:]
                                     save_tensor_with_header(b_gate, output_dir / (save_name_prefix + "ffn_gate.bias"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                                     save_tensor_with_header(b_up, output_dir / (save_name_prefix + "ffn_up.bias"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                                
-                                saved_tensor_full_names.add(full_name)
-                                if b is not None:
+
+                                saved_tensor_full_names.add(w_name)
+                                if b_name in state_dict:
                                     saved_tensor_full_names.add(b_name)
                                 found = True
                                 break
 
-                        if pattern.startswith('attn.Wqkv.') and model_type_str == 'nomic_bert':
-                            if tensor.ndim == 1:
-                                tensor = tensor.reshape(3, -1)
-                            elif tensor.ndim == 2:
-                                tensor = tensor.reshape(3, -1, tensor.size(-1))
-                            else:
-                                raise ValueError(f"Invalid tensor shape: {tensor.shape}")
-                            for j, ch in enumerate(['q', 'k', 'v']):
-                                channel_output_name = output_name.replace('{channel}', ch)
-                                save_tensor_with_header(tensor[j], output_dir / channel_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                                saved_tensor_full_names.add(full_name)
+                    if not found and 'c_attn.weight' in name_patterns[0]:
+                        attn_name = layer_prefix + 'attn.c_attn.weight'
+                        if attn_name in state_dict:
+                            combined_weight = state_dict[attn_name]
+                            hidden_size = combined_weight.shape[0]
+                            q_weight = combined_weight[:, :hidden_size]
+                            k_weight = combined_weight[:, hidden_size:2*hidden_size]
+                            v_weight = combined_weight[:, 2*hidden_size:]
+
+                            save_tensor_with_header(q_weight, output_dir / f'layer_{i}_attn_q.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                            save_tensor_with_header(k_weight, output_dir / f'layer_{i}_attn_k.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                            save_tensor_with_header(v_weight, output_dir / f'layer_{i}_attn_v.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                            saved_tensor_full_names.add(attn_name)
                             found = True
-                            break
-                        elif model_type_str == 'nomic_bert' and pattern.startswith('mlp.experts.') and 'bias' not in pattern:
-                            num_experts = model_config['num_experts']
-                            if tensor.ndim != 2:
-                                raise ValueError(f"Invalid tensor shape: {tensor.shape}")
-                            tensor = tensor.reshape(num_experts, -1, tensor.size(-1))
-                            for expert_idx in range(num_experts):
-                                expert_tensor = tensor[expert_idx]
-                                expert_output_name = output_name.replace('{channel}', str(expert_idx))
-                                save_tensor_with_header(expert_tensor, output_dir / expert_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                                saved_tensor_full_names.add(full_name)
-                            found = True
-                            break
-                        if model_type_str == 'whisper':
-                            temp = layer_prefix[:layer_prefix.find('.')] + "." + output_name
-                            save_tensor_with_header(tensor, output_dir / temp, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                        elif model_type_str == 'moonshine' and 'encoder' in layer_prefix:
-                            enc_output_name = "encoder_" + output_name
-                            save_tensor_with_header(tensor, output_dir / enc_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                        else:
-                            save_tensor_with_header(tensor, output_dir / output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                        saved_tensor_full_names.add(full_name)
-                        found = True
-                        break
-
-                if not found and 'mlp.fc1.weight' in output_name and model_type_str == 'moonshine':                    
-                    activation = model_config.get('enc_hidden_act', 'gelu') if 'encoder' in layer_prefix else model_config.get('dec_hidden_act', 'gelu')
-                    
-                    if activation == 'silu':
-                        full_name = layer_prefix + name_patterns[0][0]
-                        w_name = layer_prefix + 'mlp.fc1.weight'
-                        b_name = layer_prefix + 'mlp.fc1.bias'
-                        
-                        if w_name in state_dict:
-                            w = state_dict[w_name]
-                            if b_name in state_dict:
-                                b = state_dict[b_name]
-                            else:
-                                b = None
-                            
-                            inter_size = model_config.get('intermediate_size', 0)
-                            if inter_size == 0:
-                                inter_size = model_config.get('ffn_intermediate_dim', 0)
-                            
-                            half_dim = w.shape[0] // 2
-                            
-                            w_up = w[:half_dim, :]
-                            w_gate = w[half_dim:, :]
-                            
-                            save_name_prefix = output_name.replace('mlp_fc1.weights', '')
-                            if 'encoder' in layer_prefix:
-                                save_name_prefix = "encoder_" + save_name_prefix
-
-                            save_tensor_with_header(w_gate, output_dir / (save_name_prefix + "ffn_gate.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                            save_tensor_with_header(w_up, output_dir / (save_name_prefix + "ffn_up.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-
-                            if b is not None:
-                                b_up = b[:half_dim]
-                                b_gate = b[half_dim:]
-                                save_tensor_with_header(b_gate, output_dir / (save_name_prefix + "ffn_gate.bias"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                                save_tensor_with_header(b_up, output_dir / (save_name_prefix + "ffn_up.bias"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                            
-                            saved_tensor_full_names.add(w_name)
-                            if b_name in state_dict:
-                                saved_tensor_full_names.add(b_name)
-                            found = True
-                            break
-
-                if not found and 'c_attn.weight' in name_patterns[0]:
-                    attn_name = layer_prefix + 'attn.c_attn.weight'
-                    if attn_name in state_dict:
-                        combined_weight = state_dict[attn_name]
-                        hidden_size = combined_weight.shape[0]
-                        q_weight = combined_weight[:, :hidden_size]
-                        k_weight = combined_weight[:, hidden_size:2*hidden_size]
-                        v_weight = combined_weight[:, 2*hidden_size:]
-
-                        save_tensor_with_header(q_weight, output_dir / f'layer_{i}_attn_q.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                        save_tensor_with_header(k_weight, output_dir / f'layer_{i}_attn_k.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                        save_tensor_with_header(v_weight, output_dir / f'layer_{i}_attn_v.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                        saved_tensor_full_names.add(attn_name)
-                        found = True
 
     if saved_tensor_full_names != set(state_dict.keys()):
         print(f"Warning: Unsaved tensors: {set(state_dict.keys()) - saved_tensor_full_names}")
-
-        if not found:
-            missing_tensors.append((i, output_name, name_patterns))
 
     if missing_tensors:
         missing_report = output_dir / "missing_weights.txt"
@@ -360,7 +463,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
 
     print_quantization_summary(quantization_stats, args)
 
-    if detected_model_type in ['whisper', 'moonshine']:
+    if detected_model_type in ['whisper', 'moonshine', 'parakeet']:
         if torch is None:
             print("Warning: torch not available, skipping VAD bundling")
         else:

@@ -47,6 +47,7 @@ if(NOT APPLE)
 else()
     find_library(COREML_FRAMEWORK CoreML REQUIRED)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
     find_library(SECURITY_FRAMEWORK Security REQUIRED)
     find_library(SYSTEMCONFIGURATION_FRAMEWORK SystemConfiguration REQUIRED)
     find_library(CFNETWORK_FRAMEWORK CFNetwork REQUIRED)
@@ -93,6 +94,7 @@ foreach(TEST_FILE ${TEST_SOURCES})
     endif()
     if(APPLE)
         target_link_libraries(${TEST_NAME} PRIVATE
+        ${ACCELERATE_FRAMEWORK}
             ${COREML_FRAMEWORK}
             ${FOUNDATION_FRAMEWORK}
             ${SECURITY_FRAMEWORK}
@@ -127,6 +129,7 @@ foreach(APP_NAME chat asr)
         endif()
         if(APPLE)
             target_link_libraries(${APP_NAME} PRIVATE
+                ${ACCELERATE_FRAMEWORK}
                 ${COREML_FRAMEWORK}
                 ${FOUNDATION_FRAMEWORK}
                 ${SECURITY_FRAMEWORK}

@@ -133,6 +133,8 @@ graph.hard_reset();
 | UsefulSensors/moonshine-base | transcription, speech embed |                                                                                                         
 | openai/whisper-small | transcription, speech embed, Apple NPU |                                                                                                                 
 | openai/whisper-medium | transcribe, speech embed, Apple NPU |
+| nvidia/parakeet-ctc-0.6b | transcribe, speech embed, Apple NPU |
+| nvidia/parakeet-ctc-1.1b | transcribe, speech embed, Apple NPU |
 | snakers4/silero-vad | vad |
 | nomic-ai/nomic-embed-text-v2-moe | embed |                                                                                                                    
 | Qwen/Qwen3-Embedding-0.6B | embed | 
