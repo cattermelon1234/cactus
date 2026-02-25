@@ -398,7 +398,7 @@ cactus_model_t cactus_init(const char* model_path, const char* corpus_dir, bool 
         }
 
         auto model_type = handle->model->get_config().model_type;
-        if (model_type == Config::ModelType::WHISPER || model_type == Config::ModelType::MOONSHINE) {
+        if (model_type == Config::ModelType::WHISPER || model_type == Config::ModelType::MOONSHINE || model_type == Config::ModelType::PARAKEET) {
             std::string vad_path = model_path_str + "/vad";
             handle->vad_model = create_model(vad_path);
             if (!handle->vad_model) {

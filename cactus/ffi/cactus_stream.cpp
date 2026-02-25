@@ -360,7 +360,9 @@ int cactus_stream_transcribe_process(
             return static_cast<int>(json_response.length());
         }
 
-        bool is_moonshine = handle->model_handle->model->get_config().model_type == cactus::engine::Config::ModelType::MOONSHINE;
+        const auto model_type = handle->model_handle->model->get_config().model_type;
+        bool is_moonshine = model_type == cactus::engine::Config::ModelType::MOONSHINE;
+        bool is_parakeet = model_type == cactus::engine::Config::ModelType::PARAKEET;
 
         std::string prompt = is_moonshine ? "" :
             "<|startoftranscript|><|" + handle->options.language + "|><|transcribe|><|notimestamps|>";
@@ -369,7 +371,7 @@ int cactus_stream_transcribe_process(
         const int result = cactus_transcribe(
             handle->model_handle,
             nullptr,
-            prompt.c_str(),
+            (is_moonshine || is_parakeet) ? "" : "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>",
             handle->transcribe_response_buffer,
             sizeof(handle->transcribe_response_buffer),
             nullptr,

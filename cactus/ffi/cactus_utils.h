@@ -13,7 +13,9 @@
 #include <iostream>
 #include <filesystem>
 #include <cctype>
-#include <cstdlib>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -101,6 +103,81 @@ inline cactus::engine::AudioProcessor::SpectrogramConfig get_whisper_spectrogram
     cfg.min_value    = 1e-10f;
     cfg.remove_dc_offset = true;
     return cfg;
+}
+
+inline cactus::engine::AudioProcessor::SpectrogramConfig get_parakeet_spectrogram_config() {
+    cactus::engine::AudioProcessor::SpectrogramConfig cfg{};
+    cfg.n_fft        = 512;
+    cfg.frame_length = 400;
+    cfg.hop_length   = 160;
+    cfg.power        = 2.0f;
+    cfg.center       = true;
+    cfg.pad_mode     = "constant";
+    cfg.onesided     = true;
+    cfg.dither       = 0.0f;
+    cfg.mel_floor    = 5.960464477539063e-08f; // 2^-24 guard value used by HF Parakeet.
+    cfg.log_mel      = "log";
+    cfg.reference    = 1.0f;
+    cfg.min_value    = 1e-10f;
+    cfg.remove_dc_offset = false;
+    cfg.hann_periodic = false;
+    return cfg;
+}
+
+inline void apply_preemphasis(std::vector<float>& waveform, float coefficient = 0.97f) {
+    if (waveform.size() < 2 || coefficient == 0.0f) {
+        return;
+    }
+    for (size_t i = waveform.size() - 1; i > 0; --i) {
+        waveform[i] -= coefficient * waveform[i - 1];
+    }
+}
+
+inline void normalize_parakeet_log_mel(std::vector<float>& mel, size_t num_mels, float epsilon = 1e-5f) {
+    if (mel.empty() || num_mels == 0 || (mel.size() % num_mels) != 0) {
+        return;
+    }
+    const size_t num_frames = mel.size() / num_mels;
+    if (num_frames == 0) {
+        return;
+    }
+
+    for (size_t m = 0; m < num_mels; ++m) {
+        const size_t base = m * num_frames;
+        float mean = 0.0f;
+        for (size_t t = 0; t < num_frames; ++t) {
+            mean += mel[base + t];
+        }
+        mean /= static_cast<float>(num_frames);
+
+        float variance = 0.0f;
+        for (size_t t = 0; t < num_frames; ++t) {
+            const float d = mel[base + t] - mean;
+            variance += d * d;
+        }
+        const float denom = static_cast<float>(std::max<size_t>(1, num_frames - 1));
+        const float inv_std = 1.0f / std::sqrt((variance / denom) + epsilon);
+        for (size_t t = 0; t < num_frames; ++t) {
+            mel[base + t] = (mel[base + t] - mean) * inv_std;
+        }
+    }
+}
+
+inline void trim_mel_frames(std::vector<float>& mel, size_t num_mels, size_t valid_frames) {
+    if (mel.empty() || num_mels == 0 || (mel.size() % num_mels) != 0) {
+        return;
+    }
+    size_t total_frames = mel.size() / num_mels;
+    if (valid_frames == 0 || valid_frames >= total_frames) {
+        return;
+    }
+    std::vector<float> trimmed(num_mels * valid_frames);
+    for (size_t m = 0; m < num_mels; ++m) {
+        const float* src = &mel[m * total_frames];
+        float* dst = &trimmed[m * valid_frames];
+        std::copy(src, src + valid_frames, dst);
+    }
+    mel.swap(trimmed);
 }
 
 } // namespace audio
