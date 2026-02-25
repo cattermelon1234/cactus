@@ -104,6 +104,7 @@ int cactus_transcribe(
         std::vector<std::string> stop_sequences;
         bool force_tools, include_stop_sequences, use_vad, telemetry_enabled;
         float cloud_handoff_threshold = handle->model->get_config().default_cloud_handoff_threshold;
+        const std::string opts = options_json ? options_json : "";
         parse_options_json(
             options_json ? options_json : "", temperature,
             top_p, top_k, max_tokens, stop_sequences,
@@ -111,7 +112,6 @@ int cactus_transcribe(
             include_stop_sequences, use_vad, telemetry_enabled
         );
         {
-            const std::string opts = options_json ? options_json : "";
             size_t pos = opts.find("\"cloud_handoff_threshold\"");
             if (pos != std::string::npos) {
                 pos = opts.find(':', pos);
@@ -317,12 +317,13 @@ int cactus_transcribe(
             cleaned_text.erase(0, 1);
         }
 
-        bool cloud_handoff = false;
+        bool entropy_handoff = false;
         if (!cleaned_text.empty() && cleaned_text.length() > 5) {
              if (cloud_handoff_threshold > 0.0f && max_token_entropy_norm > cloud_handoff_threshold) {
-                 cloud_handoff = true;
+                 entropy_handoff = true;
              }
         }
+        const bool cloud_handoff = entropy_handoff;
 
         std::string json = construct_response_json(cleaned_text, {}, time_to_first_token, total_time_ms, prefill_tps, decode_tps, prompt_tokens, completion_tokens, confidence, cloud_handoff);
 

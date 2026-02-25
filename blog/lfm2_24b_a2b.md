@@ -86,7 +86,7 @@ Ready to run LFM2-24B locally on your Mac? Here's how to get up and running.
 
 ### Prerequisites
 
-- macOS with Apple Silicon (M1 or later recommended; M4 Pro with 48GB RAM for best results)
+- macOS with Apple Silicon and 16GB+ RAM (M1 or later recommended; M4 Pro with 48GB RAM for best results)
 - Python 3.10+
 - CMake (`brew install cmake`)
 - Git

@@ -50,12 +50,12 @@ int result = cactus_complete(
 Example response from Gemma3-270m
 ```json
 {
-    "success": true,                 // when successfully generated locally
+    "success": true,                 // when successfully generated
     "error": null,                   // returns specific errors if success = false
-    "cloud_handoff": false,          // true when model is unconfident, simply route to cloud
-    "response": "Hi there!",         // null when error is not null or cloud_handoff = true
+    "cloud_handoff": false,          // true when response is generated with cloud model
+    "response": "Hi there!",         // null when error is not null
     "function_calls": [],            // parsed to [{"name":"set_alarm","arguments":{"hour":"10","minute":"0"}}]
-    "confidence": 0.8193,            // how confident the model is with its response
+    "confidence": 0.8193,            // how confident the model is with its locally generated response
     "time_to_first_token_ms": 45.23, // latency (time to first token)
     "total_time_ms": 163.67,         // total execution time
     "prefill_tps": 1621.89,          // prefill tokens per second
@@ -98,8 +98,9 @@ graph.hard_reset();
 | Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Whisper-Small-244-INT8<br>(30s-audio-Latency & Decode)
 |--------|--------|--------|----------|
 | Mac M4 Pro | 582tps/100tps (76MB RAM) | 0.2s/98tps (87MB RAM) | 0.1s/119tps (73MB RAM) |
-| iPad/Mac M4 | 379tps/66tps (30MB RAM) | 0.2s/64tps (53MB RAM) | 0.2s/100tp (122MB RAM) |
-| iPad/Mac M2 | 315tps/60tps (181MB RAM) | 0.3s/58tps (426MB RAM) | 0.3s/86tps (160MB RAM) |
+| iPad/Mac M4 | 379tps/66tps (30MB RAM) | 0.2s/76tps (53MB RAM) | 0.2s/100tp (122MB RAM) |
+| iPad/Mac M3 | 350tps/60tps (70MB RAM) | 0.3s/69tps (80MB RAM) | 0.3s/107tps (102MB RAM) |
+| iPad/Mac M2 | 315tps/58tps (181MB RAM) | 0.3s/58tps (426MB RAM) | 0.3s/86tps (160MB RAM) |
 | iPhone 17 Pro  | 327tps/48tps (108MB RAM)| 0.3s/48tps (156MB RAM) | 0.3s/114tps (177MB RAM)|
 | Galaxy S25 Ultra | 255tps/37tps (1.2GB RAM) | 2.6s/34tps (2GB RAM) | 2.3s/90tps (363MB RAM) |
 

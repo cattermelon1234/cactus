@@ -378,8 +378,8 @@ if [ "$device_type" = "simulator" ]; then
         sim_env+=("SIMCTL_CHILD_CACTUS_RUN_ASR=1")
         sim_env+=("SIMCTL_CHILD_CACTUS_ASR_AUDIO_FILE=$ASR_AUDIO_FILE")
     fi
-    if [ -n "$CACTUS_CLOUD_API_KEY" ]; then
-        sim_env+=("SIMCTL_CHILD_CACTUS_CLOUD_API_KEY=$CACTUS_CLOUD_API_KEY")
+    if [ -n "$CACTUS_CLOUD_KEY" ]; then
+        sim_env+=("SIMCTL_CHILD_CACTUS_CLOUD_KEY=$CACTUS_CLOUD_KEY")
     fi
     if [ -n "$CACTUS_CLOUD_STRICT_SSL" ]; then
         sim_env+=("SIMCTL_CHILD_CACTUS_CLOUD_STRICT_SSL=$CACTUS_CLOUD_STRICT_SSL")
@@ -424,8 +424,8 @@ else
         device_env+=("DEVICECTL_CHILD_CACTUS_RUN_ASR=1")
         device_env+=("DEVICECTL_CHILD_CACTUS_ASR_AUDIO_FILE=$ASR_AUDIO_FILE")
     fi
-    if [ -n "$CACTUS_CLOUD_API_KEY" ]; then
-        device_env+=("DEVICECTL_CHILD_CACTUS_CLOUD_API_KEY=$CACTUS_CLOUD_API_KEY")
+    if [ -n "$CACTUS_CLOUD_KEY" ]; then
+        device_env+=("DEVICECTL_CHILD_CACTUS_CLOUD_KEY=$CACTUS_CLOUD_KEY")
     fi
     if [ -n "$CACTUS_CLOUD_STRICT_SSL" ]; then
         device_env+=("DEVICECTL_CHILD_CACTUS_CLOUD_STRICT_SSL=$CACTUS_CLOUD_STRICT_SSL")

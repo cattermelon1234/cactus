@@ -8,8 +8,8 @@
 #include <sstream>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <cstdlib>
 #include <chrono>
+#include <filesystem>
 
 using namespace cactus::engine;
 using namespace cactus::ffi;
@@ -19,8 +19,7 @@ static constexpr size_t RAG_MIN_CHUNK_TOKENS = 24;
 static constexpr size_t RAG_CHUNK_OVERLAP = 32;
 
 static void apply_no_cloud_telemetry_env() {
-    const char* env = std::getenv("CACTUS_NO_CLOUD_TELE");
-    if (env && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0')) {
+    if (cactus::ffi::env_flag_enabled("CACTUS_NO_CLOUD_TELE")) {
         cactus::telemetry::setCloudDisabled(true);
     }
 }
@@ -414,6 +413,7 @@ cactus_model_t cactus_init(const char* model_path, const char* corpus_dir, bool 
                 delete handle;
                 return nullptr;
             }
+
         }
 
         if (corpus_dir != nullptr && strlen(corpus_dir) > 0) {

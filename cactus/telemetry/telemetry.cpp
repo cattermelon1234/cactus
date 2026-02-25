@@ -302,6 +302,10 @@ static std::string scoped_file_name(const std::string& prefix, const std::string
     return oss.str();
 }
 
+static std::string cloud_api_key_cache_file_locked() {
+    return get_telemetry_dir_locked() + "/cloud_api_key";
+}
+
 static std::string load_or_create_id(const std::string& file) {
     std::ifstream in(file);
     if (in.is_open()) {
@@ -1239,6 +1243,28 @@ void setCloudKey(const char* key) {
     if (!key || key[0] == '\0') return;
     std::lock_guard<std::mutex> guard(telemetry_mutex);
     cloud_key = key;
+}
+
+void cacheCloudApiKey(const char* key) {
+    if (!key || key[0] == '\0') return;
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    const std::string file = cloud_api_key_cache_file_locked();
+    std::ofstream out(file, std::ios::trunc);
+    if (out.is_open()) {
+        out << key;
+    }
+}
+
+std::string loadCachedCloudApiKey() {
+    std::lock_guard<std::mutex> guard(telemetry_mutex);
+    const std::string file = cloud_api_key_cache_file_locked();
+    std::ifstream in(file);
+    if (!in.is_open()) return {};
+    std::string line;
+    if (std::getline(in, line) && !line.empty()) {
+        return line;
+    }
+    return {};
 }
 
 void recordInit(const char* model, bool success, double response_time_ms, const char* message) {

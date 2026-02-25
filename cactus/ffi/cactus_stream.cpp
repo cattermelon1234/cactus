@@ -1,4 +1,5 @@
 #include "cactus_ffi.h"
+#include "cactus_cloud.h"
 #include "cactus_utils.h"
 #include "telemetry/telemetry.h"
 #include <cstring>
@@ -8,10 +9,6 @@
 #include <future>
 #include <chrono>
 #include <atomic>
-
-#ifdef CACTUS_USE_CURL
-#include <curl/curl.h>
-#endif
 
 using namespace cactus::ffi;
 
@@ -149,192 +146,6 @@ static void parse_stream_transcribe_init_options(const std::string& json,
     if (language.empty()) language = "en";
 }
 
-struct CloudResponse {
-    std::string transcript;
-    std::string api_key_hash;
-};
-
-#ifdef CACTUS_USE_CURL
-static const std::string CLOUD_API_URL = "https://104.198.76.3/api/v1/transcribe";
-static std::atomic<bool> g_warned_missing_cloud_api_key{false};
-
-static std::string get_cloud_api_key() {
-    const char* key = std::getenv("CACTUS_CLOUD_API_KEY");
-    return key ? std::string(key) : "";
-}
-
-static bool cloud_insecure_ssl_enabled() {
-    const char* strict = std::getenv("CACTUS_CLOUD_STRICT_SSL");
-    return !(strict && strict[0] != '\0' && !(strict[0] == '0' && strict[1] == '\0'));
-}
-
-static void apply_curl_tls_trust(CURL* curl) {
-    if (!curl) return;
-    const char* ca_bundle = std::getenv("CACTUS_CA_BUNDLE");
-    if (ca_bundle && ca_bundle[0] != '\0') {
-        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle);
-    }
-#if defined(__ANDROID__)
-    const char* ca_path = std::getenv("CACTUS_CA_PATH");
-    if (ca_path && ca_path[0] != '\0') {
-        curl_easy_setopt(curl, CURLOPT_CAPATH, ca_path);
-    } else {
-        curl_easy_setopt(curl, CURLOPT_CAPATH, "/system/etc/security/cacerts");
-    }
-#endif
-}
-
-static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* s = static_cast<std::string*>(userdata);
-    s->append(static_cast<char*>(ptr), size * nmemb);
-    return size * nmemb;
-}
-
-static std::string base64_encode(const uint8_t* data, size_t len) {
-    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string out;
-    out.reserve(((len + 2) / 3) * 4);
-    for (size_t i = 0; i < len; i += 3) {
-        uint32_t n = static_cast<uint32_t>(data[i]) << 16;
-        if (i + 1 < len) n |= static_cast<uint32_t>(data[i + 1]) << 8;
-        if (i + 2 < len) n |= static_cast<uint32_t>(data[i + 2]);
-        out += table[(n >> 18) & 0x3F];
-        out += table[(n >> 12) & 0x3F];
-        out += (i + 1 < len) ? table[(n >> 6) & 0x3F] : '=';
-        out += (i + 2 < len) ? table[n & 0x3F] : '=';
-    }
-    return out;
-}
-
-static std::vector<uint8_t> build_wav(const uint8_t* pcm, size_t pcm_bytes) {
-    constexpr uint32_t sample_rate = 16000;
-    constexpr uint16_t channels = 1;
-    constexpr uint16_t bits = 16;
-    const uint32_t byte_rate = sample_rate * channels * bits / 8;
-    const uint16_t block_align = channels * bits / 8;
-    const uint32_t data_size = static_cast<uint32_t>(pcm_bytes);
-    const uint32_t file_size = 36 + data_size;
-
-    std::vector<uint8_t> wav(44 + pcm_bytes);
-    auto w16 = [&](size_t off, uint16_t v) {
-        wav[off] = v & 0xFF;
-        wav[off + 1] = v >> 8;
-    };
-    auto w32 = [&](size_t off, uint32_t v) {
-        wav[off] = v & 0xFF;
-        wav[off + 1] = (v >> 8) & 0xFF;
-        wav[off + 2] = (v >> 16) & 0xFF;
-        wav[off + 3] = (v >> 24) & 0xFF;
-    };
-
-    std::memcpy(wav.data(), "RIFF", 4);
-    w32(4, file_size);
-    std::memcpy(wav.data() + 8, "WAVE", 4);
-    std::memcpy(wav.data() + 12, "fmt ", 4);
-    w32(16, 16);
-    w16(20, 1);
-    w16(22, channels);
-    w32(24, sample_rate);
-    w32(28, byte_rate);
-    w16(32, block_align);
-    w16(34, bits);
-    std::memcpy(wav.data() + 36, "data", 4);
-    w32(40, data_size);
-    std::memcpy(wav.data() + 44, pcm, pcm_bytes);
-    return wav;
-}
-
-static CloudResponse cloud_transcribe(const std::string& audio_b64, const std::string& original_text, const std::string& language) {
-    std::string api_key = get_cloud_api_key();
-    if (api_key.empty()) {
-        if (!g_warned_missing_cloud_api_key.exchange(true)) {
-            CACTUS_LOG_WARN("cloud_handoff", "CACTUS_CLOUD_API_KEY is not set; cloud handoff requests will fall back to local transcript");
-        }
-        return {original_text, ""};
-    }
-
-    std::string payload = "{\"audio\":\"" + audio_b64 + "\",\"mime_type\":\"audio/wav\",\"language\":\"" + language + "\"}";
-
-    CURL* curl = curl_easy_init();
-    if (!curl) return {original_text, ""};
-
-    std::string response_body;
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("X-API-Key: " + api_key).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-
-    curl_easy_setopt(curl, CURLOPT_URL, CLOUD_API_URL.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(payload.size()));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    if (cloud_insecure_ssl_enabled()) {// current default path is not verifying ssl certs
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    } else {
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-        apply_curl_tls_trust(curl);
-    }
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-
-    if (res != CURLE_OK) {
-        CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff request failed: " << curl_easy_strerror(res) << "; falling back to local transcript");
-        return {original_text, ""};
-    }
-
-    std::string pattern = "\"transcript\":";
-    size_t pos = response_body.find(pattern);
-    if (pos == std::string::npos) {
-        CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff response missing transcript field; falling back to local transcript");
-        return {original_text, ""};
-    }
-
-    size_t i = pos + pattern.length();
-    while (i < response_body.size() && (response_body[i] == ' ' || response_body[i] == '\t' || response_body[i] == '\n' || response_body[i] == '\r')) {
-        ++i;
-    }
-    if (i >= response_body.size() || response_body[i] != '"') {
-        CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff transcript field is not a string; falling back to local transcript");
-        return {original_text, ""};
-    }
-    ++i;
-
-    std::string out;
-    out.reserve(128);
-    while (i < response_body.size()) {
-        char c = response_body[i++];
-        if (c == '"') {
-            std::string api_key_hash = json_string(response_body, "api_key_hash");
-            return {out, api_key_hash};
-        }
-        if (c == '\\' && i < response_body.size()) {
-            char e = response_body[i++];
-            switch (e) {
-                case '"': out.push_back('"'); break;
-                case '\\': out.push_back('\\'); break;
-                case '/': out.push_back('/'); break;
-                case 'b': out.push_back('\b'); break;
-                case 'f': out.push_back('\f'); break;
-                case 'n': out.push_back('\n'); break;
-                case 'r': out.push_back('\r'); break;
-                case 't': out.push_back('\t'); break;
-                default: out.push_back(e); break;
-            }
-            continue;
-        }
-        out.push_back(c);
-    }
-    CACTUS_LOG_WARN("cloud_handoff", "Cloud handoff transcript string parse failed; falling back to local transcript");
-    return {original_text, ""};
-}
-#endif
-
 struct CactusStreamTranscribeHandle {
     CactusModelHandle* model_handle;
 
@@ -394,6 +205,10 @@ static std::string build_stream_response(
     double prefill_tokens = json_number(raw_json_str, "prefill_tokens");
     double decode_tokens = json_number(raw_json_str, "decode_tokens");
     double total_tokens = json_number(raw_json_str, "total_tokens");
+    std::string effective_confirmed = confirmed;
+    if (cloud_result.used_cloud && !cloud_result.transcript.empty()) {
+        effective_confirmed = cloud_result.transcript;
+    }
 
     std::ostringstream json_builder;
     json_builder << "{";
@@ -404,7 +219,16 @@ static std::string build_stream_response(
     json_builder << "\"cloud_job_id\":" << cloud_job_id << ",";
     json_builder << "\"cloud_result_job_id\":" << cloud_result_job_id << ",";
     json_builder << "\"cloud_result\":\"" << escape_json(cloud_result.transcript) << "\",";
-    json_builder << "\"confirmed\":\"" << escape_json(confirmed) << "\",";
+    json_builder << "\"cloud_result_used_cloud\":" << (cloud_result.used_cloud ? "true" : "false") << ",";
+    json_builder << "\"cloud_result_error\":";
+    if (cloud_result.error.empty()) {
+        json_builder << "null,";
+    } else {
+        json_builder << "\"" << escape_json(cloud_result.error) << "\",";
+    }
+    json_builder << "\"cloud_result_source\":\"" << (cloud_result.used_cloud ? "cloud" : "fallback") << "\",";
+    json_builder << "\"confirmed_local\":\"" << escape_json(confirmed) << "\",";
+    json_builder << "\"confirmed\":\"" << escape_json(effective_confirmed) << "\",";
     json_builder << "\"pending\":\"" << escape_json(pending) << "\",";
     json_builder << "\"function_calls\":" << function_calls << ",";
     json_builder << "\"confidence\":" << confidence << ",";
@@ -605,19 +429,22 @@ int cactus_stream_transcribe_process(
 
             if (handle->previous_cloud_handoff && !confirmed.empty()) {
                 cloud_handoff_triggered = true;
-#ifdef CACTUS_USE_CURL
                 std::vector<uint8_t> confirmed_audio(
                     handle->audio_buffer.begin(),
                     handle->audio_buffer.begin() + handle->previous_audio_buffer_size
                 );
-                auto wav = build_wav(confirmed_audio.data(), confirmed_audio.size());
-                std::string b64 = base64_encode(wav.data(), wav.size());
+                auto wav = cloud_build_wav(confirmed_audio.data(), confirmed_audio.size());
+                std::string b64 = cloud_base64_encode(wav.data(), wav.size());
                 cloud_job_id = handle->next_cloud_job_id++;
+                CACTUS_LOG_INFO(
+                    "cloud_handoff",
+                    "Queued stream cloud job id=" << cloud_job_id
+                        << " confirmed_chars=" << confirmed.size()
+                        << " audio_bytes=" << confirmed_audio.size());
                 handle->pending_cloud_jobs.push_back({
                     cloud_job_id,
-                    std::async(std::launch::async, cloud_transcribe, b64, confirmed, handle->options.language)
+                    std::async(std::launch::async, cloud_transcribe_request, b64, confirmed, 15L, nullptr)
                 });
-#endif
             }
 
             handle->audio_buffer.erase(
@@ -635,7 +462,14 @@ int cactus_stream_transcribe_process(
 
         for (auto it = handle->pending_cloud_jobs.begin(); it != handle->pending_cloud_jobs.end(); ) {
             if (it->result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-                handle->completed_cloud_results.push_back({it->id, it->result.get()});
+                CloudResponse job_result = it->result.get();
+                CACTUS_LOG_INFO(
+                    "cloud_handoff",
+                    "Completed stream cloud job id=" << it->id
+                        << " used_cloud=" << (job_result.used_cloud ? "true" : "false")
+                        << " error=" << (job_result.error.empty() ? "none" : job_result.error)
+                        << " transcript_chars=" << job_result.transcript.size());
+                handle->completed_cloud_results.push_back({it->id, std::move(job_result)});
                 it = handle->pending_cloud_jobs.erase(it);
             } else {
                 ++it;

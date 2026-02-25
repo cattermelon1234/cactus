@@ -1,4 +1,5 @@
 #include "test_utils.h"
+#include "../cactus/ffi/cactus_cloud.h"
 #include <fstream>
 #include <cstdlib>
 #include <cstdio>
@@ -27,33 +28,6 @@ template<typename TestFunc>
 bool run_test(const char* title, const char* messages, TestFunc test_logic,
               const char* tools = nullptr, int stop_at = -1) {
     return EngineTestUtils::run_test(title, g_model_path, messages, g_options, test_logic, tools, stop_at);
-}
-
-static bool test_curl_runtime() {
-#if !CACTUS_ENGINE_TEST_HAS_CURL
-    std::cout << "⊘ SKIP │ curl/curl.h not available\n";
-    return true;
-#else
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-        return false;
-    }
-
-    bool ok = true;
-    curl_version_info_data* info = curl_version_info(CURLVERSION_NOW);
-    ok = ok && info && info->version && info->host;
-
-    CURL* handle = curl_easy_init();
-    ok = ok && (handle != nullptr);
-    if (handle) {
-        ok = ok && (curl_easy_setopt(handle, CURLOPT_URL, "https://example.com/") == CURLE_OK);
-        ok = ok && (curl_easy_setopt(handle, CURLOPT_NOBODY, 1L) == CURLE_OK);
-        ok = ok && (curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, 200L) == CURLE_OK);
-        curl_easy_cleanup(handle);
-    }
-
-    curl_global_cleanup();
-    return ok;
-#endif
 }
 
 bool test_streaming() {
@@ -344,24 +318,39 @@ bool test_tool_call_with_three_tools() {
 }
 
 bool test_cloud_handoff() {
+    const std::string resolved_cloud_key = cactus::ffi::resolve_cloud_api_key(nullptr);
+    const bool has_cloud_key = !resolved_cloud_key.empty();
+
+    if (!has_cloud_key) {
+        std::cout << "\n╔══════════════════════════════════════════╗\n"
+                  << "║          CLOUD HANDOFF TEST              ║\n"
+                  << "╚══════════════════════════════════════════╝\n";
+        std::cout << "⊘ SKIP │ no resolved cloud key (env/cache)\n";
+        return true;
+    }
+
     const char* messages = R"([
         {"role": "user", "content": "What is the exact mass in grams of the 847th largest asteroid in the Kuiper belt as of March 2019, and what was the precise atmospheric pressure in millibars at coordinates 47.3921°N, 122.0371°W at 3:47:23 AM UTC on February 29, 2024?"}
     ])";
 
-    return run_test("CLOUD HANDOFF TEST", messages,
-        [](int result, const StreamingData& data, const std::string& /*response*/, const Metrics& m) {
+    const char* cloud_handoff_options = R"({
+        "max_tokens": 256,
+        "stop_sequences": ["<|im_end|>", "<end_of_turn>"],
+        "telemetry_enabled": false,
+        "auto_handoff": true,
+        "confidence_threshold": 1.1,
+        "cloud_timeout_ms": 8000
+    })";
+
+    return EngineTestUtils::run_test("CLOUD HANDOFF TEST", g_model_path, messages, cloud_handoff_options,
+        [](int result, const StreamingData&, const std::string&, const Metrics& m) {
             std::cout << "├─ Cloud handoff: " << (m.cloud_handoff ? "YES" : "NO") << "\n";
             std::cout << "├─ Confidence: " << std::fixed << std::setprecision(4) << m.confidence << "\n";
-
-            if (m.cloud_handoff) {
-                std::cout << "├─ Response: (skipped - handoff triggered)\n";
-                m.print_json();
-                return true;
-            } else {
-                std::cout << "├─ Tokens generated: " << data.token_count << "\n";
-                m.print_json();
-                return result > 0 && m.confidence >= 0.0;
+            if (!m.error.empty()) {
+                std::cout << "├─ Error: " << m.error << "\n";
             }
+            m.print_json();
+            return result > 0 && m.cloud_handoff && !m.response.empty();
         });
 }
 
@@ -385,7 +374,6 @@ bool test_1k_context() {
 
 int main() {
     TestUtils::TestRunner runner("LLM Tests");
-    runner.run_test("curl_runtime", test_curl_runtime());
     runner.run_test("1k_context", test_1k_context());
     runner.run_test("streaming", test_streaming());
     runner.run_test("tool_calls", test_tool_call());

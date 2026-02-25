@@ -1,4 +1,5 @@
 #include "../cactus/ffi/cactus_ffi.h"
+#include "../cactus/ffi/cactus_cloud.h"
 #include "../cactus/telemetry/telemetry.h"
 #include <iostream>
 #include <string>
@@ -21,8 +22,7 @@
 #endif
 
 static std::string get_cloud_api_key() {
-    const char* key = std::getenv("CACTUS_CLOUD_API_KEY");
-    return key ? std::string(key) : "";
+    return cactus::ffi::resolve_cloud_api_key(nullptr);
 }
 
 static std::string get_transcribe_options_json() {
@@ -86,6 +86,25 @@ bool file_exists(const std::string& path) {
     return f.good();
 }
 
+bool read_file_bytes(const std::string& path, std::vector<uint8_t>& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) return false;
+    in.seekg(0, std::ios::end);
+    std::streamsize size = in.tellg();
+    if (size <= 0) return false;
+    in.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(size));
+    return static_cast<bool>(in.read(reinterpret_cast<char*>(out.data()), size));
+}
+
+bool ends_with_wav(const std::string& path) {
+    std::string lower = path;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower.size() >= 4 && lower.substr(lower.size() - 4) == ".wav";
+}
+
 std::string extract_json_value(const std::string& json, const std::string& key) {
     std::string pattern = "\"" + key + "\":\"";
     size_t start = json.find(pattern);
@@ -105,11 +124,11 @@ std::string extract_json_number(const std::string& json, const std::string& key)
     if (start == std::string::npos) return "";
     start += pattern.length();
     while (start < json.length() && std::isspace(json[start])) start++;
-    size_t end = start;
-    while (end < json.length() && (isdigit(json[end]) || json[end] == '.' || json[end] == '-')) {
-        end++;
-    }
-    return json.substr(start, end - start);
+    const char* begin = json.c_str() + start;
+    char* end_ptr = nullptr;
+    std::strtod(begin, &end_ptr);
+    if (end_ptr == begin) return "";
+    return std::string(begin, static_cast<size_t>(end_ptr - begin));
 }
 
 size_t visible_length(const std::string& s) {
@@ -212,7 +231,42 @@ int transcribe_file(cactus_model_t model, const std::string& audio_path, const s
     }
 
     std::string json_str(response_buffer.data());
+    std::string local_response = extract_json_value(json_str, "response");
     bool cloud_handoff = json_str.find("\"cloud_handoff\":true") != std::string::npos;
+    bool cloud_key_detected = !get_cloud_api_key().empty();
+
+    bool cloud_result_used_cloud = false;
+    bool cloud_result_attempted = false;
+    std::string cloud_result_error;
+    std::string cloud_result_text;
+    bool cloud_transcript_changed = false;
+
+    if (cloud_handoff) {
+        cloud_result_attempted = true;
+        if (!ends_with_wav(audio_path)) {
+            cloud_result_error = "cloud_file_mode_requires_wav";
+            cloud_result_text = local_response;
+        } else {
+            std::vector<uint8_t> audio_bytes;
+            if (!read_file_bytes(audio_path, audio_bytes)) {
+                cloud_result_error = "audio_read_failed";
+                cloud_result_text = local_response;
+            } else {
+                std::string audio_b64 = cactus::ffi::cloud_base64_encode(audio_bytes.data(), audio_bytes.size());
+                cactus::ffi::CloudResponse cloud_result =
+                    cactus::ffi::cloud_transcribe_request(audio_b64, local_response, 15L, nullptr);
+                cloud_result_used_cloud = cloud_result.used_cloud;
+                cloud_result_error = cloud_result.error;
+                cloud_result_text = cloud_result.transcript;
+                if (!cloud_result.api_key_hash.empty()) {
+                    cactus::telemetry::setCloudKey(cloud_result.api_key_hash.c_str());
+                }
+                cloud_transcript_changed = cloud_result_used_cloud &&
+                                           !cloud_result_text.empty() &&
+                                           cloud_result_text != local_response;
+            }
+        }
+    }
 
     std::string time_str;
     size_t time_pos = json_str.find("\"total_time_ms\":");
@@ -234,8 +288,25 @@ int transcribe_file(cactus_model_t model, const std::string& audio_path, const s
     stats << "\n" << colored("[cloud_handoff: ", Color::GRAY)
           << (cloud_handoff ? colored("true", Color::YELLOW) : colored("false", Color::GREEN))
           << colored("]", Color::GRAY);
+    stats << "\n" << colored("[cloud_key_detected: ", Color::GRAY)
+          << (cloud_key_detected ? colored("true", Color::CYAN) : colored("false", Color::RED))
+          << colored("]", Color::GRAY);
+    if (cloud_result_attempted) {
+        stats << "\n" << colored("[cloud_result_used_cloud: ", Color::GRAY)
+              << (cloud_result_used_cloud ? colored("true", Color::CYAN) : colored("false", Color::YELLOW))
+              << colored("]", Color::GRAY);
+        if (!cloud_result_error.empty()) {
+            stats << "\n" << colored("[cloud_result_error: ", Color::GRAY)
+                  << colored(cloud_result_error, Color::YELLOW)
+                  << colored("]", Color::GRAY);
+        }
+    }
 
     std::cout << stats.str() << "\n";
+    if (cloud_result_attempted && cloud_transcript_changed) {
+        std::cout << "\n" << colored("Cloud corrected transcript:", Color::GREEN + Color::BOLD) << "\n";
+        std::cout << cloud_result_text << "\n";
+    }
 
     return 0;
 }
@@ -357,7 +428,7 @@ int run_live_transcription(cactus_model_t model, const std::string& language = "
     std::string api_key = get_cloud_api_key();
     if (api_key.empty()) {
         std::cout << colored("Warning: ", Color::YELLOW + Color::BOLD)
-                  << "CACTUS_CLOUD_API_KEY environment variable not set.\n";
+                  << "CACTUS_CLOUD_KEY environment variable not set.\n";
         std::cout << colored("         Cloud handoff will be disabled (fallback to local transcription).\n", Color::YELLOW);
         std::cout << "\n";
     }
@@ -428,7 +499,30 @@ int run_live_transcription(cactus_model_t model, const std::string& language = "
                     std::string ttft = extract_json_number(json_str, "time_to_first_token_ms");
                     std::string decode_tps = extract_json_number(json_str, "decode_tps");
 
-                    if (!confirmed.empty()) {
+                    bool matched_cloud_result_segment = false;
+                    if (!cloud_result.empty()) {
+                        int64_t result_job_id = cloud_result_job_id.empty() ? 0 : std::stoll(cloud_result_job_id);
+                        if (result_job_id > 0) {
+                            for (auto& seg : segments) {
+                                if (seg.pending_cloud && seg.cloud_job_id == result_job_id) {
+                                    seg.text = cloud_result;
+                                    seg.pending_cloud = false;
+                                    matched_cloud_result_segment = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    bool should_enqueue_confirmed = !confirmed.empty();
+                    if (should_enqueue_confirmed &&
+                        matched_cloud_result_segment &&
+                        !cloud_result.empty() &&
+                        confirmed == cloud_result) {
+                        should_enqueue_confirmed = false;
+                    }
+
+                    if (should_enqueue_confirmed) {
                         Segment seg;
                         seg.text = confirmed;
 
@@ -440,19 +534,6 @@ int run_live_transcription(cactus_model_t model, const std::string& language = "
                             seg.cloud_job_id = parsed_cloud_job_id;
                         }
                         segments.push_back(seg);
-                    }
-
-                    if (!cloud_result.empty()) {
-                        int64_t result_job_id = cloud_result_job_id.empty() ? 0 : std::stoll(cloud_result_job_id);
-                        if (result_job_id > 0) {
-                            for (auto& seg : segments) {
-                                if (seg.pending_cloud && seg.cloud_job_id == result_job_id) {
-                                    seg.text = cloud_result;
-                                    seg.pending_cloud = false;
-                                    break;
-                                }
-                            }
-                        }
                     }
 
                     for (auto& seg : segments) {

@@ -2,6 +2,7 @@
 #define CACTUS_UTILS_H
 
 #include "../engine/engine.h"
+#include "../models/model.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -12,6 +13,7 @@
 #include <iostream>
 #include <filesystem>
 #include <cctype>
+#include <cstdlib>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -107,6 +109,11 @@ inline cactus::engine::AudioProcessor::SpectrogramConfig get_whisper_spectrogram
 namespace cactus {
 namespace ffi {
 
+inline bool env_flag_enabled(const char* key) {
+    const char* value = std::getenv(key);
+    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+}
+
 inline std::string generateUUID() {
 #ifdef __APPLE__
     uuid_t uuid;
@@ -167,6 +174,130 @@ inline std::string escape_json_string(const std::string& s) {
         else o << c;
     }
     return o.str();
+}
+
+
+inline std::string trim_string(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) ++start;
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) --end;
+    return s.substr(start, end - start);
+}
+
+inline std::string env_or_default(const char* key, const char* fallback) {
+    const char* v = std::getenv(key);
+    if (v && v[0] != '\0') return std::string(v);
+    return std::string(fallback);
+}
+
+inline std::string json_string_field(const std::string& json, const std::string& key) {
+    std::string pattern = "\"" + key + "\":";
+    size_t pos = json.find(pattern);
+    if (pos == std::string::npos) return {};
+
+    size_t i = pos + pattern.size();
+    while (i < json.size() && std::isspace(static_cast<unsigned char>(json[i]))) i++;
+    if (i >= json.size() || json[i] != '"') return {};
+    ++i;
+
+    std::string out;
+    out.reserve(128);
+    while (i < json.size()) {
+        char c = json[i++];
+        if (c == '"') return out;
+        if (c == '\\' && i < json.size()) {
+            char e = json[i++];
+            switch (e) {
+                case '"':  out.push_back('"');  break;
+                case '\\': out.push_back('\\'); break;
+                case '/':  out.push_back('/');  break;
+                case 'b':  out.push_back('\b'); break;
+                case 'f':  out.push_back('\f'); break;
+                case 'n':  out.push_back('\n'); break;
+                case 'r':  out.push_back('\r'); break;
+                case 't':  out.push_back('\t'); break;
+                default:   out.push_back(e);    break;
+            }
+            continue;
+        }
+        out.push_back(c);
+    }
+    return {};
+}
+
+inline std::string json_array_field(const std::string& json, const std::string& key) {
+    std::string pattern = "\"" + key + "\":";
+    size_t pos = json.find(pattern);
+    if (pos == std::string::npos) return "[]";
+    size_t start = pos + pattern.size();
+    while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start]))) ++start;
+    if (start >= json.size() || json[start] != '[') return "[]";
+
+    int depth = 1;
+    size_t end = start + 1;
+    while (end < json.size() && depth > 0) {
+        if (json[end] == '[') depth++;
+        else if (json[end] == ']') depth--;
+        end++;
+    }
+    return json.substr(start, end - start);
+}
+
+inline std::vector<std::string> split_json_array(const std::string& array_json) {
+    std::vector<std::string> out;
+    if (array_json.size() < 2 || array_json.front() != '[' || array_json.back() != ']') return out;
+
+    size_t i = 1;
+    while (i + 1 < array_json.size()) {
+        while (i + 1 < array_json.size() &&
+               (std::isspace(static_cast<unsigned char>(array_json[i])) || array_json[i] == ',')) i++;
+        if (i + 1 >= array_json.size() || array_json[i] != '{') break;
+
+        size_t start = i;
+        int depth = 0;
+        bool in_str = false;
+        bool esc = false;
+        for (; i < array_json.size(); ++i) {
+            char c = array_json[i];
+            if (in_str) {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') in_str = false;
+                continue;
+            }
+            if (c == '"') { in_str = true; continue; }
+            if (c == '{') depth++;
+            if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    out.push_back(array_json.substr(start, i - start + 1));
+                    i++;
+                    break;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+inline std::string serialize_tools_json(const std::vector<ToolFunction>& tools) {
+    if (tools.empty()) return "";
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < tools.size(); ++i) {
+        if (i > 0) oss << ",";
+        oss << "{\"type\":\"function\",\"function\":{";
+        oss << "\"name\":\"" << escape_json_string(tools[i].name) << "\",";
+        oss << "\"description\":\"" << escape_json_string(tools[i].description) << "\"";
+        auto it = tools[i].parameters.find("schema");
+        if (it != tools[i].parameters.end()) {
+            oss << ",\"parameters\":" << it->second;
+        }
+        oss << "}}";
+    }
+    oss << "]";
+    return oss.str();
 }
 
 inline void handle_error_response(const std::string& error_message, char* response_buffer, size_t buffer_size) {
@@ -343,7 +474,10 @@ inline void parse_options_json(const std::string& json,
                                float& confidence_threshold,
                                bool& include_stop_sequences,
                                bool& use_vad,
-                               bool& telemetry_enabled) {
+                               bool& telemetry_enabled,
+                               bool* auto_handoff = nullptr,
+                               size_t* cloud_timeout_ms = nullptr,
+                               bool* handoff_with_images = nullptr) {
     temperature = 0.0f;
     top_p = 0.0f;
     top_k = 0;
@@ -354,6 +488,9 @@ inline void parse_options_json(const std::string& json,
     include_stop_sequences = false;
     use_vad = true;
     telemetry_enabled = true;
+    if (auto_handoff) *auto_handoff = true;
+    if (cloud_timeout_ms) *cloud_timeout_ms = 15000;
+    if (handoff_with_images) *handoff_with_images = true;
     stop_sequences.clear();
 
     if (json.empty()) return;
@@ -422,6 +559,32 @@ inline void parse_options_json(const std::string& json,
         telemetry_enabled = (json.substr(pos, 4) == "true");
     }
 
+    if (auto_handoff) {
+        pos = json.find("\"auto_handoff\"");
+        if (pos != std::string::npos) {
+            pos = json.find(':', pos) + 1;
+            while (pos < json.length() && std::isspace(json[pos])) pos++;
+            *auto_handoff = (json.substr(pos, 4) == "true");
+        }
+    }
+
+    if (cloud_timeout_ms) {
+        pos = json.find("\"cloud_timeout_ms\"");
+        if (pos != std::string::npos) {
+            pos = json.find(':', pos) + 1;
+            *cloud_timeout_ms = std::stoul(json.substr(pos));
+        }
+    }
+
+    if (handoff_with_images) {
+        pos = json.find("\"handoff_with_images\"");
+        if (pos != std::string::npos) {
+            pos = json.find(':', pos) + 1;
+            while (pos < json.length() && std::isspace(json[pos])) pos++;
+            *handoff_with_images = (json.substr(pos, 4) == "true");
+        }
+    }
+
     pos = json.find("\"stop_sequences\"");
     if (pos != std::string::npos) {
         pos = json.find('[', pos);
@@ -441,31 +604,8 @@ inline void parse_options_json(const std::string& json,
     }
 }
 
-inline std::string format_tools_for_prompt(const std::vector<ToolFunction>& tools) {
-    if (tools.empty()) return "";
-    std::string formatted_tools_json;
-    for (size_t i = 0; i < tools.size(); i++) {
-        if (i > 0) formatted_tools_json += "\n";
-        formatted_tools_json += "{\"type\":\"function\",\"function\":{\"name\":\""
-                              + tools[i].name
-                              + "\",\"description\":\""
-                              + tools[i].description + "\"";
-        if (tools[i].parameters.find("schema") != tools[i].parameters.end()) {
-            formatted_tools_json += ",\"parameters\":" + tools[i].parameters.at("schema");
-        }
-        formatted_tools_json += "}}";
-    }
-    return formatted_tools_json;
-}
-
 static inline std::string trim_lfm2_slice(const std::string& value, size_t begin, size_t end) {
-    while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) {
-        begin++;
-    }
-    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
-        end--;
-    }
-    return value.substr(begin, end - begin);
+    return trim_string(value.substr(begin, end - begin));
 }
 
 static inline void append_lfm2_call(const std::string& entry,
@@ -667,7 +807,7 @@ inline std::string construct_response_json(const std::string& regular_response,
                                            bool cloud_handoff = false) {
     std::ostringstream json;
     json << "{";
-    json << "\"success\":" << (cloud_handoff ? "false" : "true") << ",";
+    json << "\"success\":true,";
     json << "\"error\":null,";
     json << "\"cloud_handoff\":" << (cloud_handoff ? "true" : "false") << ",";
     json << "\"response\":\"" << escape_json_string(regular_response) << "\",";
@@ -686,30 +826,6 @@ inline std::string construct_response_json(const std::string& regular_response,
     json << "\"prefill_tokens\":" << prompt_tokens << ",";
     json << "\"decode_tokens\":" << completion_tokens << ",";
     json << "\"total_tokens\":" << (prompt_tokens + completion_tokens);
-    json << "}";
-    return json.str();
-}
-
-inline std::string construct_cloud_handoff_json(float confidence,
-                                                 double time_to_first_token,
-                                                 double prefill_tps,
-                                                 size_t prompt_tokens) {
-    std::ostringstream json;
-    json << "{";
-    json << "\"success\":false,";
-    json << "\"error\":null,";
-    json << "\"cloud_handoff\":true,";
-    json << "\"response\":null,";
-    json << "\"function_calls\":[],";
-    json << "\"confidence\":" << std::fixed << std::setprecision(4) << confidence << ",";
-    json << "\"time_to_first_token_ms\":" << std::fixed << std::setprecision(2) << time_to_first_token << ",";
-    json << "\"total_time_ms\":" << std::fixed << std::setprecision(2) << time_to_first_token << ",";
-    json << "\"prefill_tps\":" << std::fixed << std::setprecision(2) << prefill_tps << ",";
-    json << "\"decode_tps\":0.0,";
-    json << "\"ram_usage_mb\":" << std::fixed << std::setprecision(2) << get_ram_usage_mb() << ",";
-    json << "\"prefill_tokens\":" << prompt_tokens << ",";
-    json << "\"decode_tokens\":0,";
-    json << "\"total_tokens\":" << prompt_tokens;
     json << "}";
     return json.str();
 }

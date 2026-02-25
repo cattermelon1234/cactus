@@ -3,10 +3,10 @@ import sys
 import os
 import argparse
 import re
+import json
 import subprocess
 import shutil
 import platform
-import json
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -577,6 +577,7 @@ def cmd_build(args):
         else:
             print_color(YELLOW, "SDL2 not found - live transcription will be disabled")
             print_color(YELLOW, "Install SDL2 for live mic support: brew install sdl2 (macOS)")
+            print_color(YELLOW, "Then run `cactus build`")
 
         if is_darwin:
             cmd = [
@@ -759,7 +760,7 @@ def cmd_run(args):
     api_key = prompt_for_api_key(config)
 
     if api_key:
-        os.environ["CACTUS_CLOUD_API_KEY"] = api_key
+        os.environ["CACTUS_CLOUD_KEY"] = api_key
 
     model_id = args.model_id
 
@@ -910,7 +911,7 @@ def _cmd_transcribe_android(weights_dir, audio_file, args):
         print_color(RED, "Failed to push audio file to device")
         return 1
 
-    cloud_api_key = os.environ.get("CACTUS_CLOUD_API_KEY", "")
+    cloud_api_key = os.environ.get("CACTUS_CLOUD_KEY", os.environ.get("CACTUS_CLOUD_API_KEY", ""))
     cloud_strict_ssl = os.environ.get("CACTUS_CLOUD_STRICT_SSL", "")
     cloud_handoff_threshold = os.environ.get("CACTUS_CLOUD_HANDOFF_THRESHOLD", "")
     ca_bundle = os.environ.get("CACTUS_CA_BUNDLE", "")
@@ -918,7 +919,7 @@ def _cmd_transcribe_android(weights_dir, audio_file, args):
     force_handoff = os.environ.get("CACTUS_FORCE_HANDOFF", "")
     env_exports = []
     if cloud_api_key:
-        env_exports.append(f"export CACTUS_CLOUD_API_KEY='{cloud_api_key}'")
+        env_exports.append(f"export CACTUS_CLOUD_KEY='{cloud_api_key}'")
     if cloud_strict_ssl:
         env_exports.append(f"export CACTUS_CLOUD_STRICT_SSL='{cloud_strict_ssl}'")
     if cloud_handoff_threshold:
@@ -971,7 +972,7 @@ def cmd_transcribe(args):
     api_key = prompt_for_api_key(config)
 
     if api_key:
-        os.environ["CACTUS_CLOUD_API_KEY"] = api_key
+        os.environ["CACTUS_CLOUD_KEY"] = api_key
 
     model_id = getattr(args, 'model_id', DEFAULT_ASR_MODEL_ID)
     audio_file = getattr(args, 'audio_file', None)
@@ -1282,6 +1283,15 @@ def cmd_clean(args):
         shutil.rmtree(telemetry_cache)
     else:
         print(f"Telemetry cache not found: {telemetry_cache}")
+
+    # Re-cache API key from config so users don't need to run `cactus auth` again
+    from .config_utils import CactusConfig
+    config = CactusConfig()
+    saved_key = config.load_config().get("api_key", "")
+    if saved_key:
+        config.cache_api_key(saved_key)
+        masked = saved_key[:4] + "..." + saved_key[-4:]
+        print(f"Restored cached API key: {masked}")
 
     print()
     print("Removing compiled libraries and frameworks...")
