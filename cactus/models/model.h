@@ -828,6 +828,123 @@ private:
 
 };
 
+class ParakeetModel : public Model {
+public:
+    ParakeetModel();
+    explicit ParakeetModel(const Config& config);
+    ~ParakeetModel() override = default;
+
+protected:
+    size_t build_attention(CactusGraph*, size_t, uint32_t, ComputeBackend, bool, size_t) override {
+        throw std::runtime_error("Parakeet: build_attention unused");
+    }
+
+    size_t build_mlp(CactusGraph*, size_t, uint32_t, ComputeBackend) const override {
+        throw std::runtime_error("Parakeet: build_mlp unused");
+    }
+
+    size_t build_transformer_block(CactusGraph*, size_t, uint32_t, ComputeBackend, bool, size_t) override {
+        throw std::runtime_error("Parakeet: build_transformer_block unused");
+    }
+
+    size_t forward(const std::vector<uint32_t>& /*tokens*/, bool /*use_cache*/ = false) override {
+        throw std::runtime_error("Parakeet requires audio feature forward().");
+    }
+
+    size_t forward(const std::vector<float>& audio_features, const std::vector<uint32_t>& tokens, bool use_cache = false) override;
+    void load_weights_to_graph(CactusGraph* gb) override;
+    uint32_t decode_with_audio(const std::vector<uint32_t>& tokens, const std::vector<float>& audio_features,
+                               float temperature = 0.0f, float top_p = 0.0f, size_t top_k = 0,
+                               const std::string& profile_file = "", float* out_entropy = nullptr) override;
+    std::vector<float> get_audio_embeddings(const std::vector<float>& audio_features) override;
+    void reset_cache() override;
+
+private:
+    size_t build_encoder(CactusGraph* gb, const std::vector<float>& audio_features);
+    size_t build_ctc_logits(CactusGraph* gb, size_t hidden_states);
+    size_t build_subsampling(CactusGraph* gb, const std::vector<float>& audio_features);
+    size_t build_relative_position_embeddings(CactusGraph* gb, size_t seq_len);
+    size_t build_self_attention(CactusGraph* gb, size_t hidden, size_t position_embeddings, uint32_t layer_idx, ComputeBackend backend);
+    size_t build_feed_forward(CactusGraph* gb, size_t hidden, uint32_t layer_idx, bool second_ff, ComputeBackend backend);
+    size_t build_convolution_module(CactusGraph* gb, size_t hidden, uint32_t layer_idx, ComputeBackend backend);
+    size_t build_encoder_block(CactusGraph* gb, size_t hidden, size_t position_embeddings, uint32_t layer_idx, ComputeBackend backend);
+    std::vector<uint32_t> greedy_decode_tokens(CactusGraph* gb, size_t logits_node) const;
+
+    struct WeightNodeIDs {
+        size_t ctc_head_weight = 0;
+        size_t ctc_head_bias = 0;
+
+        size_t subsampling_conv0_weight = 0;
+        size_t subsampling_conv0_bias = 0;
+        size_t subsampling_depthwise1_weight = 0;
+        size_t subsampling_depthwise1_bias = 0;
+        size_t subsampling_pointwise1_weight = 0;
+        size_t subsampling_pointwise1_bias = 0;
+        size_t subsampling_depthwise2_weight = 0;
+        size_t subsampling_depthwise2_bias = 0;
+        size_t subsampling_pointwise2_weight = 0;
+        size_t subsampling_pointwise2_bias = 0;
+        size_t subsampling_linear_weight = 0;
+        size_t subsampling_linear_bias = 0;
+
+        struct LayerWeights {
+            size_t ff1_linear1_weight = 0;
+            size_t ff1_linear1_bias = 0;
+            size_t ff1_linear2_weight = 0;
+            size_t ff1_linear2_bias = 0;
+
+            size_t ff2_linear1_weight = 0;
+            size_t ff2_linear1_bias = 0;
+            size_t ff2_linear2_weight = 0;
+            size_t ff2_linear2_bias = 0;
+
+            size_t self_attn_q_weight = 0;
+            size_t self_attn_q_bias = 0;
+            size_t self_attn_k_weight = 0;
+            size_t self_attn_k_bias = 0;
+            size_t self_attn_v_weight = 0;
+            size_t self_attn_v_bias = 0;
+            size_t self_attn_output_weight = 0;
+            size_t self_attn_output_bias = 0;
+            size_t self_attn_relative_k_weight = 0;
+            size_t self_attn_bias_u = 0;
+            size_t self_attn_bias_v = 0;
+
+            size_t norm_ff1_weight = 0;
+            size_t norm_ff1_bias = 0;
+            size_t norm_self_attn_weight = 0;
+            size_t norm_self_attn_bias = 0;
+            size_t norm_conv_weight = 0;
+            size_t norm_conv_bias = 0;
+            size_t norm_ff2_weight = 0;
+            size_t norm_ff2_bias = 0;
+            size_t norm_out_weight = 0;
+            size_t norm_out_bias = 0;
+
+            size_t conv_pointwise1_weight = 0;
+            size_t conv_pointwise1_bias = 0;
+            size_t conv_depthwise_weight = 0;
+            size_t conv_depthwise_bias = 0;
+            size_t conv_pointwise2_weight = 0;
+            size_t conv_pointwise2_bias = 0;
+            size_t conv_batchnorm_weight = 0;
+            size_t conv_batchnorm_bias = 0;
+            size_t conv_batchnorm_running_mean = 0;
+            size_t conv_batchnorm_running_var = 0;
+        };
+
+        std::vector<LayerWeights> layers;
+    } weight_nodes_;
+
+    bool ctc_tokens_ready_ = false;
+    size_t ctc_emit_index_ = 0;
+    std::vector<uint32_t> ctc_tokens_;
+    size_t last_input_token_count_ = 0;
+
+    std::unique_ptr<npu::NPUEncoder> npu_encoder_;
+    bool use_npu_encoder_ = false;
+};
+
 
 class Lfm2VlModel : public Model {
 public:
