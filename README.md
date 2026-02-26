@@ -122,17 +122,19 @@ graph.hard_reset();
 
 ## Benchmarks
 
-| Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Parakeet-1.1B-INT4<br>(30s-audio-Latency & Decode)
-|--------|--------|--------|----------|
-| Mac M4 Pro (Highend) | 582tps/100tps (76MB RAM) | 0.2s/98tps (87MB RAM) | 0.1s/900k+tps (1GB RAM) |
-| iPad/Mac M3 (Budget) | 350tps/60tps (70MB RAM) | 0.3s/69tps (80MB RAM) | 0.3s/800k+tps (102MB RAM) |
-| iPhone 17 Pro (Highend) | 327tps/48tps (108MB RAM)| 0.3s/48tps (156MB RAM) | 0.3s/300k+tps (177MB RAM)|
-| iPhone 13 Mini (Budget) | 148tps/34tps (1GB RAM) | 0.3s/35tps (1.2GBMB RAM) | 0.7s/90k+tps (1GB RAM) |
-| Galaxy S25 Ultra (Qualcomm 8 Elite) | 255tps/37tps (1.5GB RAM) | -/34tps (2GB RAM) | -/250k+tps (1.8GBG RAM) |
-| Pixel 6a (Budget Google Tensor) | 70tps/15tps (1GB RAM)| -/15tps (1.5GB RAM) | - /17k+tps (1GB RAM)|
-| Galaxy A17 5G (Budget Exxynox) | 32tps/10tps (727MB RAM) | -/11tps (727MB RAM) | -/40k+tps (809MB RAM) |
-| CMF Phone 2 Pro (Budget Mediatek) | - | - | - |
-| Raspberry Pi 5 (IoT) | 69tps/11tps (869MB RAM) | 13.3s/11tps (2.1GB RAM) | 4.5s/180k+tps (1.9GB RAM) |
+*Missing latency = no NPU support yet*
+
+| Device | LFM-1.2B-INT4<br>1k-prefill / 100-decode (tps) | LFMVL-1.6B-INT4<br>256px latency / decode (tps) | Parakeet-1.1B-INT4<br>30s-audio latency / decode (tps) | RAM |
+|--------|----------|----------|----------|-----|
+| Mac M4 Pro | 582/100 | 0.2s/98 | 0.1s/900k+ | 76MB |
+| iPad/Mac M3 | 350/60 | 0.3s/69 | 0.3s/800k+ | 70MB |
+| iPhone 17 Pro | 327/48 | 0.3s/48 | 0.3s/300k+ | 108MB |
+| iPhone 13 Mini | 148/34 | 0.3s/35 | 0.7s/90k+ | 1GB |
+| Galaxy S25 Ultra | 255/37 | -/34 | -/250k+ | 1.5GB |
+| Pixel 6a | 70/15 | -/15 | -/17k+ | 1GB |
+| Galaxy A17 5G | 32/10 | -/11 | -/40k+ | 727MB |
+| CMF Phone 2 Pro | - | - | - | - |
+| Raspberry Pi 5 | 69/11 | 13.3s/11 | 4.5s/180k+ | 869MB |
 
 ## Roadmap
 
@@ -145,9 +147,9 @@ graph.hard_reset();
 | Dec 2025 | Completed | Cactus team expands from original author to +6 Research Engineers |
 | Jan 2026 | Completed | Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) |
 | Feb 2026 | Completed | Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) |
-| Mar 2026 | Planned | Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) |
+| Mar 2026 | Planned | Qualcomm/Gooogle NPUs, optimise Android (5-11x less Qualcomm/Pixel latency) |
 | Apr 2026 | Planned | Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) |
-| May 2026 | Planned | Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets |
+| May 2026 | Planned | Rewrite: Kernel→C++, Graph/Engine→Rust, Mac GPU & VR |
 | Jun 2026 | Planned | Transpilers for porting custom models from Torch/Jax |
 | Jul 2026 | Planned | Aggressive optimisations to run directly on wearables, Cactus@ICML |
 | Aug 2026 | Planned | Orchestration, orchestration, orchestration |
@@ -159,7 +161,8 @@ graph.hard_reset();
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │ Step 0: if on Linux (Ubuntu/Debian)                                          │
-│ sudo apt-get install python3 python3-venv python3-pip cmake build-essential  │
+│ sudo apt-get install python3 python3-venv python3-pip cmake                  │
+│   build-essential libcurl4-openssl-dev                                       │
 │                                                                              │
 │ Step 1: clone and setup                                                      │
 │ git clone https://github.com/cactus-compute/cactus && cd cactus              │
