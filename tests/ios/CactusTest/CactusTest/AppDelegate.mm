@@ -11,19 +11,6 @@
 #include <string>
 #include <vector>
 
-extern int test_curl_main();
-extern int test_embed_main();
-extern int test_graph_main();
-extern int test_index_main();
-extern int test_kernel_main();
-extern int test_kv_cache_main();
-extern int test_llm_main();
-extern int test_performance_main();
-extern int test_rag_main();
-extern int test_stt_main();
-extern int test_telemetry_main();
-extern int test_vlm_main();
-
 static void asr_token_callback(const char* token, uint32_t, void*) {
     if (!token) return;
     fputs(token, stdout);
@@ -162,11 +149,13 @@ static void asr_token_callback(const char* token, uint32_t, void*) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         test_curl_main();
         test_embed_main();
+        test_exhaustive_main();
         test_graph_main();
         test_index_main();
         test_kernel_main();
         test_kv_cache_main();
         test_llm_main();
+        test_model_loading_main();
         test_performance_main();
         test_rag_main();
         test_stt_main();

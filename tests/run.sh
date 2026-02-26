@@ -16,6 +16,7 @@ VAD_MODEL_NAME="$DEFAULT_VAD_MODEL"
 ANDROID_MODE=false
 IOS_MODE=false
 NO_REBUILD=false
+EXHAUSTIVE_MODE=false
 ONLY_EXEC=""
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             ONLY_EXEC="$2"
             shift 2
             ;;
+        --exhaustive)
+            EXHAUSTIVE_MODE=true
+            shift
+            ;;
         --precision)
             PRECISION="$2"
             shift 2
@@ -63,6 +68,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --android                 Run tests on Android device or emulator"
             echo "  --ios                     Run tests on iOS device or simulator"
             echo "  --no-rebuild              Skip building cactus library and tests"
+            echo "  --exhaustive              Run exhaustive golden tests for all model families and precisions"
             echo "  --only <test_name>        Only run the specified test (llm, vlm, stt, embed, rag, graph, index, kernel, kv_cache, performance, etc)"
             echo "  --help, -h                Show this help message"
             exit 0
@@ -163,7 +169,7 @@ echo "Using assets path: $CACTUS_TEST_ASSETS"
 echo "Using index path: $CACTUS_INDEX_PATH"
 
 echo "Discovering test executables..."
-test_executables=($(find . -maxdepth 1 -name "test_*" -type f | sort))
+test_executables=($(find . -maxdepth 1 -name "test_*" ! -name "test_exhaustive" -type f | sort))
 
 executable_tests=()
 for test_file in "${test_executables[@]}"; do
@@ -215,3 +221,10 @@ for executable in "${test_executables[@]}"; do
     exec_name=$(basename "$executable")
     ./"$exec_name"
 done
+
+if [ "$EXHAUSTIVE_MODE" = true ]; then
+    echo ""
+    echo "Step 5: Running exhaustive tests..."
+    echo "------------------------------------"
+    exec "$SCRIPT_DIR/golden/generate_exhaustive_golden.sh"
+fi

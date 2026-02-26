@@ -86,15 +86,14 @@ foreach(TEST_FILE ${TEST_SOURCES})
         target_link_libraries(${TEST_NAME} PRIVATE ${CACTUS_CURL_LIBRARY_MACOS})
         target_include_directories(${TEST_NAME} PRIVATE ${CACTUS_CURL_INCLUDE_DIR})
         message(STATUS "Test ${TEST_NAME} will link with libcurl")
-    endif()
-    if(CURL_FOUND AND NOT APPLE)
+    elseif(CURL_FOUND)
         target_link_libraries(${TEST_NAME} PRIVATE ${CURL_LIBRARIES})
         target_include_directories(${TEST_NAME} PRIVATE ${CURL_INCLUDE_DIRS})
         message(STATUS "Test ${TEST_NAME} will link with system libcurl")
     endif()
     if(APPLE)
         target_link_libraries(${TEST_NAME} PRIVATE
-        ${ACCELERATE_FRAMEWORK}
+            ${ACCELERATE_FRAMEWORK}
             ${COREML_FRAMEWORK}
             ${FOUNDATION_FRAMEWORK}
             ${SECURITY_FRAMEWORK}
@@ -122,8 +121,7 @@ foreach(APP_NAME chat asr)
         if(APPLE)
             target_link_libraries(${APP_NAME} PRIVATE ${CACTUS_CURL_LIBRARY_MACOS})
             target_include_directories(${APP_NAME} PRIVATE ${CACTUS_CURL_INCLUDE_DIR})
-        endif()
-        if(CURL_FOUND AND NOT APPLE)
+        elseif(CURL_FOUND)
             target_link_libraries(${APP_NAME} PRIVATE ${CURL_LIBRARIES})
             target_include_directories(${APP_NAME} PRIVATE ${CURL_INCLUDE_DIRS})
         endif()

@@ -421,7 +421,7 @@ size_t CactusGraph::batchnorm(size_t input, size_t weight, size_t bias, size_t r
         throw std::runtime_error("batchnorm parameter size mismatch");
     }
 
-    OpParams params{.axis = actual_axis, .epsilon = epsilon};
+    OpParams params{.epsilon = epsilon, .axis = actual_axis};
     params.output_precision = xin.precision;
     return add_node(OpType::BATCHNORM, {input, weight, bias, running_mean, running_var}, xin.shape, params);
 }
@@ -594,7 +594,7 @@ size_t CactusGraph::conv1d(size_t input, size_t weight, size_t bias, size_t stri
     size_t L_out = (L - K) / stride + 1;
     if (b.total_size != C_out) throw std::runtime_error("conv1d bias size mismatch");
     
-    OpParams params{.stride = stride, .output_precision = xin.precision};
+    OpParams params{.output_precision = xin.precision, .stride = stride};
     return add_node(OpType::CONV1D, {input, weight, bias}, {N, C_out, L_out}, params);
 }
 

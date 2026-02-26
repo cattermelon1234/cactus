@@ -1290,6 +1290,8 @@ def cmd_test(args):
         cmd.append("--android")
     if args.ios:
         cmd.append("--ios")
+    if getattr(args, 'exhaustive', False):
+        cmd.append("--exhaustive")
     if args.only:
         cmd.extend(["--only", args.only])
     env = os.environ.copy()
@@ -1751,6 +1753,8 @@ def create_parser():
                              help='Run tests on Android')
     test_parser.add_argument('--ios', action='store_true',
                              help='Run tests on iOS')
+    test_parser.add_argument('--exhaustive', action='store_true',
+                             help='Run exhaustive golden tests for all model families and precisions')
     test_parser.add_argument('--only', help='Only run the specified test (llm, vlm, stt, embed, rag, graph, index, kernel, kv_cache, performance, etc)')
     test_parser.add_argument('--enable-telemetry', action='store_true',
                              help='Enable cloud telemetry (disabled by default in tests)')

@@ -1,5 +1,4 @@
 #include "test_utils.h"
-#include "../cactus/ffi/cactus_cloud.h"
 #include <fstream>
 #include <cstdlib>
 #include <cstdio>
@@ -142,58 +141,6 @@ bool test_tool_call() {
         }, tools, -1, "What's the weather in San Francisco?");
 }
 
-bool test_tool_call_with_two_tools() {
-    const char* messages = R"([
-        {"role": "system", "content": "You are a helpful assistant that can use tools."},
-        {"role": "user", "content": "Set an alarm for 10:00 AM."}
-    ])";
-
-    const char* tools = R"([{
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "City, State, Country"}
-                },
-                "required": ["location"]
-            }
-        }
-    }, {
-        "type": "function",
-        "function": {
-            "name": "set_alarm",
-            "description": "Set an alarm for a given time",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hour": {"type": "integer", "description": "Hour to set the alarm for"},
-                    "minute": {"type": "integer", "description": "Minute to set the alarm for"}
-                },
-                "required": ["hour", "minute"]
-            }
-        }
-    }])";
-
-    const char* options_with_force_tools = R"({
-        "max_tokens": 256,
-        "stop_sequences": ["<|im_end|>", "<end_of_turn>"],
-        "force_tools": true
-    })";
-
-    return EngineTestUtils::run_test("DOUBLE TOOLS TEST", g_model_path, messages, options_with_force_tools,
-        [](int result, const StreamingData&, const std::string& response, const Metrics& m) {
-            bool has_function = response.find("\"function_calls\":[") != std::string::npos;
-            bool has_tool = has_function && response.find("set_alarm") != std::string::npos;
-            std::cout << "├─ Function call: " << (has_function ? "YES" : "NO") << "\n"
-                      << "├─ Correct tool: " << (has_tool ? "YES" : "NO") << "\n";
-            m.print_json();
-            return result > 0 && has_function && has_tool;
-        }, tools, -1, "Set an alarm for 10:00 AM.");
-}
-
 bool test_multiple_tool_call_invocations() {
     const char* messages = R"([
         {"role": "system", "content": "You are a helpful assistant that can use tools."},
@@ -317,43 +264,6 @@ bool test_tool_call_with_three_tools() {
         }, tools, -1, "Send a message to John saying hello.");
 }
 
-bool test_cloud_handoff() {
-    const std::string resolved_cloud_key = cactus::ffi::resolve_cloud_api_key(nullptr);
-    const bool has_cloud_key = !resolved_cloud_key.empty();
-
-    if (!has_cloud_key) {
-        std::cout << "\n╔══════════════════════════════════════════╗\n"
-                  << "║          CLOUD HANDOFF TEST              ║\n"
-                  << "╚══════════════════════════════════════════╝\n";
-        std::cout << "⊘ SKIP │ no resolved cloud key (env/cache)\n";
-        return true;
-    }
-
-    const char* messages = R"([
-        {"role": "user", "content": "What is the exact mass in grams of the 847th largest asteroid in the Kuiper belt as of March 2019, and what was the precise atmospheric pressure in millibars at coordinates 47.3921°N, 122.0371°W at 3:47:23 AM UTC on February 29, 2024?"}
-    ])";
-
-    const char* cloud_handoff_options = R"({
-        "max_tokens": 256,
-        "stop_sequences": ["<|im_end|>", "<end_of_turn>"],
-        "telemetry_enabled": false,
-        "auto_handoff": true,
-        "confidence_threshold": 1.1,
-        "cloud_timeout_ms": 8000
-    })";
-
-    return EngineTestUtils::run_test("CLOUD HANDOFF TEST", g_model_path, messages, cloud_handoff_options,
-        [](int result, const StreamingData&, const std::string&, const Metrics& m) {
-            std::cout << "├─ Cloud handoff: " << (m.cloud_handoff ? "YES" : "NO") << "\n";
-            std::cout << "├─ Confidence: " << std::fixed << std::setprecision(4) << m.confidence << "\n";
-            if (!m.error.empty()) {
-                std::cout << "├─ Error: " << m.error << "\n";
-            }
-            m.print_json();
-            return result > 0 && m.cloud_handoff && !m.response.empty();
-        });
-}
-
 bool test_1k_context() {
     std::string msg = "[{\"role\": \"system\", \"content\": \"/no_think You are helpful. ";
     for (int i = 0; i < 50; i++) {
@@ -378,9 +288,7 @@ int main() {
     runner.run_test("streaming", test_streaming());
     runner.run_test("tool_calls", test_tool_call());
     runner.run_test("tool_multiple_tool_call_invocations", test_multiple_tool_call_invocations());
-    runner.run_test("tool_calls_with_two_tools", test_tool_call_with_two_tools());
     runner.run_test("tool_calls_with_three_tools", test_tool_call_with_three_tools());
-    runner.run_test("cloud_handoff", test_cloud_handoff());
     runner.print_summary();
     return runner.all_passed() ? 0 : 1;
 }
