@@ -12,17 +12,17 @@
 A low-latency energy-efficient AI engine for mobile devices & wearables, combining on-device and cloud fallback.
 
 ```
-┌─────────────────┐     Energy-efficient inference engine for running AI on mobile devices 
-│  Cactus Engine  │ ←── OpenAI compatible APIs for C/C++, Swift, Kotlin, Flutter & React-Native
-└─────────────────┘     Supports tool call, auto RAG, NPU, INT4, and cloud handoff for complex tasks
+┌─────────────────┐
+│  Cactus Engine  │ ←── OpenAI-compatible APIs for all major languages
+└─────────────────┘     Chat, vision, STT, RAG, tool call, cloud handoff
          │
-┌─────────────────┐     Zero-copy computation graph, think PyTorch for mobile devices
-│  Cactus Graph   │ ←── You can implement custom models directly using this
-└─────────────────┘     Highly optimised for RAM & lossless weight quantisation 
+┌─────────────────┐
+│  Cactus Graph   │ ←── Zero-copy computation graph (PyTorch for mobile)
+└─────────────────┘     Custom models, optimised for RAM & quantisation
          │
-┌─────────────────┐     Low-level ARM-specific SIMD kernels (Apple, Snapdragon, Google, Exynos, MediaTek & Raspberry Pi)
-│ Cactus Kernels  │ ←── Optimised Matrix Multiplication & n
-└─────────────────┘     Custom attention kernels with KV-Cache Quantisation, chunked prefill, streaming LLM, etc.
+┌─────────────────┐
+│ Cactus Kernels  │ ←── ARM SIMD kernels (Apple, Snapdragon, Exynos, etc)
+└─────────────────┘     Custom attention, KV-cache quant, chunked prefill
 ```
 
 ## Quick Demo 
@@ -156,64 +156,64 @@ graph.hard_reset();
 ## Using this repo
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                                 │
-│ Step 0: if running on Linux (Ubuntu/Debian)                                                     │
-│ sudo apt-get install python3 python3-venv python3-pip cmake build-essential libcurl4-openssl-dev│
-│                                                                                                 │
-│ Step 1: else, only run this                                                                     │
-│ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setup               │
-│                                                                                                 │
-│ Step 3: use the commands for dev                                                                │
-│-------------------------------------------------------------------------------------------------│
-│-------------------------------------------------------------------------------------------------│
-│                                                                                                 │
-│  cactus auth                              manage Cactus Cloud API key                           │
-│    --status                               show key status without prompting                     │
-│    --clear                                remove the saved API key                              │
-│                                                                                                 │
-│  cactus run <model>                       opens playground (auto downloads and spins up)        │
-│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
-│    --token <token>                        HF token (for gated models)                           │
-│    --reconvert                            force weights reconversion from source                │
-│                                                                                                 │
-│  cactus transcribe [model]                live microphone transcription (default: parakeet-1.1b)│
-│    --file <audio.wav>                     transcribe audio file instead of mic                  │
-│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
-│    --token <token>                        HF token (for gated models)                           │
-│    --reconvert                            force weights reconversion from source                │
-│                                                                                                 │
-│  cactus download <model>                  downloads model to ./weights                          │
-│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
-│    --token <token>                        HuggingFace API token                                 │
-│    --reconvert                            force weights reconversion from source                │
-│                                                                                                 │
-│  cactus convert <model> [output_dir]      converts model, supports LoRA merging                 │
-│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
-│    --lora <path>                          LoRA adapter path to merge                            │
-│    --token <token>                        HuggingFace API token                                 │
-│                                                                                                 │
-│  cactus build                             builds cactus for ARM chips → build/libcactus.a       │
-│    --apple                                build for Apple (iOS/macOS)                           │
-│    --android                              build for Android                                     │
-│    --flutter                              build for Flutter (all platforms)                     │
-│    --python                               build shared lib for Python FFI                       │
-│                                                                                                 │
-│  cactus test                              runs unit tests and benchmarks                        │
-│    --model <model>                        default: LFM2-VL-450M                                 │
-│    --transcribe_model <model>             default: UsefulSensors/moonshine-base                 │
-│    --benchmark                            use larger models for benchmarking                    │
-│    --precision INT4|INT8|FP16             regenerates weights with precision                    │
-│    --reconvert                            force weights reconversion from source                │
-│    --no-rebuild                           skip building library and tests                       │
-│    --only <test_name>                     run specific test (llm, vlm, stt, embed, rag, etc)    │
-│    --ios                                  run on connected iPhone                               │
-│    --android                              run on connected Android                              │
-│                                                                                                 │
-│  cactus clean                             removes all build artifacts                           │
-│  cactus --help                            shows all commands and flags                          │
-│                                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│ Step 0: if on Linux (Ubuntu/Debian)                                          │
+│ sudo apt-get install python3 python3-venv python3-pip cmake build-essential  │
+│                                                                              │
+│ Step 1: clone and setup                                                      │
+│ git clone https://github.com/cactus-compute/cactus && cd cactus              │
+│ source ./setup                                                               │
+│                                                                              │
+│ Step 2: use the commands                                                     │
+│──────────────────────────────────────────────────────────────────────────────│
+│                                                                              │
+│  cactus auth                         manage Cloud API key                    │
+│    --status                          show key status                         │
+│    --clear                           remove saved key                        │
+│                                                                              │
+│  cactus run <model>                  opens playground (auto downloads)       │
+│    --precision INT4|INT8|FP16        quantization (default: INT4)            │
+│    --token <token>                   HF token (gated models)                 │
+│    --reconvert                       force reconversion from source          │
+│                                                                              │
+│  cactus transcribe [model]           live mic transcription (parakeet-1.1b)  │
+│    --file <audio.wav>                transcribe file instead of mic          │
+│    --precision INT4|INT8|FP16        quantization (default: INT4)            │
+│    --token <token>                   HF token (gated models)                 │
+│    --reconvert                       force reconversion from source          │
+│                                                                              │
+│  cactus download <model>             downloads model to ./weights            │
+│    --precision INT4|INT8|FP16        quantization (default: INT4)            │
+│    --token <token>                   HuggingFace API token                   │
+│    --reconvert                       force reconversion from source          │
+│                                                                              │
+│  cactus convert <model> [dir]        convert model, supports LoRA merge      │
+│    --precision INT4|INT8|FP16        quantization (default: INT4)            │
+│    --lora <path>                     LoRA adapter to merge                   │
+│    --token <token>                   HuggingFace API token                   │
+│                                                                              │
+│  cactus build                        build for ARM → build/libcactus.a       │
+│    --apple                           Apple (iOS/macOS)                       │
+│    --android                         Android                                 │
+│    --flutter                         Flutter (all platforms)                 │
+│    --python                          shared lib for Python FFI               │
+│                                                                              │
+│  cactus test                         run unit tests and benchmarks           │
+│    --model <model>                   default: LFM2-VL-450M                   │
+│    --transcribe_model <model>        default: moonshine-base                 │
+│    --benchmark                       use larger models                       │
+│    --precision INT4|INT8|FP16        regenerate weights with precision       │
+│    --reconvert                       force reconversion from source          │
+│    --no-rebuild                      skip building library                   │
+│    --only <test>                     specific test (llm, vlm, stt, etc)      │
+│    --ios                             run on connected iPhone                 │
+│    --android                         run on connected Android                │
+│                                                                              │
+│  cactus clean                        remove all build artifacts              │
+│  cactus --help                       show all commands and flags             │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 ## Maintaining Organisations
 
