@@ -23,18 +23,18 @@ theme:
     - content.tabs.link
     - toc.follow
   palette:
-    - scheme: default
-      primary: green
-      accent: light green
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
     - scheme: slate
       primary: green
       accent: light green
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -65,7 +65,7 @@ extra:
 nav:
   - Home: index.md
   - Getting Started:
-    - Overview: README.md
+    - Overview: overview.md
     - Runtime Compatibility: docs/compatibility.md
     - Contributing: CONTRIBUTING.md
   - Core APIs:
