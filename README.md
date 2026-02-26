@@ -200,7 +200,7 @@ Completed:
 - Sep 2025: Launched Cactus Kernel, Graph & Engine, raised more funding
 - Oct 2025: Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill)
 - Nov 2025: Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed)
-- Dec 2025: Cactus team expands from original authour to +6 Research Engineers 
+- Dec 2025: Cactus team expands from original author to +6 Research Engineers 
 - Jan 2026: Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) 
 - Feb 2026: Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) 
 
