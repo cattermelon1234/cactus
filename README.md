@@ -140,20 +140,19 @@ graph.hard_reset();
 
 | Date | Status | Milestone |
 |------|--------|-----------|
-| Jul 2025 | Completed | Got funding from YC & Oxford, launched, started building |
-| Sep 2025 | Completed | Launched Cactus Kernel, Graph & Engine, raised more funding |
-| Oct 2025 | Completed | Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill) |
-| Nov 2025 | Completed | Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed) |
-| Dec 2025 | Completed | Cactus team expands from original author to +6 Research Engineers |
-| Jan 2026 | Completed | Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) |
-| Feb 2026 | Completed | Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) |
-| Mar 2026 | Planned | Qualcomm/Gooogle NPUs, optimise Android (5-11x less Qualcomm/Pixel latency) |
-| Apr 2026 | Planned | Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) |
-| May 2026 | Planned | Rewrite: Kernel→C++, Graph/Engine→Rust, Mac GPU & VR |
-| Jun 2026 | Planned | Transpilers for porting custom models from Torch/Jax |
-| Jul 2026 | Planned | Aggressive optimisations to run directly on wearables, Cactus@ICML |
-| Aug 2026 | Planned | Orchestration, orchestration, orchestration |
-| Sep 2026 | Planned | 1yr post-release, publish full Cactus paper, partner with chip manufacturers |
+| Sep 2025 | Done | Released v1 |
+| Oct 2025 | Done | Chunked prefill, KVCache Quant (2x prefill) |
+| Nov 2025 | Done | Cactus Attention (10 & 1k prefill = same decode) |
+| Dec 2025 | Done | Team grows to +6 Research Engineers |
+| Jan 2026 | Done | Apple NPU/RAM, 5-11x faster iOS/Mac |
+| Feb 2026 | Done | Hybrid inference, INT4, lossless Quant (1.5x) |
+| Mar 2026 | Coming | Qualcomm/Google NPUs, 5-11x faster Android |
+| Apr 2026 | Coming | Mediatek/Exynos NPUs, Cactus@ICLR |
+| May 2026 | Coming | Kernel→C++, Graph/Engine→Rust, Mac GPU & VR |
+| Jun 2026 | Coming | Torch/JAX model transpilers |
+| Jul 2026 | Coming | Wearable optimisations, Cactus@ICML |
+| Aug 2026 | Coming | Orchestration |
+| Sep 2026 | Coming | Full Cactus paper, chip manufacturer partners |
 
 ## Using this repo
 
