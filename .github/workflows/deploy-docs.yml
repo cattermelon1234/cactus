@@ -1,0 +1,53 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install "mkdocs<2" mkdocs-material
+
+      - name: Assemble docs directory
+        run: |
+          mkdir -p site_docs
+
+          # Home page
+          cp docs/index.md site_docs/index.md
+
+          # README as overview
+          cp README.md site_docs/README.md
+
+          # Core docs
+          cp -r docs site_docs/docs
+
+          # Supporting files
+          cp CONTRIBUTING.md site_docs/CONTRIBUTING.md
+
+          # SDK READMEs
+          mkdir -p site_docs/python site_docs/apple site_docs/android site_docs/flutter site_docs/rust
+          cp python/README.md site_docs/python/README.md
+          cp apple/README.md site_docs/apple/README.md
+          cp android/README.md site_docs/android/README.md
+          cp flutter/README.md site_docs/flutter/README.md
+          cp rust/README.md site_docs/rust/README.md
+
+          # Blog
+          cp -r blog site_docs/blog
+
+          # Assets (images, banner)
+          cp -r assets site_docs/assets
+
+      - run: mkdocs gh-deploy --force
