@@ -105,7 +105,7 @@ graph.hard_reset();
 | Pixel 6a (Budget Google Tensor) | 70tps/15tps (1GB RAM)| -/15tps (1.5GB RAM) | - /17k+tps (1GB RAM)|
 | Galaxy A17 5G (Budget Exxynox) | 32tps/10tps (727MB RAM) | -/11tps (727MB RAM) | -/40k+tps (809MB RAM) |
 | CMF Phone 2 Pro (Budget Mediatek) | - | - | - |
-| Raspberry Pi 5 (IoT) | - | - | - |
+| Raspberry Pi 5 (IoT) | 69tps/11tps (869MB RAM) | 13.3s/11tps (2.1GB RAM) | 4.5s/180k+tps (1.9GB RAM) |
 
 ## Supported Models                                                                                                                                                     
                                                                                                                                                                           
