@@ -209,7 +209,9 @@ def cmd_download(args):
     from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
 
     import logging
-    logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    import transformers
+    transformers.logging.set_verbosity_error()
 
     def _download_config_json(repo_id):
         from huggingface_hub import hf_hub_download

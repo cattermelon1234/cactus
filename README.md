@@ -177,6 +177,7 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 - [Android Demo](https://play.google.com/store/apps/details?id=com.rshemetsubuser.myapp)
 
 ## Maintaining Organisations
+
 Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with maintenance from:
 
 1. [UCLA's BruinAI](https://bruinai.org/) 
@@ -189,6 +190,24 @@ Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with m
 8. [University of Michigan Ann-Arbor MSAIL](https://msail.github.io/)
 9. [University of Colorado Boulder's AI Club](https://www.cuaiclub.org/)
 
+## Roadmap
+
+- Jul 2026: Got funding from YC & Oxford, launched, started building 
+- Sep 2025: Launched Cactus Kernel, Graph & Engine, raised more funding
+- Oct 2025: Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill)
+- Nov 2025: Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed)
+- Dec 2025: Cactus team expands from original authour to +6 Research Engineers () 
+- Jan 2026: Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) 
+- Feb 2026: Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) 
+-----
+- Mar 2026: Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) 
+- Apr 2026: Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) 
+- May 2026: Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets
+- Jun 2026: Transpilers for porting custom models from Torch/Jax
+- Jul 2026: Aggressive optimisations to run directly on wearables, Cactus@ICML 
+- Aug 2026: Orchestration, orchestration, orchestration. 
+- Sep 2026: 1yr post-release, release the full Cactus paper.
+
 ## Contributing to Cactus
 
 - **C++ Standard**: Use C++20 features where appropriate.
@@ -200,7 +219,7 @@ Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with m
 - **Benchmark Your Changes**: Test performance impact, Cactus is performance-critical.
 - **Test everything**: A PR that fails to build is the biggest red flag, means it was not tested. 
 
-## Citation
+## Citation 
 
 If you use Cactus in your research, please cite it as follows:
 
