@@ -792,3 +792,126 @@ def cactus_index_compact(index):
 def cactus_index_destroy(index):
     """Free index resources. Always call when done."""
     _lib.cactus_index_destroy(index)
+
+
+class CactusModel:
+    """Context manager for safe model lifecycle management.
+
+    Usage:
+        with CactusModel("weights/model") as model:
+            response = model.complete(messages)
+        # cactus_destroy called automatically, even on errors
+    """
+
+    def __init__(self, model_path, corpus_dir=None, cache_index=False):
+        self._handle = cactus_init(model_path, corpus_dir, cache_index)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.destroy()
+        return False
+
+    def _require_handle(self):
+        if self._handle is None:
+            raise RuntimeError("Model has been destroyed")
+
+    def destroy(self):
+        if self._handle is not None:
+            cactus_destroy(self._handle)
+            self._handle = None
+
+    def complete(self, messages, **kwargs):
+        self._require_handle()
+        return cactus_complete(self._handle, messages, **kwargs)
+
+    def transcribe(self, audio_path, prompt="", callback=None):
+        self._require_handle()
+        return cactus_transcribe(self._handle, audio_path, prompt, callback)
+
+    def embed(self, text, normalize=False):
+        self._require_handle()
+        return cactus_embed(self._handle, text, normalize)
+
+    def image_embed(self, image_path):
+        self._require_handle()
+        return cactus_image_embed(self._handle, image_path)
+
+    def audio_embed(self, audio_path):
+        self._require_handle()
+        return cactus_audio_embed(self._handle, audio_path)
+
+    def vad(self, audio_path=None, pcm_data=None, options=None):
+        self._require_handle()
+        return cactus_vad(self._handle, audio_path, pcm_data, options)
+
+    def reset(self):
+        self._require_handle()
+        cactus_reset(self._handle)
+
+    def stop(self):
+        self._require_handle()
+        cactus_stop(self._handle)
+
+    def tokenize(self, text):
+        self._require_handle()
+        return cactus_tokenize(self._handle, text)
+
+    def score_window(self, tokens, start, end, context):
+        self._require_handle()
+        return cactus_score_window(self._handle, tokens, start, end, context)
+
+    def rag_query(self, query, top_k=5):
+        self._require_handle()
+        return cactus_rag_query(self._handle, query, top_k)
+
+    def stream_transcribe_start(self, options=None, language="en"):
+        self._require_handle()
+        return cactus_stream_transcribe_start(self._handle, options, language)
+
+
+class CactusIndex:
+    """Context manager for safe vector index lifecycle management.
+
+    Usage:
+        with CactusIndex("/path/to/index", embedding_dim=384) as index:
+            index.add(ids, documents, embeddings)
+            results = index.query(embedding)
+        # cactus_index_destroy called automatically, even on errors
+    """
+
+    def __init__(self, index_dir, embedding_dim):
+        self._handle = cactus_index_init(index_dir, embedding_dim)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.destroy()
+        return False
+
+    def _require_handle(self):
+        if self._handle is None:
+            raise RuntimeError("Index has been destroyed")
+
+    def destroy(self):
+        if self._handle is not None:
+            cactus_index_destroy(self._handle)
+            self._handle = None
+
+    def add(self, ids, documents, embeddings, metadatas=None):
+        self._require_handle()
+        return cactus_index_add(self._handle, ids, documents, embeddings, metadatas)
+
+    def delete(self, ids):
+        self._require_handle()
+        return cactus_index_delete(self._handle, ids)
+
+    def query(self, embedding, top_k=5, options=None):
+        self._require_handle()
+        return cactus_index_query(self._handle, embedding, top_k, options)
+
+    def compact(self):
+        self._require_handle()
+        return cactus_index_compact(self._handle)
