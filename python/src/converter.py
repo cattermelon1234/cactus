@@ -28,38 +28,38 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     quantization_stats = create_quantization_stats()
 
     state_dict = model.state_dict()
-    config = model.config
+    root_config = model.config
     saved_tensor_full_names = set()
 
-    text_cfg = cfg_get(config, 'text_config', None)
-    vision_cfg = cfg_get(config, 'vision_config', None)
-    is_vlm = text_cfg is not None or vision_cfg is not None
+    text_config = cfg_get(root_config, 'text_config', None)
+    vision_config = cfg_get(root_config, 'vision_config', None)
+    is_vlm = text_config is not None or vision_config is not None
 
-    cfg = text_cfg if text_cfg is not None else config
+    config = text_config if text_config is not None else root_config
 
-    model_type_str = cfg_get(cfg, 'model_type', cfg_get(config, 'model_type', '')).lower()
-    tie_word_embeddings = cfg_get(config, 'tie_word_embeddings', None)
+    model_type_str = cfg_get(config, 'model_type', cfg_get(root_config, 'model_type', '')).lower()
+    tie_word_embeddings = cfg_get(config, 'tie_word_embeddings', cfg_get(root_config, 'tie_word_embeddings', None))
     if tie_word_embeddings is None:
         # HF snapshots for lfm2_moe may omit this field; runtime expects tied embeddings by default.
         tie_word_embeddings = (model_type_str == 'lfm2_moe')
     else:
         tie_word_embeddings = bool(tie_word_embeddings)
 
-    detected_model_type = detect_model_type(cfg, config, output_dir)
+    detected_model_type = detect_model_type(config, root_config, output_dir)
 
-    model_config = extract_base_config(cfg, config)
+    model_config = extract_base_config(config, root_config)
     model_config['tie_word_embeddings'] = tie_word_embeddings
     model_config['model_type'] = detected_model_type
 
-    if is_vlm and vision_cfg is not None:
-        model_config.update(extract_vision_config(config, vision_cfg))
+    if is_vlm and vision_config is not None:
+        model_config.update(extract_vision_config(root_config, vision_config))
 
     if detected_model_type == 'lfm2':
-        model_config.update(extract_lfm2_config(cfg))
+        model_config.update(extract_lfm2_config(config))
     elif detected_model_type == 'moonshine':
-        model_config.update(extract_moonshine_config(cfg))
+        model_config.update(extract_moonshine_config(config))
     elif detected_model_type == 'parakeet':
-        encoder_cfg = cfg_get(cfg, 'encoder_config', None)
+        encoder_cfg = cfg_get(config, 'encoder_config', None)
         if encoder_cfg is None:
             raise ValueError("Parakeet conversion requires encoder_config in model config")
 
@@ -76,7 +76,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
             rope_theta = 0.0
 
         model_config.update({
-            'vocab_size': int(cfg_get(cfg, 'vocab_size', cfg_get(config, 'vocab_size', 0))),
+            'vocab_size': int(cfg_get(config, 'vocab_size', cfg_get(root_config, 'vocab_size', 0))),
             'hidden_dim': hidden_dim,
             'num_layers': num_layers,
             'attention_heads': attention_heads,
@@ -92,7 +92,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
             'subsampling_conv_channels': int(cfg_get(encoder_cfg, 'subsampling_conv_channels', 256)),
             'subsampling_factor': int(cfg_get(encoder_cfg, 'subsampling_factor', 8)),
             'num_mel_bins': int(cfg_get(encoder_cfg, 'num_mel_bins', 80)),
-            'pad_token_id': int(cfg_get(cfg, 'pad_token_id', cfg_get(config, 'pad_token_id', 0))),
+            'pad_token_id': int(cfg_get(config, 'pad_token_id', cfg_get(root_config, 'pad_token_id', 0))),
             'encoder_hidden_act': cfg_get(encoder_cfg, 'hidden_act', 'silu'),
         })
 
@@ -133,10 +133,10 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                 save_tensor_with_header(tensor, output_dir / save_name, precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                 saved_tensor_full_names.add(name)
         embedding_found = True
-        model_config['dec_hidden_act'] = cfg.decoder_hidden_act
-        model_config['enc_hidden_act'] = cfg.encoder_hidden_act
-        model_config['num_encoder_layers'] = cfg.encoder_num_hidden_layers
-        model_config['num_decoder_layers'] = cfg.decoder_num_hidden_layers
+        model_config['dec_hidden_act'] = config.decoder_hidden_act
+        model_config['enc_hidden_act'] = config.encoder_hidden_act
+        model_config['num_encoder_layers'] = config.encoder_num_hidden_layers
+        model_config['num_decoder_layers'] = config.decoder_num_hidden_layers
 
     if embedding_found:
         embedding_norm_names = {'emb_ln.weight': 'embedding_layernorm.weight', 'emb_ln.bias': 'embedding_layernorm.bias'}
@@ -145,7 +145,20 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                 save_tensor_with_header(state_dict[name], output_dir / file_name, precision, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
                 saved_tensor_full_names.add(name)
 
-    if not tie_word_embeddings or is_vlm:
+    if tie_word_embeddings:
+        src = output_dir / "token_embeddings.weights"
+        dst = output_dir / "output_weight.weights"
+        if src.exists():
+            if dst.exists():
+                dst.unlink()
+            os.link(src, dst)
+        else:
+            print(f"Warning: tie_word_embeddings is True but {src} not found")
+        if embedding_found:
+            for name in OUTPUT_NAMES:
+                if name in state_dict:
+                    saved_tensor_full_names.add(name)
+    else:
         for name in OUTPUT_NAMES:
             if name in state_dict:
                 tensor = state_dict[name]
