@@ -22,8 +22,8 @@ Cactus is an energy-efficient AI inference engine for running LLMs, vision model
 
 ## Quick Demo 
 
-Step 1: `brew install cactus-compute/cactus/cactus`
-Step 2: `cactus transcribe` or `cactus run` 
+- Step 1: `brew install cactus-compute/cactus/cactus`
+- Step 2: `cactus transcribe` or `cactus run` 
 
 ## Cactus Engine
 
