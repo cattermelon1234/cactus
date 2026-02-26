@@ -92,28 +92,22 @@ void* output_data = graph.get_output(result);
 graph.hard_reset(); 
 ```
 
-## Benchmark 
+## Benchmark (missing latency = no NPU support yet)
 
 **High-End Devices**
-| Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Whisper-Small-244-INT8<br>(30s-audio-Latency & Decode)
+| Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Parakeet-1.1B-INT4<br>(30s-audio-Latency & Decode)
 |--------|--------|--------|----------|
-| Mac M4 Pro | 582tps/100tps (76MB RAM) | 0.2s/98tps (87MB RAM) | 0.1s/119tps (73MB RAM) |
-| iPad/Mac M4 | 379tps/66tps (30MB RAM) | 0.2s/76tps (53MB RAM) | 0.2s/100tp (122MB RAM) |
-| iPad/Mac M3 | 350tps/60tps (70MB RAM) | 0.3s/69tps (80MB RAM) | 0.3s/107tps (102MB RAM) |
-| iPad/Mac M2 | 315tps/58tps (181MB RAM) | 0.3s/58tps (426MB RAM) | 0.3s/86tps (160MB RAM) |
-| iPhone 17 Pro  | 327tps/48tps (108MB RAM)| 0.3s/48tps (156MB RAM) | 0.3s/114tps (177MB RAM)|
-| Galaxy S25 Ultra | 255tps/37tps (1.2GB RAM) | 2.6s/34tps (2GB RAM) | 2.3s/90tps (363MB RAM) |
+| Mac M4 Pro (Highend) | 582tps/100tps (76MB RAM) | 0.2s/98tps (87MB RAM) | 0.1s/900k+tps (1GB RAM) |
+| iPad/Mac M3 (Budget) | 350tps/60tps (70MB RAM) | 0.3s/69tps (80MB RAM) | 0.3s/800k+tps (102MB RAM) |
+| iPhone 17 Pro (Highend) | 327tps/48tps (108MB RAM)| 0.3s/48tps (156MB RAM) | 0.3s/300k+tps (177MB RAM)|
+| iPhone 13 Mini (Budget) | 148tps/34tps (1GB RAM) | 0.3s/35tps (1.2GBMB RAM) | 0.7s/90k+tps (1GB RAM) |
+| Galaxy S25 Ultra (Qualcomm 8 Elite) | 255tps/37tps (1.5GB RAM) | -/34tps (2GB RAM) | -/250k+tps (1.8GBG RAM) |
+| Pixel 6a (Budget Google Tensor) | 70tps/15tps (1GB RAM)| -/15tps (1.5GB RAM) | - /17k+tps (1GB RAM)|
+| Galaxy A17 5G (Budget Exxynox) | 32tps/10tps (727MB RAM) | -/11tps (727MB RAM) | -/40k+tps (809MB RAM) |
+| CMF Phone 2 Pro (Budget Mediatek) | - | - | - |
+| Raspberry Pi 5 (IoT) | - | - | - |
 
-**Budget Devices**
-| Device | LFM2-350m-INT4<br>(1k-Prefill/100-Decode) | LFM2-VL-450m-INT4<br>(256px-Latency & Decode) | Moonshine-Base-67m-INT8<br>(30s-audio-Latency & Decode)
-|--------|--------|--------|----------|
-| iPhone 13 Mini (Apple A15) | 516tps/65tps (29MB RAM) | 0.3s/69tps (20MB RAM) | 0.7s/413tps (10MB RAM) |
-| Pixel 6a (Google Tensor G1) | 218tps/44tps (395MB RAM)| 2.5s/36tps (631MB RAM) | 1.5s/189tps (111MB RAM)|
-| Galaxy A17 5G (Exxynox 1330) | 87tps/24tps (395MB RAM) | 4.1s/20tps (619MB RAM) | 4.2s/90tps (103MB RAM) |
-| CMF Phone 2 Pro (Mediatek Dimensity 7300) | 146tps/21tps (394MB RAM) | 2.4s/22tps (632MB RAM) | 1.9s/119tps (112MB RAM) |
-| Raspberry Pi 5 | 205tps/27tps (373MB RAM) | 3.4s/31tps (657MB RAM) | 1.7s/118tps (214MB RAM) |
-
- ## Supported Models                                                                                                                                                     
+## Supported Models                                                                                                                                                     
                                                                                                                                                                           
 | Model | Features |                                                                                                                                             
 |-------|----------|                                                                                                                                             
@@ -151,7 +145,6 @@ sudo apt-get install python3 python3-venv python3-pip cmake build-essential libc
 git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setup
 ```
 
-
 | Command | Description |
 |---------|-------------|
 | `cactus auth` | Setup Cactus cloud fallback (optional) (`--status`, `--clear`) |
@@ -163,6 +156,11 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 | `cactus transcribe [model]` | Transcribe audio file (`--file`) or live microphone |
 | `cactus clean` | Removes build artifacts |
 | `cactus --help` | Shows all commands and flags (always run this) |
+
+- Reproduce reported benchmarks with `cactus test --benchmark`
+- Plug in any mobule device and add the `--ios` or `--android` flag.
+- Mobile devices must be in developer mode.
+
 
 ## Using in your apps 
 

@@ -516,7 +516,7 @@ static void compute_spectrogram_f32(
     if (center) {
         size_t pad_length = frame_length / 2;
         size_t padded_length = waveform_length + 2 * pad_length;
-        padded_waveform.resize(padded_length);
+        padded_waveform.assign(padded_length, 0.0f);
 
         if (std::strcmp(pad_mode, "reflect") == 0) {
             for (size_t i = 0; i < pad_length; i++) {
@@ -528,6 +528,8 @@ static void compute_spectrogram_f32(
             for (size_t i = 0; i < pad_length; i++) {
                 padded_waveform[pad_length + waveform_length + i] = waveform[waveform_length - 2 - i];
             }
+        } else if (std::strcmp(pad_mode, "constant") == 0) {
+            std::copy(waveform, waveform + waveform_length, padded_waveform.data() + pad_length);
         } else {
             throw std::invalid_argument("Unsupported pad_mode: " + std::string(pad_mode));
         }
@@ -682,18 +684,36 @@ std::vector<float> AudioProcessor::compute_spectrogram(
     }
 
     const size_t n_samples = waveform.size();
-    const size_t pad_length = config.center ? config.frame_length / 2 : 0;
+    const size_t analysis_frame_length = config.n_fft;
+    const size_t window_length = std::min(config.frame_length, analysis_frame_length);
+    const size_t pad_length = config.center ? analysis_frame_length / 2 : 0;
     const size_t padded_length = n_samples + 2 * pad_length;
-    const size_t num_frames = 1 + (padded_length - config.frame_length) / config.hop_length;
+    if (analysis_frame_length == 0 || padded_length < analysis_frame_length || config.hop_length == 0) {
+        return {};
+    }
+    const size_t num_frames = 1 + (padded_length - analysis_frame_length) / config.hop_length;
 
     std::vector<float> output(num_mel_filters_ * num_frames);
+    std::vector<float> window(analysis_frame_length, 0.0f);
+    if (window_length == 1) {
+        window[analysis_frame_length / 2] = 1.0f;
+    } else if (window_length > 1) {
+        const float denom = config.hann_periodic
+            ? static_cast<float>(window_length)
+            : static_cast<float>(window_length - 1);
+        const size_t left_pad = (analysis_frame_length - window_length) / 2;
+        for (size_t i = 0; i < window_length; ++i) {
+            const float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * static_cast<float>(i) / denom));
+            window[left_pad + i] = w;
+        }
+    }
 
     compute_spectrogram_f32(
         waveform.data(),
         waveform.size(),
-        nullptr,
-        0,
-        config.frame_length,
+        window.data(),
+        window.size(),
+        analysis_frame_length,
         config.hop_length,
         &config.n_fft,
         output.data(),
@@ -702,7 +722,7 @@ std::vector<float> AudioProcessor::compute_spectrogram(
         config.pad_mode,
         config.onesided,
         config.dither,
-        nullptr,
+        config.preemphasis != 0.0f ? &config.preemphasis : nullptr,
         mel_filters_.data(),
         mel_filters_.size(),
         config.mel_floor,

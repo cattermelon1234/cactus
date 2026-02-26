@@ -12,7 +12,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 DEFAULT_MODEL_ID = "LiquidAI/LFM2.5-1.2B-Instruct"
-DEFAULT_TEST_TRANSCRIBE_MODEL_ID = "openai/whisper-small"
+DEFAULT_TEST_TRANSCRIBE_MODEL_ID = "UsefulSensors/moonshine-base"
 
 RED = '\033[0;31m'
 GREEN = '\033[0;32m'
@@ -207,6 +207,9 @@ def cmd_download(args):
     print(f"Converting {model_id} to {precision}...")
 
     from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
+
+    import logging
+    logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
 
     def _download_config_json(repo_id):
         from huggingface_hub import hf_hub_download
@@ -845,7 +848,7 @@ def cmd_run(args):
     os.execv(str(chat_binary), [str(chat_binary), str(weights_dir)])
 
 
-DEFAULT_ASR_MODEL_ID = "openai/whisper-small"
+DEFAULT_ASR_MODEL_ID = "nvidia/parakeet-ctc-1.1b"
 
 def _pick_android_device_id(preferred_device=None):
     if preferred_device:
@@ -1238,9 +1241,9 @@ def cmd_test(args):
             "If tests fail unexpectedly, rerun with --reconvert."
         )
 
-    if getattr(args, 'large', False):
+    if getattr(args, 'benchmark', False):
         args.model = 'LiquidAI/LFM2.5-VL-1.6B'
-        args.transcribe_model = DEFAULT_TEST_TRANSCRIBE_MODEL_ID
+        args.transcribe_model = 'nvidia/parakeet-ctc-1.1b'
         print_color(BLUE, f"Using large models: {args.model}, {args.transcribe_model}, {args.vad_model}")
 
     if getattr(args, 'reconvert', False):
@@ -1562,19 +1565,19 @@ def create_parser():
   -----------------------------------------------------------------
 
   cactus transcribe [model]            live microphone transcription
-                                       default model: whisper-small
+                                       default model: parakeet-ctc-1.1b
 
     Optional flags:
     --file <audio.wav>                 transcribe audio file instead of mic
-    --precision INT4|INT8|FP16         default: INT8
+    --precision INT4|INT8|FP16         default: INT4
     --token <token>                    HF token (for gated models)
     --reconvert                        force model weights reconversion from source
 
     Examples:
     cactus transcribe                  live microphone transcription
     cactus transcribe --file audio.wav transcribe single file
-    cactus transcribe openai/whisper-small   use different model
-    cactus transcribe openai/whisper-small --file audio.wav
+    cactus transcribe nvidia/parakeet-ctc-1.1b   use different model
+    cactus transcribe nvidia/parakeet-ctc-1.1b --file audio.wav
 
    -----------------------------------------------------------------
 
@@ -1614,8 +1617,8 @@ def create_parser():
 
     Optional flags:
     --model <model>                    default: LFM2-VL-450M
-    --transcribe_model <model>         default: openai/whisper-small
-    --large                            use larger models (LFM2.5-VL-1.6B + openai/whisper-large)
+    --transcribe_model <model>         default: UsefulSensors/moonshine-base
+    --benchmark                        use larger models (LFM2.5-VL-1.6B + nvidia/parakeet-ctc-1.1b)
     --precision INT4|INT8|FP16         regenerates weights with precision
     --reconvert                        force model weights reconversion from source
     --no-rebuild                       skip building library and tests
@@ -1696,8 +1699,8 @@ def create_parser():
                                    help='Audio file to transcribe (WAV format). Omit for live microphone.')
     transcribe_parser.add_argument('--language', default='en',
                                    help='Language code for transcription (default: en). Examples: es, fr, de, zh, ja')
-    transcribe_parser.add_argument('--precision', choices=['INT4', 'INT8', 'FP16'], default='INT8',
-                                   help='Quantization precision (default: INT8)')
+    transcribe_parser.add_argument('--precision', choices=['INT4', 'INT8', 'FP16'], default='INT4',
+                                   help='Quantization precision (default: INT4)')
     transcribe_parser.add_argument('--cache-dir', help='Cache directory for HuggingFace models')
     transcribe_parser.add_argument('--token', help='HuggingFace API token')
     transcribe_parser.add_argument('--no-cloud-tele', action='store_true',
@@ -1737,7 +1740,7 @@ def create_parser():
                              help='Transcribe model to use')
     test_parser.add_argument('--vad_model', default='snakers4/silero-vad',
                              help='VAD model to use')
-    test_parser.add_argument('--large', action='store_true',
+    test_parser.add_argument('--benchmark', action='store_true',
                              help='Use larger models (LFM2.5-VL-1.6B + nvidia/parakeet-ctc-1.1b)')
     test_parser.add_argument('--precision', choices=['INT4', 'INT8', 'FP16'],
                              help='Regenerate weights with this precision (deletes existing weights)')
