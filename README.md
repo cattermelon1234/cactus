@@ -94,7 +94,6 @@ graph.hard_reset();
 
 ## Benchmark (missing latency = no NPU support yet)
 
-**High-End Devices**
 | Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Parakeet-1.1B-INT4<br>(30s-audio-Latency & Decode)
 |--------|--------|--------|----------|
 | Mac M4 Pro (Highend) | 582tps/100tps (76MB RAM) | 0.2s/98tps (87MB RAM) | 0.1s/900k+tps (1GB RAM) |
@@ -192,23 +191,25 @@ Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with m
 
 ## Roadmap
 
+Completed:
 - Jul 2026: Got funding from YC & Oxford, launched, started building 
 - Sep 2025: Launched Cactus Kernel, Graph & Engine, raised more funding
 - Oct 2025: Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill)
 - Nov 2025: Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed)
-- Dec 2025: Cactus team expands from original authour to +6 Research Engineers () 
+- Dec 2025: Cactus team expands from original authour to +6 Research Engineers 
 - Jan 2026: Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) 
 - Feb 2026: Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) 
------
+
+Future: 
 - Mar 2026: Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) 
 - Apr 2026: Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) 
 - May 2026: Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets
-- Jun 2026: Transpilers for porting custom models from Torch/Jax
+- Jun 2026: Transpilers for porting custom models from Torch/Jax 
 - Jul 2026: Aggressive optimisations to run directly on wearables, Cactus@ICML 
 - Aug 2026: Orchestration, orchestration, orchestration. 
-- Sep 2026: 1yr post-release, release the full Cactus paper.
+- Sep 2026: 1yr post-release, publish full Cactus paper, partner with chip manufacturers.
 
-## Contributing to Cactus
+## Contributing to Cactus 
 
 - **C++ Standard**: Use C++20 features where appropriate.
 - **Formatting**: Follow the existing code style in the project, one header per folder.
