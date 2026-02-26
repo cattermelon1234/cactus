@@ -9,7 +9,7 @@
 [![Reddit][reddit-shield]][reddit-url]
 [![Blog][blog-shield]][blog-url]
 
-Cactus is an energy-efficient AI inference engine for running LLMs, vision models, and speech models on mobile devices, Macs, and ARM chips like Raspberry Pi. It provides OpenAI-compatible APIs for C/C++, Swift, Kotlin, Flutter, React Native, Python, and Rust with support for tool calling, auto-RAG, NPU acceleration, INT4 quantization, and cloud handoff for complex tasks. **Click the shields links**.
+A low-latency energy-efficient AI engine for mobile devices & wearables, combining on-device and cloud fallback.
 
 ```
 ┌─────────────────┐     Energy-efficient inference engine for running AI on mobile devices 
@@ -240,6 +240,8 @@ If you use Cactus in your research, please cite it as follows:
   year         = {2025}
 }
 ```
+
+**N/B:** Scroll all the way up and click the shields link for resources!
 
 [docs-shield]: https://img.shields.io/badge/Docs-555?style=for-the-badge&logo=readthedocs&logoColor=white
 [docs-url]: https://cactus-compute.github.io/cactus/
