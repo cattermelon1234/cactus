@@ -46,8 +46,13 @@ jobs:
           # Copy blog
           cp blog/*.md site_docs/blog/
 
-          # Build index.md with banner from docs/index.md
+          # Build index.md with frontmatter + banner from docs/index.md
           {
+            echo '---'
+            echo 'title: "Cactus Documentation"'
+            echo 'description: "Complete documentation index for Cactus, the energy-efficient AI inference engine for phones, wearables, Macs, and ARM devices."'
+            echo '---'
+            echo ''
             echo '<img src="assets/banner.jpg" alt="Cactus" style="border-radius: 16px; width: 100%; margin-bottom: 16px;">'
             echo ''
             cat docs/index.md

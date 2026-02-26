@@ -9,7 +9,6 @@ docs_dir: site_docs
 
 theme:
   name: material
-  logo: assets/logo.png
   favicon: assets/logo.png
   features:
     - navigation.tabs
@@ -24,14 +23,14 @@ theme:
     - toc.follow
   palette:
     - scheme: slate
-      primary: green
-      accent: light green
+      primary: black
+      accent: white
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
     - scheme: default
-      primary: green
-      accent: light green
+      primary: black
+      accent: black
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode

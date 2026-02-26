@@ -164,21 +164,6 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 - Plug in any mobule device and add the `--ios` or `--android` flag.
 - Mobile devices must be in developer mode.
 
-
-## Using in your apps 
-
-- [Python for Mac](/python/)
-- [Rust SDK](/rust/)
-- [React Native SDK](https://github.com/cactus-compute/cactus-react-native)
-- [Swift Multiplatform SDK](https://github.com/mhayes853/swift-cactus)
-- [Kotlin Multiplatform SDK](https://github.com/cactus-compute/cactus-kotlin)
-- [Flutter SDK](https://github.com/cactus-compute/cactus-flutter)
-
-## Try demo apps 
-
-- [iOS Demo](https://apps.apple.com/gb/app/cactus-chat/id6744444212)
-- [Android Demo](https://play.google.com/store/apps/details?id=com.rshemetsubuser.myapp)
-
 ## Maintaining Organisations
 
 Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with maintenance from:
@@ -226,5 +211,5 @@ If you use Cactus in your research, please cite it as follows:
 }
 ```
 
-## Join The Community
-- [Reddit Channel](https://www.reddit.com/r/cactuscompute/)
+## How To Use In Your Product 
+- [Read the Docs](https://cactus-compute.github.io/cactus/)

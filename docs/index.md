@@ -1,11 +1,3 @@
----
-title: "Cactus Documentation"
-description: "Complete documentation index for Cactus, the energy-efficient AI inference engine for phones, wearables, Macs, and ARM devices."
-keywords: ["Cactus", "documentation", "on-device AI", "mobile inference", "API reference", "SDK"]
----
-
-# Cactus Documentation
-
 Cactus is an energy-efficient AI inference engine for running LLMs, vision models, and speech models on mobile devices, Macs, and ARM chips like Raspberry Pi.
 
 ## Core API References
