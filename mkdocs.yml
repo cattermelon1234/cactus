@@ -79,5 +79,6 @@ nav:
     - Flutter: flutter/README.md
     - Rust: rust/README.md
   - Blog:
+    - All Posts: blog/README.md
     - Hybrid Transcription: blog/hybrid_transcription.md
     - "LFM2-24B on Mac": blog/lfm2_24b_a2b.md

@@ -265,4 +265,4 @@ If you use Cactus in your research, please cite it as follows:
 [reddit-url]: https://www.reddit.com/r/cactuscompute/
 
 [blog-shield]: https://img.shields.io/badge/Blog-555?style=for-the-badge&logo=hashnode&logoColor=white
-[blog-url]: https://github.com/cactus-compute/cactus/tree/main/blog
+[blog-url]: https://cactus-compute.github.io/cactus/blog/README/
