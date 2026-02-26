@@ -22,8 +22,8 @@ Cactus is an energy-efficient AI inference engine for running LLMs, vision model
 
 ## Quick Demo 
 
-`brew install cactus-compute/cactus/cactus`
-`cactus transcribe` or `cactus run` 
+Step 1: `brew install cactus-compute/cactus/cactus`
+Step 2: `cactus transcribe` or `cactus run` 
 
 ## Cactus Engine
 
@@ -162,52 +162,85 @@ Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with m
 
 ## Roadmap
 
-Completed:
-- Jul 2026: Got funding from YC & Oxford, launched, started building 
-- Sep 2025: Launched Cactus Kernel, Graph & Engine, raised more funding
-- Oct 2025: Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill)
-- Nov 2025: Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed)
-- Dec 2025: Cactus team expands from original author to +6 Research Engineers 
-- Jan 2026: Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) 
-- Feb 2026: Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) 
+| Date | Status | Milestone |
+|------|--------|-----------|
+| Jul 2025 | Completed | Got funding from YC & Oxford, launched, started building |
+| Sep 2025 | Completed | Launched Cactus Kernel, Graph & Engine, raised more funding |
+| Oct 2025 | Completed | Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill) |
+| Nov 2025 | Completed | Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed) |
+| Dec 2025 | Completed | Cactus team expands from original author to +6 Research Engineers |
+| Jan 2026 | Completed | Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) |
+| Feb 2026 | Completed | Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) |
+| Mar 2026 | Planned | Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) |
+| Apr 2026 | Planned | Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) |
+| May 2026 | Planned | Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets |
+| Jun 2026 | Planned | Transpilers for porting custom models from Torch/Jax |
+| Jul 2026 | Planned | Aggressive optimisations to run directly on wearables, Cactus@ICML |
+| Aug 2026 | Planned | Orchestration, orchestration, orchestration |
+| Sep 2026 | Planned | 1yr post-release, publish full Cactus paper, partner with chip manufacturers |
 
-Future: 
-- Mar 2026: Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) 
-- Apr 2026: Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) 
-- May 2026: Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets
-- Jun 2026: Transpilers for porting custom models from Torch/Jax 
-- Jul 2026: Aggressive optimisations to run directly on wearables, Cactus@ICML 
-- Aug 2026: Orchestration, orchestration, orchestration. 
-- Sep 2026: 1yr post-release, publish full Cactus paper, partner with chip manufacturers.
+## Using this repo
 
-## Using this repo on Mac
-```bash
-git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setup
 ```
-
-## Using this repo on Linux (Ubuntu/Debian)
-
-```bash
-sudo apt-get install python3 python3-venv python3-pip cmake build-essential libcurl4-openssl-dev
-git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setup
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                 │
+│ Step 0: if running on Linux (Ubuntu/Debian)                                                     │
+│ sudo apt-get install python3 python3-venv python3-pip cmake build-essential libcurl4-openssl-dev│
+│                                                                                                 │
+│ Step 1: else, only run this                                                                     │
+│ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setup               │
+│                                                                                                 │
+│ Step 3: use the commands for dev                                                                │
+│-------------------------------------------------------------------------------------------------│
+│-------------------------------------------------------------------------------------------------│
+│                                                                                                 │
+│  cactus auth                              manage Cactus Cloud API key                           │
+│    --status                               show key status without prompting                     │
+│    --clear                                remove the saved API key                              │
+│                                                                                                 │
+│  cactus run <model>                       opens playground (auto downloads and spins up)        │
+│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
+│    --token <token>                        HF token (for gated models)                           │
+│    --reconvert                            force weights reconversion from source                │
+│                                                                                                 │
+│  cactus transcribe [model]                live microphone transcription (default: parakeet-1.1b)│
+│    --file <audio.wav>                     transcribe audio file instead of mic                  │
+│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
+│    --token <token>                        HF token (for gated models)                           │
+│    --reconvert                            force weights reconversion from source                │
+│                                                                                                 │
+│  cactus download <model>                  downloads model to ./weights                          │
+│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
+│    --token <token>                        HuggingFace API token                                 │
+│    --reconvert                            force weights reconversion from source                │
+│                                                                                                 │
+│  cactus convert <model> [output_dir]      converts model, supports LoRA merging                 │
+│    --precision INT4|INT8|FP16             quantization (default: INT4)                          │
+│    --lora <path>                          LoRA adapter path to merge                            │
+│    --token <token>                        HuggingFace API token                                 │
+│                                                                                                 │
+│  cactus build                             builds cactus for ARM chips → build/libcactus.a       │
+│    --apple                                build for Apple (iOS/macOS)                           │
+│    --android                              build for Android                                     │
+│    --flutter                              build for Flutter (all platforms)                     │
+│    --python                               build shared lib for Python FFI                       │
+│                                                                                                 │
+│  cactus test                              runs unit tests and benchmarks                        │
+│    --model <model>                        default: LFM2-VL-450M                                 │
+│    --transcribe_model <model>             default: UsefulSensors/moonshine-base                 │
+│    --benchmark                            use larger models for benchmarking                    │
+│    --precision INT4|INT8|FP16             regenerates weights with precision                    │
+│    --reconvert                            force weights reconversion from source                │
+│    --no-rebuild                           skip building library and tests                       │
+│    --only <test_name>                     run specific test (llm, vlm, stt, embed, rag, etc)    │
+│    --ios                                  run on connected iPhone                               │
+│    --android                              run on connected Android                              │
+│                                                                                                 │
+│  cactus clean                             removes all build artifacts                           │
+│  cactus --help                            shows all commands and flags                          │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-| Command | Description |
-|---------|-------------|
-| `cactus auth` | Setup Cactus cloud fallback (optional) (`--status`, `--clear`) |
-| `cactus run [model]` | Opens playground (auto downloads model) |
-| `cactus download [model]` | Downloads model to `./weights` |
-| `cactus convert [model] [dir]` | Converts model, supports LoRA merging (`--lora <path>`) |
-| `cactus build` | Builds for ARM (`--apple` or `--android`) |
-| `cactus test` | Runs tests (`--ios` / `--android`, `--model [name/path]`, `--transcribe_model [name/path]`, `--only [test_name]`, `--precision`) |
-| `cactus transcribe [model]` | Transcribe audio file (`--file`) or live microphone |
-| `cactus clean` | Removes build artifacts |
-| `cactus --help` | Shows all commands and flags (always run this) |
-
-- Reproduce reported benchmarks with `cactus test --benchmark`
-- Plug in any mobule device and add the `--ios` or `--android` flag.
-- Mobile devices must be in developer mode.
-
 ## Blog
 
 | Post | Author | Description |
