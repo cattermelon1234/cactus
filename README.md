@@ -2,9 +2,14 @@
 
 <img src="assets/banner.jpg" alt="Logo" style="border-radius: 30px; width: 100%;">
 
-**Read the docs**: [cactus-compute.github.io/cactus](https://cactus-compute.github.io/cactus/)
+[![Docs][docs-shield]][docs-url]
+[![Website][website-shield]][website-url]
+[![GitHub][github-shield]][github-url]
+[![HuggingFace][hf-shield]][hf-url]
+[![Reddit][reddit-shield]][reddit-url]
+[![Blog][blog-shield]][blog-url]
 
-Cactus is an energy-efficient AI inference engine for running LLMs, vision models, and speech models on mobile devices, Macs, and ARM chips like Raspberry Pi. It provides OpenAI-compatible APIs for C/C++, Swift, Kotlin, Flutter, React Native, Python, and Rust with support for tool calling, auto-RAG, NPU acceleration, INT4 quantization, and cloud handoff for complex tasks.
+Cactus is an energy-efficient AI inference engine for running LLMs, vision models, and speech models on mobile devices, Macs, and ARM chips like Raspberry Pi. It provides OpenAI-compatible APIs for C/C++, Swift, Kotlin, Flutter, React Native, Python, and Rust with support for tool calling, auto-RAG, NPU acceleration, INT4 quantization, and cloud handoff for complex tasks. **Click the shields links**.
 
 ```
 ┌─────────────────┐     Energy-efficient inference engine for running AI on mobile devices 
@@ -102,51 +107,20 @@ void* output_data = graph.get_output(result);
 graph.hard_reset(); 
 ```
 
-## Core API References
+## API & SDK References
 
-| Document | Description |
-|----------|-------------|
-| [Cactus Engine API](cactus_engine.md) | C FFI for chat completion, streaming, tool calling, transcription, embeddings, RAG, vision, VAD, and cloud handoff |
-| [Cactus Graph API](cactus_graph.md) | Computational graph framework for tensor operations, matrix multiplication, attention, normalization, and activation functions |
-| [Cactus Index API](cactus_index.md) | On-device vector database with cosine similarity search for RAG applications |
-
-## SDK References
-
-| SDK | Language | Platforms |
-|-----|----------|-----------|
-| [Python](/python/) | Python | Mac, Linux |
-| [Swift](/apple/) | Swift | iOS, macOS, tvOS, watchOS, Android |
-| [Kotlin/Android](/android/) | Kotlin | Android, iOS (via KMP) |
-| [Flutter](/flutter/) | Dart | iOS, macOS, Android |
-| [Rust](/rust/) | Rust | Mac, Linux |
+| Reference | Language | Description |
+|-----------|----------|-------------|
+| [Engine API](cactus_engine.md) | C | Chat completion, streaming, tool calling, transcription, embeddings, RAG, vision, VAD, vector index, cloud handoff |
+| [Graph API](cactus_graph.md) | C++ | Tensor operations, matrix multiplication, attention, normalization, activation functions |
+| [Python SDK](/python/) | Python | Mac, Linux |
+| [Swift SDK](/apple/) | Swift | iOS, macOS, tvOS, watchOS, Android |
+| [Kotlin SDK](/android/) | Kotlin | Android, iOS (via KMP) |
+| [Flutter SDK](/flutter/) | Dart | iOS, macOS, Android |
+| [Rust SDK](/rust/) | Rust | Mac, Linux |
 | [React Native](https://github.com/cactus-compute/cactus-react-native) | JavaScript | iOS, Android |
 
-## Resources
-
-- [Website](https://cactuscompute.com/)
-- [GitHub Repository](https://github.com/cactus-compute/cactus)
-- [Supported Models on HuggingFace](https://huggingface.co/Cactus-Compute)
-- [Reddit Community for Q/A](https://www.reddit.com/r/cactuscompute/)
-- [Runtime Compatibility](compatibility.md)
-- [Fine-tuning Guide](finetuning.md)
-
-## Maintaining Organisations
-
-Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with maintenance from:
-
-1. [UCLA's BruinAI](https://bruinai.org/) 
-2. [Char (YC S25)](https://char.com/)
-3. [Yale's AI Society](https://www.yale-ai.org/team)
-4. [National Unoversity of Singapore's AI Society](https://www.nusaisociety.org/)
-5. [UC Irvine's AI@UCI](https://aiclub.ics.uci.edu/)
-6. [Imperial College's AI Society](https://www.imperialcollegeunion.org/csp/1391)
-7. [University of Pennsylvania's AI@Penn](https://ai-at-penn-main-105.vercel.app/)
-8. [University of Michigan Ann-Arbor MSAIL](https://msail.github.io/)
-9. [University of Colorado Boulder's AI Club](https://www.cuaiclub.org/)
-
 ## Benchmarks
-
-- missing latency = no NPU support yet
 
 | Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Parakeet-1.1B-INT4<br>(30s-audio-Latency & Decode)
 |--------|--------|--------|----------|
@@ -241,12 +215,18 @@ Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with m
 │                                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-## Blog
+## Maintaining Organisations
 
-| Post | Author | Description |
-|------|--------|-------------|
-| [Hybrid Transcription](/blog/hybrid_transcription.md) | Roman Shemet | Sub-150ms transcription with cloud-level accuracy using on-device/cloud hybrid inference |
-| [On-Device Coding Agents](/blog/lfm2_24b_a2b.md) | Noah Cylich & Henry Ndubuaku | Running LFM2-24B MoE locally on Mac for coding use cases |
+1. [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/)
+2. [UCLA's BruinAI](https://bruinai.org/)
+3. [Char (YC S25)](https://char.com/)
+4. [Yale's AI Society](https://www.yale-ai.org/team)
+5. [National Unoversity of Singapore's AI Society](https://www.nusaisociety.org/)
+6. [UC Irvine's AI@UCI](https://aiclub.ics.uci.edu/)
+7. [Imperial College's AI Society](https://www.imperialcollegeunion.org/csp/1391)
+8. [University of Pennsylvania's AI@Penn](https://ai-at-penn-main-105.vercel.app/)
+9. [University of Michigan Ann-Arbor MSAIL](https://msail.github.io/)
+10. [University of Colorado Boulder's AI Club](https://www.cuaiclub.org/)
 
 ## Citation 
 
@@ -260,3 +240,21 @@ If you use Cactus in your research, please cite it as follows:
   year         = {2025}
 }
 ```
+
+[docs-shield]: https://img.shields.io/badge/Docs-555?style=for-the-badge&logo=readthedocs&logoColor=white
+[docs-url]: https://cactus-compute.github.io/cactus/
+
+[website-shield]: https://img.shields.io/badge/Website-555?style=for-the-badge&logo=safari&logoColor=white
+[website-url]: https://cactuscompute.com/
+
+[github-shield]: https://img.shields.io/badge/GitHub-555?style=for-the-badge&logo=github&logoColor=white
+[github-url]: https://github.com/cactus-compute/cactus
+
+[hf-shield]: https://img.shields.io/badge/HuggingFace-555?style=for-the-badge&logo=huggingface&logoColor=white
+[hf-url]: https://huggingface.co/Cactus-Compute
+
+[reddit-shield]: https://img.shields.io/badge/Reddit-555?style=for-the-badge&logo=reddit&logoColor=white
+[reddit-url]: https://www.reddit.com/r/cactuscompute/
+
+[blog-shield]: https://img.shields.io/badge/Blog-555?style=for-the-badge&logo=hashnode&logoColor=white
+[blog-url]: https://github.com/cactus-compute/cactus/tree/main/blog
