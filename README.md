@@ -9,7 +9,7 @@
 [![Reddit][reddit-shield]][reddit-url]
 [![Blog][blog-shield]][blog-url]
 
-A low-latency energy-efficient AI engine for mobile devices & wearables, combining on-device and cloud fallback.
+A hybrid low-latency energy-efficient AI engine for mobile devices & wearables.
 
 ```
 ┌─────────────────┐
@@ -154,7 +154,7 @@ graph.hard_reset();
 | Apr 2026 | Coming | Mediatek/Exynos NPUs, Cactus@ICLR |
 | May 2026 | Coming | Kernel→C++, Graph/Engine→Rust, Mac GPU & VR |
 | Jun 2026 | Coming | Torch/JAX model transpilers |
-| Jul 2026 | Coming | Wearable optimisations, Cactus@ICML |
+| Jul 2026 | Coming | Wearables optimisations, Cactus@ICML |
 | Aug 2026 | Coming | Orchestration |
 | Sep 2026 | Coming | Full Cactus paper, chip manufacturer partners |
 
