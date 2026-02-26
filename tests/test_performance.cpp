@@ -378,7 +378,7 @@ void benchmark_unary_ops(TestUtils::TestRunner& runner, const BenchmarkConfig& c
             details << std::fixed << std::setprecision(3) << time_ms << "ms, "
                     << std::setprecision(2) << gb_per_sec << " GB/s";
             runner.log_performance(op_name + " " + std::to_string(dim) + "x" + std::to_string(dim),
-                                 details.str());
+                                   details.str());
         }
     }
 }
