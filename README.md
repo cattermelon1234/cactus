@@ -52,30 +52,30 @@ const char* options = R"({
 
 char response[4096];
 int result = cactus_complete(
-    model,                            // model handle from cactus_init
-    messages,                         // JSON array of chat messages
-    response,                         // buffer to store response JSON
-    sizeof(response),                 // size of response buffer
-    options,                          // optional: generation options (nullptr for defaults)
-    nullptr,                          // optional: tools JSON for function calling 
-    nullptr,                          // optional: streaming callback fn(token, id, user_data)
-    nullptr                           // optional: user data passed to callback
+    model,            // model handle
+    messages,         // JSON chat messages
+    response,         // response buffer
+    sizeof(response), // buffer size
+    options,          // generation options
+    nullptr,          // tools JSON
+    nullptr,          // streaming callback
+    nullptr           // user data
 );
 ```
 Example response from Gemma3-270m
 ```json
 {
-    "success": true,                 // when successfully generated
-    "error": null,                   // returns specific errors if success = false
-    "cloud_handoff": false,          // true when response is generated with cloud model
-    "response": "Hi there!",         // null when error is not null
-    "function_calls": [],            // parsed to [{"name":"set_alarm","arguments":{"hour":"10","minute":"0"}}]
-    "confidence": 0.8193,            // how confident the model is with its locally generated response
-    "time_to_first_token_ms": 45.23, // latency (time to first token)
-    "total_time_ms": 163.67,         // total execution time
-    "prefill_tps": 1621.89,          // prefill tokens per second
-    "decode_tps": 168.42,            // decode tokens per second
-    "ram_usage_mb": 245.67,          // current process RAM usage in MB
+    "success": true,        // generation succeeded
+    "error": null,          // error details if failed
+    "cloud_handoff": false, // true if cloud model used
+    "response": "Hi there!",
+    "function_calls": [],   // parsed tool calls
+    "confidence": 0.8193,   // model confidence
+    "time_to_first_token_ms": 45.23,
+    "total_time_ms": 163.67,
+    "prefill_tps": 1621.89,
+    "decode_tps": 168.42,
+    "ram_usage_mb": 245.67,
     "prefill_tokens": 28,
     "decode_tokens": 50,
     "total_tokens": 78
