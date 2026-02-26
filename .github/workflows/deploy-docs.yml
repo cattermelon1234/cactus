@@ -27,9 +27,6 @@ jobs:
           # Copy assets
           cp -r assets/* site_docs/assets/
 
-          # Copy README as overview (avoids conflict with index.md)
-          cp README.md site_docs/overview.md
-
           # Copy supporting files
           cp CONTRIBUTING.md site_docs/CONTRIBUTING.md
 
@@ -46,19 +43,20 @@ jobs:
           # Copy blog
           cp blog/*.md site_docs/blog/
 
-          # Build index.md with frontmatter + banner from docs/index.md
+          # Use README.md as index (single source of truth)
           {
             echo '---'
-            echo 'title: "Cactus Documentation"'
-            echo 'description: "Complete documentation index for Cactus, the energy-efficient AI inference engine for phones, wearables, Macs, and ARM devices."'
+            echo 'title: "Cactus"'
+            echo 'description: "Energy-efficient AI inference engine for phones, wearables, Macs, and ARM devices."'
             echo '---'
             echo ''
-            echo '<img src="assets/banner.jpg" alt="Cactus" style="border-radius: 16px; width: 100%; margin-bottom: 16px;">'
-            echo ''
-            cat docs/index.md
+            cat README.md
           } > site_docs/index.md
 
-          # --- Fix links in index.md (root level, links were relative to docs/) ---
+          # Remove the H1 title from index (banner replaces it)
+          sed -i '/^# Cactus$/d' site_docs/index.md
+
+          # --- Fix links in index.md (README links → site_docs structure) ---
           sed -i 's|(cactus_engine\.md)|(docs/cactus_engine.md)|g' site_docs/index.md
           sed -i 's|(cactus_graph\.md)|(docs/cactus_graph.md)|g' site_docs/index.md
           sed -i 's|(cactus_index\.md)|(docs/cactus_index.md)|g' site_docs/index.md
@@ -101,7 +99,7 @@ jobs:
             sed -i 's|(/android/)|(../android/README.md)|g' "$f"
             sed -i 's|(/flutter/)|(../flutter/README.md)|g' "$f"
             sed -i 's|(/rust/)|(../rust/README.md)|g' "$f"
-            sed -i 's|(\.\.\/README\.md)|(../overview.md)|g' "$f"
+            sed -i 's|(\.\.\/README\.md)|(../index.md)|g' "$f"
           done
 
           # --- Fix links in blog posts (one level deep) ---

@@ -2,6 +2,8 @@
 
 <img src="assets/banner.jpg" alt="Logo" style="border-radius: 30px; width: 100%;">
 
+**Read the docs**: [cactus-compute.github.io/cactus](https://cactus-compute.github.io/cactus/)
+
 Cactus is an energy-efficient AI inference engine for running LLMs, vision models, and speech models on mobile devices, Macs, and ARM chips like Raspberry Pi. It provides OpenAI-compatible APIs for C/C++, Swift, Kotlin, Flutter, React Native, Python, and Rust with support for tool calling, auto-RAG, NPU acceleration, INT4 quantization, and cloud handoff for complex tasks.
 
 ```
@@ -18,6 +20,10 @@ Cactus is an energy-efficient AI inference engine for running LLMs, vision model
 └─────────────────┘     Custom attention kernels with KV-Cache Quantisation, chunked prefill, streaming LLM, etc.
 ```
 
+## Quick Demo 
+
+`brew install cactus-compute/cactus/cactus`
+`cactus transcribe` or `cactus run` 
 
 ## Cactus Engine
 
@@ -96,7 +102,51 @@ void* output_data = graph.get_output(result);
 graph.hard_reset(); 
 ```
 
-## Benchmark (missing latency = no NPU support yet)
+## Core API References
+
+| Document | Description |
+|----------|-------------|
+| [Cactus Engine API](cactus_engine.md) | C FFI for chat completion, streaming, tool calling, transcription, embeddings, RAG, vision, VAD, and cloud handoff |
+| [Cactus Graph API](cactus_graph.md) | Computational graph framework for tensor operations, matrix multiplication, attention, normalization, and activation functions |
+| [Cactus Index API](cactus_index.md) | On-device vector database with cosine similarity search for RAG applications |
+
+## SDK References
+
+| SDK | Language | Platforms |
+|-----|----------|-----------|
+| [Python](/python/) | Python | Mac, Linux |
+| [Swift](/apple/) | Swift | iOS, macOS, tvOS, watchOS, Android |
+| [Kotlin/Android](/android/) | Kotlin | Android, iOS (via KMP) |
+| [Flutter](/flutter/) | Dart | iOS, macOS, Android |
+| [Rust](/rust/) | Rust | Mac, Linux |
+| [React Native](https://github.com/cactus-compute/cactus-react-native) | JavaScript | iOS, Android |
+
+## Resources
+
+- [Website](https://cactuscompute.com/)
+- [GitHub Repository](https://github.com/cactus-compute/cactus)
+- [Supported Models on HuggingFace](https://huggingface.co/Cactus-Compute)
+- [Reddit Community for Q/A](https://www.reddit.com/r/cactuscompute/)
+- [Runtime Compatibility](compatibility.md)
+- [Fine-tuning Guide](finetuning.md)
+
+## Maintaining Organisations
+
+Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with maintenance from:
+
+1. [UCLA's BruinAI](https://bruinai.org/) 
+2. [Char (YC S25)](https://char.com/)
+3. [Yale's AI Society](https://www.yale-ai.org/team)
+4. [National Unoversity of Singapore's AI Society](https://www.nusaisociety.org/)
+5. [UC Irvine's AI@UCI](https://aiclub.ics.uci.edu/)
+6. [Imperial College's AI Society](https://www.imperialcollegeunion.org/csp/1391)
+7. [University of Pennsylvania's AI@Penn](https://ai-at-penn-main-105.vercel.app/)
+8. [University of Michigan Ann-Arbor MSAIL](https://msail.github.io/)
+9. [University of Colorado Boulder's AI Club](https://www.cuaiclub.org/)
+
+## Benchmarks
+
+- missing latency = no NPU support yet
 
 | Device | LFM2.5-1.2B-INT4<br>(1k-Prefill/100-Decode) | LFM2.5-VL-1.6B-INT4<br>(256px-Latency & Decode) | Parakeet-1.1B-INT4<br>(30s-audio-Latency & Decode)
 |--------|--------|--------|----------|
@@ -110,31 +160,25 @@ graph.hard_reset();
 | CMF Phone 2 Pro (Budget Mediatek) | - | - | - |
 | Raspberry Pi 5 (IoT) | 69tps/11tps (869MB RAM) | 13.3s/11tps (2.1GB RAM) | 4.5s/180k+tps (1.9GB RAM) |
 
-## Supported Models                                                                                                                                                     
-                                                                                                                                                                          
-| Model | Features |                                                                                                                                             
-|-------|----------|                                                                                                                                             
-| google/gemma-3-270m-it | completion |                                                                                                                         
-| google/functiongemma-270m-it | completion, tools |                                                                                                            
-| LiquidAI/LFM2-350M | completion, tools, embed |                                                                                                               
-| Qwen/Qwen3-0.6B | completion, tools, embed |                                                                                                                  
-| LiquidAI/LFM2-700M | completion, tools, embed |                                                                                                               
-| LiquidAI/LFM2-8B-A1B | completion, tools, embed |                                                                                                                
-| google/gemma-3-1b-it | completion |                                                                                                                           
-| LiquidAI/LFM2.5-1.2B-Thinking | completion, tools, embed |                                                                                                    
-| LiquidAI/LFM2.5-1.2B-Instruct | completion, tools, embed |                                                                                                      
-| Qwen/Qwen3-1.7B | completion, tools, embed | 
-| LiquidAI/LFM2-2.6B | completion, tools, embed |                                                                                                                
-| LiquidAI/LFM2-VL-450M | vision, txt & img embed, Apple NPU |                                                                                                            
-| LiquidAI/LFM2.5-VL-1.6B | vision, txt & img embed, Apple NPU |                                                                                                               
-| UsefulSensors/moonshine-base | transcription, speech embed |                                                                                                         
-| openai/whisper-small | transcription, speech embed, Apple NPU |                                                                                                                 
-| openai/whisper-medium | transcribe, speech embed, Apple NPU |
-| nvidia/parakeet-ctc-0.6b | transcribe, speech embed, Apple NPU |
-| nvidia/parakeet-ctc-1.1b | transcribe, speech embed, Apple NPU |
-| snakers4/silero-vad | vad |
-| nomic-ai/nomic-embed-text-v2-moe | embed |                                                                                                                    
-| Qwen/Qwen3-Embedding-0.6B | embed | 
+## Roadmap
+
+Completed:
+- Jul 2026: Got funding from YC & Oxford, launched, started building 
+- Sep 2025: Launched Cactus Kernel, Graph & Engine, raised more funding
+- Oct 2025: Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill)
+- Nov 2025: Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed)
+- Dec 2025: Cactus team expands from original author to +6 Research Engineers 
+- Jan 2026: Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) 
+- Feb 2026: Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) 
+
+Future: 
+- Mar 2026: Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) 
+- Apr 2026: Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) 
+- May 2026: Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets
+- Jun 2026: Transpilers for porting custom models from Torch/Jax 
+- Jul 2026: Aggressive optimisations to run directly on wearables, Cactus@ICML 
+- Aug 2026: Orchestration, orchestration, orchestration. 
+- Sep 2026: 1yr post-release, publish full Cactus paper, partner with chip manufacturers.
 
 ## Using this repo on Mac
 ```bash
@@ -164,39 +208,12 @@ git clone https://github.com/cactus-compute/cactus && cd cactus && source ./setu
 - Plug in any mobule device and add the `--ios` or `--android` flag.
 - Mobile devices must be in developer mode.
 
-## Maintaining Organisations
+## Blog
 
-Developed by [Cactus Compute, Inc. (YC S25)](https://cactuscompute.com/), with maintenance from:
-
-1. [UCLA's BruinAI](https://bruinai.org/) 
-2. [Char (YC S25)](https://char.com/)
-3. [Yale's AI Society](https://www.yale-ai.org/team)
-4. [National Unoversity of Singapore's AI Society](https://www.nusaisociety.org/)
-5. [UC Irvine's AI@UCI](https://aiclub.ics.uci.edu/)
-6. [Imperial College's AI Society](https://www.imperialcollegeunion.org/csp/1391)
-7. [University of Pennsylvania's AI@Penn](https://ai-at-penn-main-105.vercel.app/)
-8. [University of Michigan Ann-Arbor MSAIL](https://msail.github.io/)
-9. [University of Colorado Boulder's AI Club](https://www.cuaiclub.org/)
-
-## Roadmap
-
-Completed:
-- Jul 2026: Got funding from YC & Oxford, launched, started building 
-- Sep 2025: Launched Cactus Kernel, Graph & Engine, raised more funding
-- Oct 2025: Chunked prefill, streamingLLMs, KVCache Quantisation (2x faster prefill)
-- Nov 2025: Novel Cactus Attention algorithm (10 & 1k prefill yields same decode speed)
-- Dec 2025: Cactus team expands from original author to +6 Research Engineers 
-- Jan 2026: Apple NPU/RAM optimisations, grew maintainers (reduce iOS/Mac latency 5-11x) 
-- Feb 2026: Hybrid inference with GCP, INT4, lossless Quantisation (1.5x speed) 
-
-Future: 
-- Mar 2026: Qualcomm NPU, Google NPU, optimise Android (5-11x less Qualcomm/Pixel latency) 
-- Apr 2026: Mediatek NPU, Exynox NPU, Cactus@ICLR (improve all Android latency 5-11x) 
-- May 2026: Kernel=C++, Graph=Rust, Engine=Rust, GPU support for Macs & VR Headsets
-- Jun 2026: Transpilers for porting custom models from Torch/Jax 
-- Jul 2026: Aggressive optimisations to run directly on wearables, Cactus@ICML 
-- Aug 2026: Orchestration, orchestration, orchestration. 
-- Sep 2026: 1yr post-release, publish full Cactus paper, partner with chip manufacturers.
+| Post | Author | Description |
+|------|--------|-------------|
+| [Hybrid Transcription](/blog/hybrid_transcription.md) | Roman Shemet | Sub-150ms transcription with cloud-level accuracy using on-device/cloud hybrid inference |
+| [On-Device Coding Agents](/blog/lfm2_24b_a2b.md) | Noah Cylich & Henry Ndubuaku | Running LFM2-24B MoE locally on Mac for coding use cases |
 
 ## Citation 
 
@@ -210,6 +227,3 @@ If you use Cactus in your research, please cite it as follows:
   year         = {2025}
 }
 ```
-
-## How To Use In Your Product 
-- [Read the Docs](https://cactus-compute.github.io/cactus/)
