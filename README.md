@@ -122,10 +122,14 @@ graph.hard_reset();
 
 ## Benchmarks
 
-*Missing latency = no NPU support yet*
+- All weights INT4 quantised
+- LFM: 1k-prefill / 100-decode, values are prefill tps / decode tps
+- LFM-VL: 256px input, values are latency / decode tps
+- Parakeet: 30s audio input, values are latency / decode tps
+- Missing latency = no NPU support yet
 
-| Device | LFM-1.2B-INT4<br>1k-prefill / 100-decode (tps) | LFMVL-1.6B-INT4<br>256px latency / decode (tps) | Parakeet-1.1B-INT4<br>30s-audio latency / decode (tps) | RAM |
-|--------|----------|----------|----------|-----|
+| Device | LFM 1.2B | LFMVL 1.6B | Parakeet 1.1B | RAM |
+|--------|----------|------------|---------------|-----|
 | Mac M4 Pro | 582/100 | 0.2s/98 | 0.1s/900k+ | 76MB |
 | iPad/Mac M3 | 350/60 | 0.3s/69 | 0.3s/800k+ | 70MB |
 | iPhone 17 Pro | 327/48 | 0.3s/48 | 0.3s/300k+ | 108MB |
