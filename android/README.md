@@ -1,3 +1,9 @@
+---
+title: "Cactus Android & Kotlin Multiplatform SDK"
+description: "Kotlin API for running AI models on-device on Android and iOS via Kotlin Multiplatform. Supports completion, transcription, embeddings, RAG, and tool calling."
+keywords: ["Android SDK", "Kotlin Multiplatform", "on-device AI", "mobile inference", "JNI", "KMP"]
+---
+
 # Cactus for Android & Kotlin Multiplatform
 
 Run AI models on-device with a simple Kotlin API.
@@ -308,3 +314,11 @@ data class IndexResult(val id: Int, val score: Float)
 
 - Android API 24+ / arm64-v8a
 - iOS 14+ / arm64 (KMP only)
+
+## See Also
+
+- [Cactus Engine API](/docs/cactus_engine.md) — Full C API reference underlying the Kotlin bindings
+- [Cactus Index API](/docs/cactus_index.md) — Vector database API for RAG applications
+- [Fine-tuning Guide](/docs/finetuning.md) — Deploy custom fine-tunes to Android
+- [Swift SDK](/apple/) — Swift alternative for Apple platforms
+- [Flutter SDK](/flutter/) — Cross-platform alternative using Dart

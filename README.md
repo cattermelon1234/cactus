@@ -1,4 +1,8 @@
+# Cactus
+
 <img src="assets/banner.jpg" alt="Logo" style="border-radius: 30px; width: 100%;">
+
+Cactus is an energy-efficient AI inference engine for running LLMs, vision models, and speech models on mobile devices, Macs, and ARM chips like Raspberry Pi. It provides OpenAI-compatible APIs for C/C++, Swift, Kotlin, Flutter, React Native, Python, and Rust with support for tool calling, auto-RAG, NPU acceleration, INT4 quantization, and cloud handoff for complex tasks.
 
 ```
 ┌─────────────────┐     Energy-efficient inference engine for running AI on mobile devices 
@@ -208,17 +212,6 @@ Future:
 - Jul 2026: Aggressive optimisations to run directly on wearables, Cactus@ICML 
 - Aug 2026: Orchestration, orchestration, orchestration. 
 - Sep 2026: 1yr post-release, publish full Cactus paper, partner with chip manufacturers.
-
-## Contributing to Cactus 
-
-- **C++ Standard**: Use C++20 features where appropriate.
-- **Formatting**: Follow the existing code style in the project, one header per folder.
-- **Comments**: Avoid comments, make your code read like plain english.
-- **AI-Generated Code**: Do not bindly PR AI slop, this codebase is very complex, they miss details.
-- **Update docs**: Please update docs when necessary, be intuitive and straightforward. 
-- **Keep It Simple**: Do not go beyond the scope of the GH issue, avoid bloated PRs, keep codes lean.
-- **Benchmark Your Changes**: Test performance impact, Cactus is performance-critical.
-- **Test everything**: A PR that fails to build is the biggest red flag, means it was not tested. 
 
 ## Citation 
 

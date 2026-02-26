@@ -1,3 +1,12 @@
+---
+title: "The Sweet Spot for Mac Code Use: Reviewing LFM2 24B MoE A2B with Cactus"
+description: "Review of LiquidAI's LFM2-24B-A2B mixture-of-experts model running locally on Mac with Cactus. Architecture breakdown, benchmarks, and coding agent use cases."
+keywords: ["LFM2", "mixture of experts", "MoE", "on-device coding", "Mac inference", "LiquidAI", "Apple Silicon"]
+author: "Noah Cylich and Henry Ndubuaku"
+date: 2026-02-15
+tags: ["LFM2", "MoE", "coding agents", "Apple Silicon", "Python", "function calling"]
+---
+
 # The Sweet Spot for Mac Code Use: Reviewing LFM2 24B MoE A2B with Cactus
 
 *By Noah Cylich and Henry Ndubuaku*
@@ -200,3 +209,11 @@ LFM2-24B-A2B represents a compelling sweet spot for on-device coding. The MoE ar
 The pieces are coming together: models that are smart enough to be useful, efficient enough to run on a laptop, and runtimes that make it all accessible through a few lines of Python. Whether you're building a code assistant that works offline, a privacy-first dev tool, or just experimenting with what's possible without a cloud API, LFM2-24B with Cactus is a great place to start.
 
 Give it a try, build something, and let us know what you think.
+
+## See Also
+
+- [Cactus Engine API Reference](/docs/cactus_engine.md) — Full C API docs for completion, tool calling, and cloud handoff
+- [Python SDK](/python/) — Python bindings used in the examples above
+- [Fine-tuning Guide](/docs/finetuning.md) — Deploy your own LoRA fine-tunes to mobile
+- [Hybrid Transcription](/blog/hybrid_transcription.md) — On-device/cloud hybrid speech transcription with Cactus
+- [Runtime Compatibility](/docs/compatibility.md) — Weight versioning across Cactus releases

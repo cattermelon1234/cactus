@@ -1,3 +1,9 @@
+---
+title: "Runtime & Weights Compatibility"
+description: "How Cactus runtime versions map to model weight versions on HuggingFace. Explains versioning, compatibility checks, and when to re-download weights."
+keywords: ["versioning", "compatibility", "model weights", "HuggingFace", "Cactus runtime"]
+---
+
 # Runtime & Weights Compatibility
 
 Some Cactus releases change the internal weight format. When this happens, cached weights from an older version will not load with a newer runtime and must be re-downloaded.
@@ -24,3 +30,9 @@ Runtime v1.15 -> new tag v1.15 (changed!) - must update
 2. Click **Files and versions → open branch dropdown from Main**
 3. Find the latest tag that is ≤ your runtime version
 4. If your local weights use an older tag, re-download them
+
+## See Also
+
+- [Cactus Engine API](/docs/cactus_engine.md) — Full inference API reference
+- [Fine-tuning Guide](/docs/finetuning.md) — Convert and deploy custom fine-tunes
+- [HuggingFace Weights](https://huggingface.co/Cactus-Compute) — Official Cactus model weights

@@ -1,3 +1,9 @@
+---
+title: "Cactus Engine FFI API Reference"
+description: "C API documentation for Cactus on-device AI inference engine. Supports text completion, vision, transcription, embeddings, RAG, tool calling, and cloud handoff."
+keywords: ["on-device AI", "mobile inference", "LLM API", "C FFI", "edge AI", "transcription", "embeddings", "RAG", "tool calling"]
+---
+
 # Cactus Engine FFI Documentation
 
 The Cactus Engine provides a clean C FFI (Foreign Function Interface) for integrating the LLM inference engine into various applications. This documentation covers all available functions, their parameters, and usage examples.
@@ -1121,3 +1127,15 @@ Common error scenarios:
 3. **Early Stopping**: Use `cactus_stop()` to avoid unnecessary generation
 4. **Batch Embeddings**: When possible, process multiple texts in sequence without resetting
 5. **KV Cache Tuning**: Adjust `CACTUS_KV_WINDOW_SIZE` based on your context needs
+
+## See Also
+
+- [Cactus Graph API](/docs/cactus_graph.md) — Low-level computational graph for custom tensor operations
+- [Cactus Index API](/docs/cactus_index.md) — On-device vector database for RAG applications
+- [Fine-tuning Guide](/docs/finetuning.md) — Deploy Unsloth LoRA fine-tunes to mobile
+- [Runtime Compatibility](/docs/compatibility.md) — Weight versioning across releases
+- [Python SDK](/python/) — Python bindings for the Engine API
+- [Swift SDK](/apple/) — Swift bindings with async/await support
+- [Kotlin/Android SDK](/android/) — Kotlin Multiplatform bindings
+- [Flutter SDK](/flutter/) — Dart FFI bindings for mobile apps
+- [Rust SDK](/rust/) — Rust FFI bindings via bindgen

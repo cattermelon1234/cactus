@@ -1,3 +1,12 @@
+---
+title: "Sub-150ms Transcription with Cloud-Level Accuracy: Why We Built a Hybrid Engine"
+description: "How Cactus combines on-device and cloud inference for real-time speech transcription with sub-150ms latency and automatic cloud handoff for noisy audio."
+keywords: ["hybrid AI", "speech transcription", "on-device inference", "cloud handoff", "Whisper", "voice interface", "edge AI"]
+author: "Roman Shemet"
+date: 2026-02-01
+tags: ["transcription", "hybrid AI", "edge AI", "whisper", "cloud handoff"]
+---
+
 # Sub-150ms transcription with cloud-level accuracy: Why we built a hybrid engine
 
 *By Roman Shemet*
@@ -61,3 +70,12 @@ At the top level, the implementation is beautifully simple: initialize the model
 A few levels deeper, developers have granular control. You can configure the engine's behavior to define a specific Word Error Rate (WER) threshold, target a strict cloud-handoff ratio, or establish hard cost limits per user.
 
 Check out the open-source engine and documentation on GitHub.
+
+## See Also
+
+- [Cactus Engine API Reference](/docs/cactus_engine.md) — Full transcription API docs (`cactus_transcribe`, `cactus_stream_transcribe_*`)
+- [Python SDK](/python/) — Python bindings with transcription support
+- [Swift SDK](/apple/) — Swift API with async streaming transcription
+- [Kotlin/Android SDK](/android/) — Kotlin API with transcription support
+- [Flutter SDK](/flutter/) — Flutter bindings with streaming transcription
+- [LFM2 24B Review](/blog/lfm2_24b_a2b.md) — Running large MoE models locally with Cactus

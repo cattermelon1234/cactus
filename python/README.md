@@ -1,3 +1,9 @@
+---
+title: "Cactus Python SDK"
+description: "Python bindings for Cactus on-device AI inference engine. Supports chat completion, vision, transcription, embeddings, RAG, tool calling, and streaming."
+keywords: ["Python SDK", "on-device AI", "LLM inference", "Python FFI", "embeddings", "transcription", "RAG"]
+---
+
 # Cactus Python Package
 
 Python bindings for Cactus Engine via FFI. Auto-installed when you run `source ./setup`.
@@ -268,3 +274,13 @@ See `python/example.py` for a complete example covering:
 ```bash
 python python/example.py
 ```
+
+## See Also
+
+- [Cactus Engine API](/docs/cactus_engine.md) — Full C API reference that the Python bindings wrap
+- [Cactus Index API](/docs/cactus_index.md) — Vector database API for RAG applications
+- [Fine-tuning Guide](/docs/finetuning.md) — Train and deploy custom LoRA fine-tunes
+- [Runtime Compatibility](/docs/compatibility.md) — Weight versioning across releases
+- [Swift SDK](/apple/) — Swift bindings for iOS/macOS
+- [Kotlin/Android SDK](/android/) — Kotlin bindings for Android
+- [Flutter SDK](/flutter/) — Dart bindings for cross-platform mobile
