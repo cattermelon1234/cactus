@@ -5,6 +5,16 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/../cactus)
+set(CACTUS_CURL_ROOT "${CMAKE_SOURCE_DIR}/../libs/curl" CACHE PATH "Path to vendored libcurl artifacts")
+
+set(_CACTUS_VERSION_FILE "${CMAKE_SOURCE_DIR}/../CACTUS_VERSION")
+if(EXISTS "${_CACTUS_VERSION_FILE}")
+    file(READ "${_CACTUS_VERSION_FILE}" _CACTUS_VERSION_CONTENT)
+    string(STRIP "${_CACTUS_VERSION_CONTENT}" CACTUS_VERSION_STR)
+    message(STATUS "Cactus version: ${CACTUS_VERSION_STR}")
+else()
+    set(CACTUS_VERSION_STR "")
+endif()
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -14,8 +24,11 @@ endif()
 file(GLOB ENGINE_SOURCES "${SOURCE_DIR}/engine/*.cpp")
 file(GLOB GRAPH_SOURCES "${SOURCE_DIR}/graph/*.cpp")
 file(GLOB KERNEL_SOURCES "${SOURCE_DIR}/kernel/*.cpp")
+set(SME2_SOURCE "${SOURCE_DIR}/kernel/kernel_sme2.cpp")
+list(REMOVE_ITEM KERNEL_SOURCES "${SME2_SOURCE}")
 file(GLOB MODEL_SOURCES "${SOURCE_DIR}/models/*.cpp")
 file(GLOB FFI_SOURCES "${SOURCE_DIR}/ffi/*.cpp")
+file(GLOB TELEMETRY_SOURCES "${SOURCE_DIR}/telemetry/*.cpp")
 set(NPU_SOURCES "${SOURCE_DIR}/npu/npu.cpp")
 
 set(HEADER_FILES
@@ -36,6 +49,7 @@ set(COMMON_SOURCES
     ${ENGINE_SOURCES}
     ${FFI_SOURCES}
     ${MODEL_SOURCES}
+    ${TELEMETRY_SOURCES}
     ${NPU_SOURCES}
 )
 
@@ -66,6 +80,7 @@ set(COMMON_INCLUDE_DIRS
     ${SOURCE_DIR}/ffi
     ${SOURCE_DIR}/models
     ${SOURCE_DIR}/npu
+    ${SOURCE_DIR}/telemetry
 )
 
 target_include_directories(cactus PRIVATE ${COMMON_INCLUDE_DIRS})
@@ -73,9 +88,44 @@ target_include_directories(cactus_static PRIVATE ${COMMON_INCLUDE_DIRS})
 
 target_link_libraries(cactus ${LOG_LIB} android)
 
+set(CACTUS_CURL_INCLUDE_DIR "${CACTUS_CURL_ROOT}/include")
+set(CACTUS_CURL_LIBRARY_ANDROID "${CACTUS_CURL_ROOT}/android/${ANDROID_ABI}/libcurl.a")
+set(CACTUS_MBEDTLS_ROOT "${CMAKE_SOURCE_DIR}/mbedtls/${ANDROID_ABI}")
+if(NOT EXISTS "${CACTUS_MBEDTLS_ROOT}")
+    set(CACTUS_MBEDTLS_ROOT "${CMAKE_SOURCE_DIR}/../libs/mbedtls/android/${ANDROID_ABI}")
+endif()
+set(CACTUS_MBEDTLS_INCLUDE_DIR "${CACTUS_MBEDTLS_ROOT}/include")
+set(CACTUS_MBEDTLS_LIBRARY "${CACTUS_MBEDTLS_ROOT}/lib/libmbedtls.a")
+set(CACTUS_MBEDX509_LIBRARY "${CACTUS_MBEDTLS_ROOT}/lib/libmbedx509.a")
+set(CACTUS_MBEDCRYPTO_LIBRARY "${CACTUS_MBEDTLS_ROOT}/lib/libmbedcrypto.a")
+if(EXISTS "${CACTUS_CURL_INCLUDE_DIR}/curl/curl.h" AND EXISTS "${CACTUS_CURL_LIBRARY_ANDROID}")
+    message(STATUS "Using vendored libcurl for Android: ${CACTUS_CURL_LIBRARY_ANDROID}")
+
+    if(NOT (EXISTS "${CACTUS_MBEDTLS_LIBRARY}" AND EXISTS "${CACTUS_MBEDX509_LIBRARY}" AND EXISTS "${CACTUS_MBEDCRYPTO_LIBRARY}"))
+        message(FATAL_ERROR "Vendored mbedTLS libraries not found. Expected: ${CACTUS_MBEDTLS_LIBRARY}, ${CACTUS_MBEDX509_LIBRARY}, ${CACTUS_MBEDCRYPTO_LIBRARY}")
+    endif()
+
+    target_include_directories(cactus PRIVATE "${CACTUS_CURL_INCLUDE_DIR}")
+    target_include_directories(cactus_static PRIVATE "${CACTUS_CURL_INCLUDE_DIR}")
+    target_include_directories(cactus PRIVATE "${CACTUS_MBEDTLS_INCLUDE_DIR}")
+    target_include_directories(cactus_static PRIVATE "${CACTUS_MBEDTLS_INCLUDE_DIR}")
+    target_compile_definitions(cactus PRIVATE CACTUS_USE_CURL=1)
+    target_compile_definitions(cactus_static PRIVATE CACTUS_USE_CURL=1)
+
+    target_link_libraries(cactus "${CACTUS_CURL_LIBRARY_ANDROID}")
+    target_link_libraries(cactus_static "${CACTUS_CURL_LIBRARY_ANDROID}")
+    target_link_libraries(cactus "${CACTUS_MBEDTLS_LIBRARY}" "${CACTUS_MBEDX509_LIBRARY}" "${CACTUS_MBEDCRYPTO_LIBRARY}")
+    target_link_libraries(cactus_static "${CACTUS_MBEDTLS_LIBRARY}" "${CACTUS_MBEDX509_LIBRARY}" "${CACTUS_MBEDCRYPTO_LIBRARY}")
+else()
+    message(FATAL_ERROR "Vendored Android libcurl not found. Expected: ${CACTUS_CURL_INCLUDE_DIR}/curl/curl.h and ${CACTUS_CURL_LIBRARY_ANDROID}")
+endif()
+
 set(COMMON_COMPILE_DEFINITIONS
     PLATFORM_CPU_ONLY=1
 )
+if(NOT "${CACTUS_VERSION_STR}" STREQUAL "")
+    list(APPEND COMMON_COMPILE_DEFINITIONS "CACTUS_COMPILE_TIME_VERSION=\"${CACTUS_VERSION_STR}\"")
+endif()
 
 target_compile_definitions(cactus PRIVATE ${COMMON_COMPILE_DEFINITIONS})
 target_compile_definitions(cactus_static PRIVATE ${COMMON_COMPILE_DEFINITIONS})
@@ -121,12 +171,47 @@ if (${ANDROID_ABI} STREQUAL "arm64-v8a")
         __ARM_FEATURE_FP16_VECTOR_ARITHMETIC=1
         __ARM_FEATURE_DOTPROD=1
     )
-    
+
     target_compile_options(cactus PRIVATE ${ARM_OPTIONS})
     target_compile_options(cactus_static PRIVATE ${ARM_OPTIONS})
-    
+
     target_compile_definitions(cactus PRIVATE ${ARM_DEFINITIONS})
     target_compile_definitions(cactus_static PRIVATE ${ARM_DEFINITIONS})
+
+    # SME2 support: compile kernel_sme2.cpp separately with armv9.2-a if the NDK supports it
+    set(ENABLE_SME2 "AUTO" CACHE STRING "SME2 build mode: AUTO or OFF")
+    set_property(CACHE ENABLE_SME2 PROPERTY STRINGS AUTO OFF)
+    set(BUILD_SME2 0)
+    set(SME2_MARCH_FLAG "-march=armv9.2-a+nosve+nosve2+sme2")
+
+    if(ENABLE_SME2 STREQUAL "AUTO")
+        include(CheckCXXSourceCompiles)
+        set(CMAKE_REQUIRED_FLAGS "${SME2_MARCH_FLAG}")
+        check_cxx_source_compiles("
+            #include <arm_sme.h>
+            int main() { return 0; }
+        " COMPILER_SUPPORTS_SME2)
+        unset(CMAKE_REQUIRED_FLAGS)
+        if(COMPILER_SUPPORTS_SME2)
+            set(BUILD_SME2 1)
+            message(STATUS "NDK supports SME2 - building SME2 kernels")
+        else()
+            message(STATUS "NDK does not support SME2 - building without SME2")
+        endif()
+    endif()
+
+    if(BUILD_SME2)
+        add_library(cactus_sme2_obj OBJECT ${SME2_SOURCE})
+        target_include_directories(cactus_sme2_obj PRIVATE ${COMMON_INCLUDE_DIRS})
+        target_compile_options(cactus_sme2_obj PRIVATE ${SME2_MARCH_FLAG} ${COMMON_COMPILE_OPTIONS} ${OPTIMIZATION_OPTIONS})
+        target_compile_definitions(cactus_sme2_obj PRIVATE CACTUS_COMPILE_SME2 ${COMMON_COMPILE_DEFINITIONS})
+        set_target_properties(cactus_sme2_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+        target_sources(cactus PRIVATE $<TARGET_OBJECTS:cactus_sme2_obj>)
+        target_sources(cactus_static PRIVATE $<TARGET_OBJECTS:cactus_sme2_obj>)
+        target_compile_definitions(cactus PRIVATE CACTUS_COMPILE_SME2)
+        target_compile_definitions(cactus_static PRIVATE CACTUS_COMPILE_SME2)
+    endif()
 else()
     message(FATAL_ERROR "Unsupported Android ABI: ${ANDROID_ABI}. Cactus only supports arm64-v8a due to ARM NEON requirements.")
 endif()

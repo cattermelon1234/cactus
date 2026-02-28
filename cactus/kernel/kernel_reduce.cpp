@@ -127,6 +127,9 @@ void cactus_mean_axis_f16(const __fp16* input, __fp16* output, size_t outer_size
                 return;
             }
 
+            float32x4_t sum_lo = vdupq_n_f32(0.0f);
+            float32x4_t sum_hi = vdupq_n_f32(0.0f);
+
             for (size_t a = 0; a < vectorized_axis; a += SIMD_WIDTH) {
                 __fp16 values[SIMD_WIDTH];
                 for (size_t j = 0; j < SIMD_WIDTH; j++) {
