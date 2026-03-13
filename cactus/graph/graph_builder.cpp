@@ -57,6 +57,102 @@ size_t CactusGraph::divide(size_t input1, size_t input2) {
     return add_node(OpType::DIVIDE, {input1, input2}, broadcast_info.output_shape, params);
 }
 
+size_t CactusGraph::abs(size_t input) {
+    const auto& input_buffer = get_output_buffer(input);
+    OpParams params{.output_precision = input_buffer.precision};
+    return add_node(OpType::ABS, {input}, input_buffer.shape, params);
+}
+
+size_t CactusGraph::pow(size_t input, float exponent) {
+    const auto& input_buffer = get_output_buffer(input);
+    OpParams params{.exponent = exponent, .output_precision = input_buffer.precision};
+    return add_node(OpType::POW, {input}, input_buffer.shape, params);
+}
+
+size_t CactusGraph::cat(size_t input1, size_t input2, int axis) {
+    const auto& buffer1 = get_output_buffer(input1);
+    const auto& buffer2 = get_output_buffer(input2);
+
+    if (buffer1.shape.size() != buffer2.shape.size()) {
+        throw std::runtime_error("Concat requires inputs with same number of dimensions");
+    }
+
+    std::vector<size_t> output_shape = buffer1.shape;
+    size_t ndims = output_shape.size();
+
+    if (axis < 0) axis += ndims;
+    if (axis < 0 || static_cast<size_t>(axis) >= ndims) {
+        throw std::runtime_error("Invalid axis for concat operation");
+    }
+
+    for (size_t i = 0; i < ndims; ++i) {
+        if (i != static_cast<size_t>(axis) && buffer1.shape[i] != buffer2.shape[i]) {
+            throw std::runtime_error("Concat inputs must have same shape except on concat axis");
+        }
+    }
+
+    output_shape[axis] = buffer1.shape[axis] + buffer2.shape[axis];
+
+    OpParams params;
+    params.axis = axis;
+    return add_node(OpType::CAT, {input1, input2}, output_shape, params);
+}
+
+size_t CactusGraph::view(size_t input, const std::vector<size_t>& new_shape) {
+    const auto& input_buffer = get_output_buffer(input);
+
+    size_t input_elements = 1;
+    for (size_t dim : input_buffer.shape) {
+        input_elements *= dim;
+    }
+
+    size_t new_elements = 1;
+    for (size_t dim : new_shape) {
+        new_elements *= dim;
+    }
+
+    if (input_elements != new_elements) {
+        throw std::runtime_error("View operation requires total number of elements to remain the same");
+    }
+
+    OpParams params{.new_shape = new_shape};
+    return add_node(OpType::VIEW, {input}, new_shape, params);
+}
+
+size_t CactusGraph::flatten(size_t input, int start_dim, int end_dim) {
+    const auto& input_buffer = get_output_buffer(input);
+    const auto& shape = input_buffer.shape;
+    size_t rank = shape.size();
+
+    if (start_dim < 0) start_dim += rank;
+    if (end_dim < 0) end_dim += rank;
+
+    if (start_dim < 0 || static_cast<size_t>(start_dim) >= rank ||
+        end_dim < 0 || static_cast<size_t>(end_dim) >= rank ||
+        start_dim > end_dim) {
+        throw std::runtime_error("Invalid start_dim or end_dim for flatten operation");
+    }
+
+    std::vector<size_t> output_shape;
+
+    for (int i = 0; i < start_dim; ++i) {
+        output_shape.push_back(shape[i]);
+    }
+
+    size_t flattened_dim = 1;
+    for (int i = start_dim; i <= end_dim; ++i) {
+        flattened_dim *= shape[i];
+    }
+    output_shape.push_back(flattened_dim);
+
+    for (size_t i = end_dim + 1; i < rank; ++i) {
+        output_shape.push_back(shape[i]);
+    }
+
+    OpParams params{.new_shape = output_shape};
+    return add_node(OpType::FLATTEN, {input}, output_shape, params);
+}
+
 size_t CactusGraph::matmul(size_t input1, size_t input2, bool pretransposed_rhs, ComputeBackend backend) {
     const auto& lhs_buffer = get_output_buffer(input1);
     const auto& rhs_buffer = get_output_buffer(input2);
