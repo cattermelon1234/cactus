@@ -473,7 +473,7 @@ public:
     size_t pow(size_t input, float exponent);
     size_t cat(const std::vector<size_t>& inputs, int axis);
     size_t view(size_t input, const std::vector<size_t>& new_shape);
-    size_t flatten(size_t input);
+    size_t flatten(size_t input, int start_dim = 0, int end_dim = -1);
     
     size_t matmul(size_t input1, size_t input2, bool pretransposed_rhs = false, ComputeBackend backend = ComputeBackend::CPU);
     size_t transpose(size_t input, ComputeBackend backend = ComputeBackend::CPU);
