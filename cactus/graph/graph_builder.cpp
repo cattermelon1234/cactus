@@ -69,35 +69,6 @@ size_t CactusGraph::pow(size_t input, float exponent) {
     return add_node(OpType::POW, {input}, input_buffer.shape, params);
 }
 
-size_t CactusGraph::cat(size_t input1, size_t input2, int axis) {
-    const auto& buffer1 = get_output_buffer(input1);
-    const auto& buffer2 = get_output_buffer(input2);
-
-    if (buffer1.shape.size() != buffer2.shape.size()) {
-        throw std::runtime_error("Concat requires inputs with same number of dimensions");
-    }
-
-    std::vector<size_t> output_shape = buffer1.shape;
-    size_t ndims = output_shape.size();
-
-    if (axis < 0) axis += ndims;
-    if (axis < 0 || static_cast<size_t>(axis) >= ndims) {
-        throw std::runtime_error("Invalid axis for concat operation");
-    }
-
-    for (size_t i = 0; i < ndims; ++i) {
-        if (i != static_cast<size_t>(axis) && buffer1.shape[i] != buffer2.shape[i]) {
-            throw std::runtime_error("Concat inputs must have same shape except on concat axis");
-        }
-    }
-
-    output_shape[axis] = buffer1.shape[axis] + buffer2.shape[axis];
-
-    OpParams params;
-    params.axis = axis;
-    return add_node(OpType::CAT, {input1, input2}, output_shape, params);
-}
-
 size_t CactusGraph::view(size_t input, const std::vector<size_t>& new_shape) {
     const auto& input_buffer = get_output_buffer(input);
 
@@ -1204,6 +1175,38 @@ size_t CactusGraph::concat(size_t input1, size_t input2, int axis) {
     OpParams params;
     params.axis = axis;
     return add_node(OpType::CONCAT, {input1, input2}, output_shape, params);
+}
+
+size_t CactusGraph::cat(const std::vector<size_t>& inputs, int axis) {
+    if (inputs.empty()) {
+        throw std::runtime_error("Cat requires at least one input");
+    }
+
+    const auto& first_buffer = get_output_buffer(inputs[0]);
+    std::vector<size_t> output_shape = first_buffer.shape;
+    size_t ndims = output_shape.size();
+
+    if (axis < 0) axis += ndims;
+    if (axis < 0 || static_cast<size_t>(axis) >= ndims) {
+        throw std::runtime_error("Invalid axis for cat operation");
+    }
+
+    for (size_t i = 1; i < inputs.size(); ++i) {
+        const auto& buffer = get_output_buffer(inputs[i]);
+        if (buffer.shape.size() != ndims) {
+            throw std::runtime_error("All inputs to cat must have same number of dimensions");
+        }
+        for (size_t d = 0; d < ndims; ++d) {
+            if (d != static_cast<size_t>(axis) && buffer.shape[d] != output_shape[d]) {
+                throw std::runtime_error("All inputs to cat must have same shape except on cat axis");
+            }
+        }
+        output_shape[axis] += buffer.shape[axis];
+    }
+
+    OpParams params;
+    params.axis = axis;
+    return add_node(OpType::CAT, inputs, output_shape, params);
 }
 
 size_t CactusGraph::scatter_topk(size_t indices, size_t values, size_t num_classes) {

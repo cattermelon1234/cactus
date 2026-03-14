@@ -122,14 +122,14 @@ enum class Activation {
 enum class OpType {
     INPUT, PRECISION_CAST,
     ADD, ADD_CLIPPED, SUBTRACT, MULTIPLY, DIVIDE,
-    ABS, POW, CAT, FLATTEN, VIEW,
+    ABS, POW, FLATTEN, VIEW,
     MATMUL, TRANSPOSE, RESHAPE, SLICE, GATHER, EMBEDDING,
     BILINEAR_INTERPOLATION,
     SUM, MEAN, VARIANCE, MIN, MAX,
     RMS_NORM, ROPE, ROPE_GPTJ, SOFTMAX, ATTENTION, ATTENTION_INT8_HYBRID, REL_POS_BIAS, CONV1D_CAUSAL, CONV1D_K3, CONV1D_K7S3, CONV1D, CONV1D_SAME_DEPTHWISE_K9, CONV1D_POINTWISE, CONV2D_K3S2P1, CONV2D_DEPTHWISE_K3S2P1, CONV2D_POINTWISE_1X1, GLU, BATCHNORM,
     SCALAR_ADD, SCALAR_SUBTRACT, SCALAR_MULTIPLY, SCALAR_DIVIDE, SCALAR_EXP, SCALAR_SQRT, SCALAR_COS, SCALAR_SIN, SCALAR_LOG,
     RELU, SILU, GELU, GELU_ERF, SIGMOID, TANH,
-    SAMPLE, CONCAT,
+    SAMPLE, CONCAT, CAT,
     SCATTER_TOPK,
     TOPK, LAYERNORM, GROUPNORM,
     MOE_LAYER,
@@ -450,7 +450,6 @@ public:
     size_t multiply(size_t input1, size_t input2);
     size_t divide(size_t input1, size_t input2);
     
-    
     size_t scalar_add(size_t input, float value);
     size_t scalar_subtract(size_t input, float value);
     size_t scalar_multiply(size_t input, float value);
@@ -471,7 +470,6 @@ public:
 
     size_t abs(size_t input);
     size_t pow(size_t input, float exponent);
-    size_t cat(const std::vector<size_t>& inputs, int axis);
     size_t view(size_t input, const std::vector<size_t>& new_shape);
     size_t flatten(size_t input, int start_dim = 0, int end_dim = -1);
     
@@ -577,6 +575,7 @@ public:
                   const std::unordered_map<uint32_t, float>& logit_bias = {});
     
     size_t concat(size_t input1, size_t input2, int axis = 0);
+    size_t cat(const std::vector<size_t>& inputs, int axis);
     size_t scatter_topk(size_t indices, size_t values, size_t num_classes);
     
     void set_input(size_t node_id, const void* data, Precision precision);

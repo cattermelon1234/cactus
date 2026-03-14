@@ -326,6 +326,54 @@ void compute_concat_node(GraphNode& node, const std::vector<std::unique_ptr<Grap
                      shape1.size(), node.params.axis);
 }
 
+void cactus_cat_f16(const __fp16** inputs, __fp16* output,
+                    const size_t** input_shapes,
+                    const size_t* output_shape,
+                    size_t num_inputs, int axis);
+
+void compute_cat_node(
+    GraphNode& node,
+    const std::vector<std::unique_ptr<GraphNode>>& nodes,
+    const std::unordered_map<size_t, size_t>& node_index_map
+) {
+    if (node.params.axis < 0) {
+        throw std::runtime_error("Cat operation does not support negative axis");
+    }
+    if (node.input_ids.size() < 2) {
+        throw std::runtime_error("Cat operation requires at least 2 input tensors");
+    }
+
+    const auto& first_buffer =
+        nodes[node_index_map.at(node.input_ids[0])]->output_buffer;
+
+    if (first_buffer.precision != Precision::FP16) {
+        throw std::runtime_error("Cat operation only supports FP16 precision");
+    }
+
+    std::vector<const __fp16*> input_data_ptrs(node.input_ids.size());
+    std::vector<std::vector<size_t>> input_shapes_storage(node.input_ids.size());
+    std::vector<const size_t*> input_shape_ptrs(node.input_ids.size());
+
+    for (size_t i = 0; i < node.input_ids.size(); i++) {
+        const auto& buffer = nodes[node_index_map.at(node.input_ids[i])]->output_buffer;
+
+        if (buffer.precision != Precision::FP16) {
+            throw std::runtime_error("Cat operation only supports FP16 precision");
+        }
+
+        input_data_ptrs[i] = buffer.data_as<__fp16>();
+        input_shapes_storage[i] = buffer.shape;
+        input_shape_ptrs[i] = input_shapes_storage[i].data();
+    }
+
+    cactus_cat_f16(input_data_ptrs.data(),
+                   node.output_buffer.data_as<__fp16>(),
+                   input_shape_ptrs.data(),
+                   node.output_buffer.shape.data(),
+                   node.input_ids.size(),
+                   node.params.axis);
+}
+
 void compute_index_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map) {
     const auto& input_buffer = nodes[node_index_map.at(node.input_ids[0])]->output_buffer;
     const auto& input_shape = input_buffer.shape;
