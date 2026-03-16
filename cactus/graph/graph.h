@@ -310,7 +310,6 @@ struct BufferDesc {
 
 struct OpParams {
     float scalar = 0.0f;
-    float exponent = 1.0f;
     float scale = 1.0f;
     float theta = 10000.0f;
     float epsilon = 1e-6f;

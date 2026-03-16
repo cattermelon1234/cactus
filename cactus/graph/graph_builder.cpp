@@ -65,7 +65,7 @@ size_t CactusGraph::abs(size_t input) {
 
 size_t CactusGraph::pow(size_t input, float exponent) {
     const auto& input_buffer = get_output_buffer(input);
-    OpParams params{.exponent = exponent, .output_precision = input_buffer.precision};
+    OpParams params{.scalar = exponent, .output_precision = input_buffer.precision};
     return add_node(OpType::POW, {input}, input_buffer.shape, params);
 }
 

@@ -234,6 +234,7 @@ void cactus_scalar_op_f16(const __fp16* input, __fp16* output, size_t num_elemen
         }
         
         case ScalarOpType::POW: {
+          // manual impl for now
           CactusThreading::parallel_for(
               num_elements,
               CactusThreading::Thresholds::SCALAR_EXPENSIVE,

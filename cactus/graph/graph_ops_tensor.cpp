@@ -326,11 +326,6 @@ void compute_concat_node(GraphNode& node, const std::vector<std::unique_ptr<Grap
                      shape1.size(), node.params.axis);
 }
 
-void cactus_cat_f16(const __fp16** inputs, __fp16* output,
-                    const size_t** input_shapes,
-                    const size_t* output_shape,
-                    size_t num_inputs, int axis);
-
 void compute_cat_node(
     GraphNode& node,
     const std::vector<std::unique_ptr<GraphNode>>& nodes,
@@ -351,7 +346,6 @@ void compute_cat_node(
     }
 
     std::vector<const __fp16*> input_data_ptrs(node.input_ids.size());
-    std::vector<std::vector<size_t>> input_shapes_storage(node.input_ids.size());
     std::vector<const size_t*> input_shape_ptrs(node.input_ids.size());
 
     for (size_t i = 0; i < node.input_ids.size(); i++) {
@@ -362,8 +356,7 @@ void compute_cat_node(
         }
 
         input_data_ptrs[i] = buffer.data_as<__fp16>();
-        input_shapes_storage[i] = buffer.shape;
-        input_shape_ptrs[i] = input_shapes_storage[i].data();
+        input_shape_ptrs[i] = buffer.shape.data();
     }
 
     cactus_cat_f16(input_data_ptrs.data(),
