@@ -210,6 +210,65 @@ CACTUS_FFI_EXPORT void cactus_set_app_id(const char* app_id);
 CACTUS_FFI_EXPORT void cactus_telemetry_flush(void);
 CACTUS_FFI_EXPORT void cactus_telemetry_shutdown(void);
 
+// cactus graph export 
+typedef void* cactus_graph_t;
+typedef uint64_t cactus_node_t;
+
+typedef struct {
+    int32_t precision;
+    size_t rank;
+    size_t shape[8]; 
+    size_t num_elements;
+    size_t byte_size;
+} cactus_tensor_info_t;
+
+CACTUS_FFI_EXPORT cactus_graph_t cactus_graph_create(void);
+CACTUS_FFI_EXPORT void cactus_graph_destroy(cactus_graph_t graph);
+CACTUS_FFI_EXPORT int cactus_graph_hard_reset(cactus_graph_t graph);
+
+CACTUS_FFI_EXPORT int cactus_graph_input(
+    cactus_graph_t graph, const size_t* shape, size_t rank, int32_t precision,
+cactus_node_t* out_node);
+
+CACTUS_FFI_EXPORT int cactus_graph_set_input(
+    cactus_graph_t graph, cactus_node_t node, const void* data, int32_t
+precision);
+
+CACTUS_FFI_EXPORT int cactus_graph_add(cactus_graph_t graph, cactus_node_t a,
+cactus_node_t b, cactus_node_t* out);
+CACTUS_FFI_EXPORT int cactus_graph_subtract(cactus_graph_t graph, cactus_node_t
+a, cactus_node_t b, cactus_node_t* out);
+CACTUS_FFI_EXPORT int cactus_graph_multiply(cactus_graph_t graph, cactus_node_t
+a, cactus_node_t b, cactus_node_t* out);
+CACTUS_FFI_EXPORT int cactus_graph_divide(cactus_graph_t graph, cactus_node_t
+a, cactus_node_t b, cactus_node_t* out);
+
+CACTUS_FFI_EXPORT int cactus_graph_abs(cactus_graph_t graph, cactus_node_t x,
+cactus_node_t* out);
+CACTUS_FFI_EXPORT int cactus_graph_pow(cactus_graph_t graph, cactus_node_t x,
+float exponent, cactus_node_t* out);
+
+CACTUS_FFI_EXPORT int cactus_graph_view(
+    cactus_graph_t graph, cactus_node_t x, const size_t* shape, size_t rank,
+cactus_node_t* out);
+CACTUS_FFI_EXPORT int cactus_graph_flatten(
+    cactus_graph_t graph, cactus_node_t x, int32_t start_dim, int32_t end_dim,
+cactus_node_t* out);
+
+CACTUS_FFI_EXPORT int cactus_graph_concat(
+    cactus_graph_t graph, cactus_node_t a, cactus_node_t b, int32_t axis,
+cactus_node_t* out);
+
+CACTUS_FFI_EXPORT int cactus_graph_cat(
+    cactus_graph_t graph, const cactus_node_t* nodes, size_t count, int32_t
+axis, cactus_node_t* out);
+
+CACTUS_FFI_EXPORT int cactus_graph_execute(cactus_graph_t graph);
+CACTUS_FFI_EXPORT int cactus_graph_get_output_ptr(cactus_graph_t graph,
+cactus_node_t node, void** out_ptr);
+CACTUS_FFI_EXPORT int cactus_graph_get_output_info(cactus_graph_t graph,
+cactus_node_t node, cactus_tensor_info_t* out_info);
+
 #ifdef __cplusplus
 }
 #endif

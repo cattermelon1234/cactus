@@ -19,12 +19,38 @@ if not _LIB_PATH.exists():
 
 _lib = ctypes.CDLL(str(_LIB_PATH))
 
+cactus_graph_t = ctypes.c_void_p
+cactus_node_t = ctypes.c_uint64
+
 _lib.cactus_set_telemetry_environment.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
 _lib.cactus_set_telemetry_environment.restype = None
 _lib.cactus_set_telemetry_environment(b"python", None, None)
 
 _lib.cactus_init.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_bool]
 _lib.cactus_init.restype = ctypes.c_void_p
+
+# cactus graph API
+_lib.cactus_graph_create.restype = cactus_graph_t
+_lib.cactus_graph_destroy.argtypes = [cactus_graph_t]
+
+_lib.cactus_graph.argtypes = [
+    cactus_graph_t,
+    ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t,
+    ctypes.c_int32, ctypes.POINTER(cactus_node_t)
+]
+
+_lib.cactus_graph_input.restype = ctypes.c_int
+
+_lib.cactus_graph_subtract.argtypes = [cactus_graph_t, cactus_node_t,
+  cactus_node_t, ctypes.POINTER(cactus_node_t)]
+_lib.cactus_graph_subtract.restype = ctypes.c_int
+
+_lib.cactus_graph_execute.argtypes = [cactus_graph_t]
+_lib.cactus_graph_execute.restype = ctypes.c_int
+
+_lib.cactus_graph_get_output_ptr.argtypes = [cactus_graph_t, cactus_node_t,
+  ctypes.POINTER(ctypes.c_void_p)]
+_lib.cactus_graph_get_output_ptr.restype = ctypes.c_int
 
 _lib.cactus_complete.argtypes = [
     ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
