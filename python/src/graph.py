@@ -1,4 +1,5 @@
 import ctypes
+from os import wait
 import numpy as np
 
 from .cactus import _lib, cactus_node_t, cactus_tensor_info_t
@@ -138,6 +139,85 @@ class Graph:
         )
         if rc != 0:
             raise RuntimeError("graph_cat failed")
+        return self._tensor_from_node(out.value)
+
+    def group_norm(self, x, normalized_shape, eps=1e-5):
+        x = self._ensure_tensor(x)
+        normalized_shape = tuple(int(v) for v in normalized_shape)
+        shape_arr = (ctypes.c_size_t * len(normalized_shape))(*normalized_shape)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_group_norm(
+            self.h,
+            cactus_node_t(x.id),
+            shape_arr,
+            len(normalized_shape),
+            ctypes.c_float(float(eps)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError("graph_group_norm failed")
+        return self._tensor_from_node(out.value)
+
+    def layer_norm(self, x, normalized_shape, eps=1e-5):
+        x = self._ensure_tensor(x)
+        normalized_shape = tuple(int(v) for v in normalized_shape)
+        shape_arr = (ctypes.c_size_t * len(normalized_shape))(*normalized_shape)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_layer_norm(
+            self.h,
+            cactus_node_t(x.id),
+            shape_arr,
+            len(normalized_shape),
+            ctypes.c_float(float(eps)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError("graph_layer_norm failed")
+        return self._tensor_from_node(out.value)
+    
+    def softmax(self, x, axis=-1):
+        x = self._ensure_tensor(x)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_softmax(
+            self.h,
+            cactus_node_t(x.id),
+            ctypes.c_int32(int(axis)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError("graph_softmax failed")
+        return self._tensor_from_node(out.value)
+    
+    def relu(self, x):
+        x = self._ensure_tensor(x)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_relu(self.h, cactus_node_t(x.id), ctypes.byref(out))
+        if rc != 0:
+            raise RuntimeError("graph_relu failed")
+        return self._tensor_from_node(out.value)
+
+    def gelu(self, x):
+        x = self._ensure_tensor(x)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_gelu(self.h, cactus_node_t(x.id), ctypes.byref(out))
+        if rc != 0:
+            raise RuntimeError("graph_gelu failed")
+        return self._tensor_from_node(out.value)
+
+    def sigmoid(self, x):
+        x = self._ensure_tensor(x)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_sigmoid(self.h, cactus_node_t(x.id), ctypes.byref(out))
+        if rc != 0:
+            raise RuntimeError("graph_sigmoid failed")
+        return self._tensor_from_node(out.value)
+
+    def tanh(self, x):
+        x = self._ensure_tensor(x)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_tanh(self.h, cactus_node_t(x.id), ctypes.byref(out))
+        if rc != 0:
+            raise RuntimeError("graph_tanh failed")
         return self._tensor_from_node(out.value)
 
     def output_info(self, x):
