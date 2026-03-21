@@ -514,12 +514,13 @@ int cactus_graph_cat(cactus_graph_t graph, const cactus_node_t* nodes, size_t co
         return -1;
     }
     try {
-        size_t acc = static_cast<size_t>(nodes[0]);
-        for (size_t i = 1; i < count; ++i) {
-            acc = as_graph(graph)->graph.concat(acc, static_cast<size_t>(nodes[i]), axis);
+        std::vector<size_t> ns;
+        for (size_t i = 0; i < count; ++i) {
+            ns.push_back(static_cast<size_t>(nodes[i]));
         }
-        *out = static_cast<cactus_node_t>(acc);
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.cat(ns, axis));
         return 0;
+
     } catch (const std::exception& e) {
         last_error_message = e.what();
         return -1;
