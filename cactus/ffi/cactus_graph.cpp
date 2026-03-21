@@ -158,7 +158,16 @@ int cactus_graph_add(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, cac
     }
 }
 
-GRAPH_WRAP_BINARY(cactus_graph_add_clipped, add_clipped)
+int cactus_graph_add_clipped(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_add_clipped");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.add_clipped(static_cast<size_t>(a), static_cast<size_t>(b)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
 
 int cactus_graph_subtract(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, cactus_node_t* out) {
     if (!graph || !out) {
@@ -649,12 +658,71 @@ int cactus_graph_release_all_weight_pages(cactus_graph_t graph) {
     }
 }
 
-GRAPH_WRAP_UNARY(cactus_graph_relu, relu)
-GRAPH_WRAP_UNARY(cactus_graph_silu, silu)
-GRAPH_WRAP_UNARY(cactus_graph_gelu, gelu)
-GRAPH_WRAP_UNARY(cactus_graph_gelu_erf, gelu_erf)
-GRAPH_WRAP_UNARY(cactus_graph_sigmoid, sigmoid)
-GRAPH_WRAP_UNARY(cactus_graph_tanh, tanh)
+int cactus_graph_relu(cactus_graph_t graph, cactus_node_t x, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_relu");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.relu(static_cast<size_t>(x)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
+int cactus_graph_silu(cactus_graph_t graph, cactus_node_t x, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_silu");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.silu(static_cast<size_t>(x)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
+int cactus_graph_gelu(cactus_graph_t graph, cactus_node_t x, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_gelu");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.gelu(static_cast<size_t>(x)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
+int cactus_graph_gelu_erf(cactus_graph_t graph, cactus_node_t x, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_gelu_erf");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.gelu_erf(static_cast<size_t>(x)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
+int cactus_graph_sigmoid(cactus_graph_t graph, cactus_node_t x, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_sigmoid");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.sigmoid(static_cast<size_t>(x)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
+int cactus_graph_tanh(cactus_graph_t graph, cactus_node_t x, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_tanh");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.tanh(static_cast<size_t>(x)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
 
 int cactus_graph_glu(cactus_graph_t graph, cactus_node_t x, int32_t axis, cactus_node_t* out) {
     if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_glu");

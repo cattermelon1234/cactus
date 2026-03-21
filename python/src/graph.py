@@ -221,6 +221,18 @@ class Tensor:
     def pow(self, exponent):
         return self.g.pow(self, exponent)
 
+    def relu(self):
+        return self.g.relu(self)
+
+    def sigmoid(self):
+        return self.g.sigmoid(self)
+
+    def tanh(self):
+        return self.g.tanh(self)
+
+    def gelu(self):
+        return self.g.gelu(self)
+
     def view(self, shape):
         return self.g.view(self, shape)
 
@@ -229,6 +241,18 @@ class Tensor:
 
     def concat(self, other, axis=0):
         return self.g.concat(self, other, axis=axis)
+
+    def cat(self, tensors, axis=0):
+        return self.g.cat([self] + tensors, axis=axis)
+
+    def group_norm(self, normalized_shape, eps=1e-5):
+        return self.g.group_norm(self, normalized_shape, eps)
+
+    def layer_norm(self, normalized_shape, eps=1e-5):
+        return self.g.layer_norm(self, normalized_shape, eps)
+    
+    def softmax(self, axis=-1):
+        return self.g.softmax(self, axis)
 
     def numpy(self):
         info = cactus_tensor_info_t()
