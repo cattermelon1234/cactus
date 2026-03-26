@@ -379,6 +379,7 @@ void compute_cat_node(
                    input_shape_ptrs.data(),
                    node.output_buffer.shape.data(),
                    node.input_ids.size(),
+                   node.output_buffer.shape.size(),
                    node.params.axis);
 }
 
