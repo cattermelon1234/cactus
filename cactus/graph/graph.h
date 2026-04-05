@@ -445,6 +445,8 @@ public:
 
     BufferPool(const BufferPool&) = delete;
     BufferPool& operator=(const BufferPool&) = delete;
+    BufferPool(BufferPool&&) noexcept = default;
+    BufferPool& operator=(BufferPool&&) noexcept = default;
 
     char* acquire(size_t byte_size);
     void release(char* ptr, size_t byte_size);
@@ -473,6 +475,12 @@ namespace ValidationUtils {
 class CactusGraph {
 public:
     CactusGraph();
+    ~CactusGraph() = default;
+
+    CactusGraph(const CactusGraph&) = delete;
+    CactusGraph& operator=(const CactusGraph&) = delete;
+    CactusGraph(CactusGraph&&) noexcept = default;
+    CactusGraph& operator=(CactusGraph&&) noexcept = default;
 
     struct DebugNodeEntry {
         uint32_t layer_idx;
@@ -662,7 +670,6 @@ public:
 
 private:
     static CactusGraph from_serialized(const GraphFile::SerializedGraph& serialized);
-
     size_t next_node_id_;
     std::vector<std::unique_ptr<GraphFile::MappedFile>> mapped_files_;
     std::unordered_map<std::string, size_t> weight_cache_;

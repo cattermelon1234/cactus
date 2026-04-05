@@ -258,6 +258,9 @@ CACTUS_FFI_EXPORT cactus_graph_t cactus_graph_create(void);
 CACTUS_FFI_EXPORT void cactus_graph_destroy(cactus_graph_t graph);
 CACTUS_FFI_EXPORT int cactus_graph_hard_reset(cactus_graph_t graph);
 
+CACTUS_FFI_EXPORT int cactus_graph_save(cactus_graph_t graph, const char* filename);
+CACTUS_FFI_EXPORT cactus_graph_t cactus_graph_load(const char* filename);
+
 CACTUS_FFI_EXPORT int cactus_graph_input(
     cactus_graph_t graph, const size_t* shape, size_t rank, int32_t precision,
 cactus_node_t* out_node);

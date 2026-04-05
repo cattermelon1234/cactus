@@ -21,173 +21,350 @@ namespace {
     }
 
     inline void write_u32(std::ostream& out, uint32_t v) {
-  out.write(reinterpret_cast<const char*>(&v), sizeof(v));
-}
+      out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
 
-inline void write_u64(std::ostream& out, uint64_t v) {
-  out.write(reinterpret_cast<const char*>(&v), sizeof(v));
-}
+    inline void write_u64(std::ostream& out, uint64_t v) {
+      out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
 
-inline void write_i32(std::ostream& out, int32_t v) {
-  out.write(reinterpret_cast<const char*>(&v), sizeof(v));
-}
+    inline void write_i32(std::ostream& out, int32_t v) {
+      out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
 
-inline void write_f32(std::ostream& out, float v) {
-  out.write(reinterpret_cast<const char*>(&v), sizeof(v));
-}
+    inline void write_f32(std::ostream& out, float v) {
+      out.write(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
 
-void write_size_vector(std::ostream& out, const std::vector<size_t>& values) {
-  uint32_t size = static_cast<uint32_t>(values.size());
-  write_u32(out, size);
-  for (size_t v : values) {
-    write_u64(out, static_cast<uint64_t>(v));
-  }
-}
-
-void write_u32_vector(std::ostream& out, const std::vector<uint32_t>& values) {
-  uint32_t size = static_cast<uint32_t>(values.size());
-  write_u32(out, size);
-  for (uint32_t v : values) {
-    write_u32(out, v);
-  }
-}
-
-void write_op_params(std::ostream& out, const GraphFile::NodeEntry& node) {
-  uint32_t param_flags = 0;
-
-  constexpr uint32_t PARAM_SCALAR            = 1u << 0;
-  constexpr uint32_t PARAM_AXIS              = 1u << 1;
-  constexpr uint32_t PARAM_NEW_SHAPE         = 1u << 2;
-  constexpr uint32_t PARAM_PRETRANSPOSED_RHS = 1u << 3;
-  constexpr uint32_t PARAM_BACKEND           = 1u << 4;
-  constexpr uint32_t PARAM_SLICE             = 1u << 5;
-
-  switch (node.op_type) {
-    case OpType::POW:
-    case OpType::SCALAR_ADD:
-    case OpType::SCALAR_SUBTRACT:
-    case OpType::SCALAR_MULTIPLY:
-    case OpType::SCALAR_DIVIDE:
-      param_flags |= PARAM_SCALAR;
-      break;
-    default:
-      break;
-  }
-
-  switch (node.op_type) {
-    case OpType::SOFTMAX:
-    case OpType::SUM:
-    case OpType::MEAN:
-    case OpType::VARIANCE:
-    case OpType::MIN:
-    case OpType::MAX:
-    case OpType::INDEX:
-      param_flags |= PARAM_AXIS;
-      break;
-    default:
-      break;
-  }
-
-  switch (node.op_type) {
-    case OpType::VIEW:
-    case OpType::RESHAPE:
-    case OpType::FLATTEN:
-      param_flags |= PARAM_NEW_SHAPE;
-      break;
-    default:
-      break;
-  }
-
-  if (node.op_type == OpType::MATMUL) {
-    param_flags |= PARAM_PRETRANSPOSED_RHS;
-    param_flags |= PARAM_BACKEND;
-  }
-
-  if (node.op_type == OpType::SLICE) {
-    param_flags |= PARAM_AXIS;
-    param_flags |= PARAM_SLICE;
-  }
-
-  write_u32(out, param_flags);
-
-  if (param_flags & PARAM_SCALAR) {
-    write_f32(out, node.params.scalar);
-  }
-  if (param_flags & PARAM_AXIS) {
-    write_i32(out, static_cast<int32_t>(node.params.axis));
-  }
-  if (param_flags & PARAM_NEW_SHAPE) {
-    write_size_vector(out, node.params.new_shape);
-  }
-  if (param_flags & PARAM_PRETRANSPOSED_RHS) {
-    write_u32(out, node.params.pretransposed_rhs ? 1u : 0u);
-  }
-  if (param_flags & PARAM_BACKEND) {
-    write_u32(out, static_cast<uint32_t>(node.params.backend));
-  }
-  if (param_flags & PARAM_SLICE) {
-    write_u64(out, static_cast<uint64_t>(node.params.slice_start));
-    write_u64(out, static_cast<uint64_t>(node.params.slice_length));
-  }
-}
-
-std::vector<uint32_t> compute_leaf_outputs(const GraphFile::SerializedGraph& sg) {
-  std::vector<bool> referenced(sg.nodes.size(), false);
-
-  for (const auto& node : sg.nodes) {
-    for (uint32_t input_idx : node.inputs) {
-      if (input_idx >= referenced.size()) {
-        throw std::runtime_error("Graph save failed: input index out of range");
+    void write_size_vector(std::ostream& out, const std::vector<size_t>& values) {
+      uint32_t size = static_cast<uint32_t>(values.size());
+      write_u32(out, size);
+      for (size_t v : values) {
+        write_u64(out, static_cast<uint64_t>(v));
       }
-      referenced[input_idx] = true;
     }
-  }
 
-  std::vector<uint32_t> outputs;
-  outputs.reserve(sg.nodes.size());
-
-  for (uint32_t i = 0; i < sg.nodes.size(); ++i) {
-    if (!referenced[i]) {
-      outputs.push_back(i);
+    void write_u32_vector(std::ostream& out, const std::vector<uint32_t>& values) {
+      uint32_t size = static_cast<uint32_t>(values.size());
+      write_u32(out, size);
+      for (uint32_t v : values) {
+        write_u32(out, v);
+      }
     }
-  }
 
-  return outputs;
-}
+    void write_op_params(std::ostream& out, const GraphFile::NodeEntry& node) {
+      uint32_t param_flags = 0;
 
-void write_serialized_graph(std::ostream& out, const GraphFile::SerializedGraph& sg) {
-  write_u32(out, sg.header.magic);
-  write_u32(out, sg.header.version);
-  write_u32(out, sg.header.node_count);
-  write_u32(out, sg.header.flags);
+      constexpr uint32_t PARAM_SCALAR            = 1u << 0;
+      constexpr uint32_t PARAM_AXIS              = 1u << 1;
+      constexpr uint32_t PARAM_NEW_SHAPE         = 1u << 2;
+      constexpr uint32_t PARAM_PRETRANSPOSED_RHS = 1u << 3;
+      constexpr uint32_t PARAM_BACKEND           = 1u << 4;
+      constexpr uint32_t PARAM_SLICE             = 1u << 5;
 
-  write_u32_vector(out, sg.graph_inputs);
-  write_u32_vector(out, sg.graph_outputs);
+      switch (node.op_type) {
+        case OpType::POW:
+        case OpType::SCALAR_ADD:
+        case OpType::SCALAR_SUBTRACT:
+        case OpType::SCALAR_MULTIPLY:
+        case OpType::SCALAR_DIVIDE:
+          param_flags |= PARAM_SCALAR;
+          break;
+        default:
+          break;
+      }
 
-  for (const auto& node : sg.nodes) {
-    write_u32(out, node.index);
-    write_u32(out, static_cast<uint32_t>(node.op_type));
-    write_u32_vector(out, node.inputs);
-    write_size_vector(out, node.output_shape);
-    write_u32(out, static_cast<uint32_t>(node.precision));
-    write_op_params(out, node);
-  }
+      switch (node.op_type) {
+        case OpType::SOFTMAX:
+        case OpType::SUM:
+        case OpType::MEAN:
+        case OpType::VARIANCE:
+        case OpType::MIN:
+        case OpType::MAX:
+        case OpType::INDEX:
+          param_flags |= PARAM_AXIS;
+          break;
+        default:
+          break;
+      }
 
-  if (!out) {
-    throw std::runtime_error("Error writing serialized graph");
-  }
-}
+      switch (node.op_type) {
+        case OpType::VIEW:
+        case OpType::RESHAPE:
+        case OpType::FLATTEN:
+          param_flags |= PARAM_NEW_SHAPE;
+          break;
+        default:
+          break;
+      }
+
+      if (node.op_type == OpType::MATMUL) {
+        param_flags |= PARAM_PRETRANSPOSED_RHS;
+        param_flags |= PARAM_BACKEND;
+      }
+
+      if (node.op_type == OpType::SLICE) {
+        param_flags |= PARAM_AXIS;
+        param_flags |= PARAM_SLICE;
+      }
+
+      write_u32(out, param_flags);
+
+      if (param_flags & PARAM_SCALAR) {
+        write_f32(out, node.params.scalar);
+      }
+      if (param_flags & PARAM_AXIS) {
+        write_i32(out, static_cast<int32_t>(node.params.axis));
+      }
+      if (param_flags & PARAM_NEW_SHAPE) {
+        write_size_vector(out, node.params.new_shape);
+      }
+      if (param_flags & PARAM_PRETRANSPOSED_RHS) {
+        write_u32(out, node.params.pretransposed_rhs ? 1u : 0u);
+      }
+      if (param_flags & PARAM_BACKEND) {
+        write_u32(out, static_cast<uint32_t>(node.params.backend));
+      }
+      if (param_flags & PARAM_SLICE) {
+        write_u64(out, static_cast<uint64_t>(node.params.slice_start));
+        write_u64(out, static_cast<uint64_t>(node.params.slice_length));
+      }
+    }
+
+    std::vector<uint32_t> compute_leaf_outputs(const GraphFile::SerializedGraph& sg) {
+      std::vector<bool> referenced(sg.nodes.size(), false);
+
+      for (const auto& node : sg.nodes) {
+        for (uint32_t input_idx : node.inputs) {
+          if (input_idx >= referenced.size()) {
+            throw std::runtime_error("Graph save failed: input index out of range");
+          }
+          referenced[input_idx] = true;
+        }
+      }
+
+      std::vector<uint32_t> outputs;
+      outputs.reserve(sg.nodes.size());
+
+      for (uint32_t i = 0; i < sg.nodes.size(); ++i) {
+        if (!referenced[i] && sg.nodes[i].op_type != OpType::INPUT) {
+          outputs.push_back(i);
+        }
+      }
+
+      if (outputs.empty()) {
+        for (uint32_t i = 0; i < sg.nodes.size(); ++i) {
+          if (!referenced[i]) {
+            outputs.push_back(i);
+          }
+        }
+      }
+
+      return outputs;
+    }
+
+    void write_serialized_graph(std::ostream& out, const GraphFile::SerializedGraph& sg) {
+      write_u32(out, sg.header.magic);
+      write_u32(out, sg.header.version);
+      write_u32(out, sg.header.node_count);
+      write_u32(out, sg.header.flags);
+
+      write_u32_vector(out, sg.graph_inputs);
+      write_u32_vector(out, sg.graph_outputs);
+
+      for (const auto& node : sg.nodes) {
+        write_u32(out, node.index);
+        write_u32(out, static_cast<uint32_t>(node.op_type));
+        write_u32_vector(out, node.inputs);
+        write_size_vector(out, node.output_shape);
+        write_u32(out, static_cast<uint32_t>(node.precision));
+        write_op_params(out, node);
+      }
+
+      if (!out) {
+        throw std::runtime_error("Error writing serialized graph");
+      }
+    }
+
+    // read helpers
+    uint32_t read_u32(std::istream& in) {
+        uint32_t v = 0;
+        in.read(reinterpret_cast<char*>(&v), sizeof(v));
+        if (!in) {
+            throw std::runtime_error("Unexpected EOF while reading uint32");
+        }
+        return v;
+    }
+
+    uint64_t read_u64(std::istream& in) {
+        uint64_t v = 0;
+        in.read(reinterpret_cast<char*>(&v), sizeof(v));
+        if (!in) {
+            throw std::runtime_error("Unexpected EOF while reading uint64");
+        }
+        return v;
+    }
+
+    int32_t read_i32(std::istream& in) {
+        int32_t v = 0;
+        in.read(reinterpret_cast<char*>(&v), sizeof(v));
+        if (!in) {
+            throw std::runtime_error("Unexpected EOF while reading int32");
+        }
+        return v;
+    }
+
+    float read_f32(std::istream& in) {
+        float v = 0.0f;
+        in.read(reinterpret_cast<char*>(&v), sizeof(v));
+        if (!in) {
+            throw std::runtime_error("Unexpected EOF while reading float");
+        }
+        return v;
+    }
+
+    std::vector<uint32_t> read_u32_vector(std::istream& in) {
+        uint32_t count = read_u32(in);
+        std::vector<uint32_t> values;
+        values.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            values.push_back(read_u32(in));
+        }
+        return values;
+    }
+
+    std::vector<size_t> read_size_vector(std::istream& in) {
+        uint32_t count = read_u32(in);
+        std::vector<size_t> values;
+        values.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            values.push_back(static_cast<size_t>(read_u64(in)));
+        }
+        return values;
+    }
+
+    void read_op_params(std::istream& in, GraphFile::NodeEntry& node) {
+        uint32_t param_flags = read_u32(in);
+
+        constexpr uint32_t PARAM_SCALAR            = 1u << 0;
+        constexpr uint32_t PARAM_AXIS              = 1u << 1;
+        constexpr uint32_t PARAM_NEW_SHAPE         = 1u << 2;
+        constexpr uint32_t PARAM_PRETRANSPOSED_RHS = 1u << 3;
+        constexpr uint32_t PARAM_BACKEND           = 1u << 4;
+        constexpr uint32_t PARAM_SLICE             = 1u << 5;
+
+        if (param_flags & PARAM_SCALAR) {
+            node.params.scalar = read_f32(in);
+        }
+        if (param_flags & PARAM_AXIS) {
+            node.params.axis = static_cast<int>(read_i32(in));
+        }
+        if (param_flags & PARAM_NEW_SHAPE) {
+            node.params.new_shape = read_size_vector(in);
+        }
+        if (param_flags & PARAM_PRETRANSPOSED_RHS) {
+            node.params.pretransposed_rhs = (read_u32(in) != 0);
+        }
+        if (param_flags & PARAM_BACKEND) {
+            node.params.backend = static_cast<ComputeBackend>(read_u32(in));
+        }
+        if (param_flags & PARAM_SLICE) {
+            node.params.slice_start = static_cast<size_t>(read_u64(in));
+            node.params.slice_length = static_cast<size_t>(read_u64(in));
+        }
+    }
+
+    GraphFile::GraphHeader read_graph_header(std::istream& in) {
+        GraphFile::GraphHeader header;
+        header.magic = read_u32(in);
+        header.version = read_u32(in);
+        header.node_count = read_u32(in);
+        header.flags = read_u32(in);
+
+        if (header.magic != CACTUS_GRAPH_MAGIC) {
+            throw std::runtime_error("Invalid graph file: bad magic");
+        }
+        if (header.version != 1) {
+            throw std::runtime_error("Unsupported graph file version: " +
+                std::to_string(header.version));
+        }
+
+        return header;
+    }
+
+    GraphFile::NodeEntry read_node_entry(std::istream& in) {
+        GraphFile::NodeEntry node;
+        node.index = read_u32(in);
+        uint32_t op_type_val = read_u32(in);
+        if (op_type_val > static_cast<uint32_t>(OpType::STATS_POOL)) {
+            throw std::runtime_error("Graph file corrupted: invalid op type");
+        }
+        node.op_type = static_cast<OpType>(op_type_val);
+        node.inputs = read_u32_vector(in);
+        node.output_shape = read_size_vector(in);
+        uint32_t precision_val = read_u32(in);
+        if (precision_val > static_cast<uint32_t>(Precision::INT4)) {
+            throw std::runtime_error("Graph file corrupted: invalid precision");
+        }
+        node.precision = static_cast<Precision>(precision_val);
+        read_op_params(in, node);
+        return node;
+    }
+    
 
 } // namespace
 
 void CactusGraph::save(const std::string& path, const cactus::GraphSaveOptions& opts) {
+    GraphFile::save_graph(*this, path, opts);
+}
+
+CactusGraph CactusGraph::from_serialized(const GraphFile::SerializedGraph& sg) {
+    CactusGraph graph;
+    std::vector<size_t> runtime_ids;
+    runtime_ids.reserve(sg.nodes.size());
+
+    if (sg.nodes.size() != sg.header.node_count) {
+        throw std::runtime_error("Graph file corrupted: node count mismatch");
+    }
+
+    for (size_t i = 0; i < sg.nodes.size(); ++i) {
+        const auto& node_entry = sg.nodes[i];
+
+        if (node_entry.index != i) {
+            throw std::runtime_error("Graph file corrupted: node indices must be dense and ordered");
+        }
+        std::vector<size_t> runtime_inputs;
+        runtime_inputs.reserve(node_entry.inputs.size());
+
+        for (uint32_t serialized_input_idx : node_entry.inputs) {
+            if (serialized_input_idx >= sg.nodes.size()) {
+                throw std::runtime_error("Graph file corrupted: input index out of range");
+            }
+            runtime_inputs.push_back(runtime_ids[serialized_input_idx]);
+        }
+
+        size_t new_node_id = 0;
+
+        if (node_entry.op_type == OpType::INPUT) {
+            new_node_id = graph.input(node_entry.output_shape, node_entry.precision);
+        }
+        else {
+            OpParams params;
+            params.output_precision = node_entry.params.output_precision;
+            new_node_id = graph.add_node(node_entry.op_type, runtime_inputs, node_entry.output_shape, params);
+
+            if (node_entry.op_type == OpType::PERSISTENT) {
+                graph.persistent_node_ids_.insert(new_node_id);
+            }
+        }
+        runtime_ids.push_back(new_node_id);
+    }
+    return graph;
 }
 
 CactusGraph CactusGraph::load(const std::string& path) {
-    return CactusGraph();
-}
-
-CactusGraph from_serialized(const GraphFile::SerializedGraph& serialized) {
+    GraphFile::SerializedGraph sg = GraphFile::load_graph(path);
+    return from_serialized(sg);
 }
 
 size_t CactusGraph::mmap_embeddings(const std::string& filename) {
@@ -366,7 +543,13 @@ void save_graph(const CactusGraph& graph,
       entry.inputs.push_back(it->second);
     }
 
-    if (node->op_type == OpType::INPUT) {
+    bool is_placeholder_input =
+        node->op_type == OpType::INPUT &&
+        node->output_buffer.external_data == nullptr &&
+        node->output_buffer.data == nullptr &&
+        node->output_buffer.pooled_data == nullptr;
+
+    if (is_placeholder_input) {
       sg.graph_inputs.push_back(entry.index);
     }
 
@@ -383,7 +566,50 @@ void save_graph(const CactusGraph& graph,
 }
 
 SerializedGraph load_graph(const std::string& filename) {
-    return SerializedGraph();
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Cannot open file for reading: " + filename);
+    }
+    SerializedGraph sg;
+    sg.header = read_graph_header(in);
+    sg.graph_inputs = read_u32_vector(in);
+    sg.graph_outputs = read_u32_vector(in);
+    sg.nodes.reserve(sg.header.node_count);
+    for (uint32_t i = 0; i < sg.header.node_count; ++i) {
+        sg.nodes.push_back(read_node_entry(in));
+    }
+
+    if (sg.nodes.size() != sg.header.node_count) {
+        throw std::runtime_error("Graph file corrupted: node count mismatch");
+    }
+
+    for (uint32_t i = 0; i < sg.nodes.size(); ++i) {
+        const auto& node = sg.nodes[i];
+
+        if (node.index != i) {
+            throw std::runtime_error("Graph file corrupted: node indices must be dense and ordered");
+        }
+
+        for (uint32_t input_idx : node.inputs) {
+            if (input_idx >= sg.nodes.size()) {
+                throw std::runtime_error("Graph file corrupted: input index out of range");
+            }
+        }
+    }
+
+    for (uint32_t input_idx : sg.graph_inputs) {
+        if (input_idx >= sg.nodes.size()) {
+            throw std::runtime_error("Graph file corrupted: graph input index out of range");
+        }
+    }
+
+    for (uint32_t output_idx : sg.graph_outputs) {
+        if (output_idx >= sg.nodes.size()) {
+            throw std::runtime_error("Graph file corrupted: graph output index out of range");
+        }
+    }
+
+    return sg;
 }
 
 void save_node(CactusGraph& graph, size_t node_id, const std::string& filename) {
