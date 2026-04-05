@@ -44,6 +44,12 @@ _lib.cactus_graph_destroy.argtypes = [cactus_graph_t]
 _lib.cactus_graph_hard_reset.argtypes = [cactus_graph_t]
 _lib.cactus_graph_hard_reset.restype = ctypes.c_int
 
+_lib.cactus_graph_save.argtypes = [cactus_graph_t, ctypes.c_char_p]
+_lib.cactus_graph_save.restype = ctypes.c_int
+
+_lib.cactus_graph_load.argtypes = [ctypes.c_char_p]
+_lib.cactus_graph_load.restype = cactus_graph_t
+
 _lib.cactus_graph_input.argtypes = [
     cactus_graph_t,
     ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t,

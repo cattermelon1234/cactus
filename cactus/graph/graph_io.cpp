@@ -147,16 +147,8 @@ namespace {
       outputs.reserve(sg.nodes.size());
 
       for (uint32_t i = 0; i < sg.nodes.size(); ++i) {
-        if (!referenced[i] && sg.nodes[i].op_type != OpType::INPUT) {
+        if (!referenced[i]) {
           outputs.push_back(i);
-        }
-      }
-
-      if (outputs.empty()) {
-        for (uint32_t i = 0; i < sg.nodes.size(); ++i) {
-          if (!referenced[i]) {
-            outputs.push_back(i);
-          }
         }
       }
 
@@ -337,8 +329,10 @@ CactusGraph CactusGraph::from_serialized(const GraphFile::SerializedGraph& sg) {
         runtime_inputs.reserve(node_entry.inputs.size());
 
         for (uint32_t serialized_input_idx : node_entry.inputs) {
-            if (serialized_input_idx >= sg.nodes.size()) {
-                throw std::runtime_error("Graph file corrupted: input index out of range");
+            if (serialized_input_idx >= runtime_ids.size()) {
+                throw std::runtime_error(
+                    "Graph file corrupted: input refers to a node that has not been reconstructed yet"
+                );
             }
             runtime_inputs.push_back(runtime_ids[serialized_input_idx]);
         }
@@ -349,8 +343,8 @@ CactusGraph CactusGraph::from_serialized(const GraphFile::SerializedGraph& sg) {
             new_node_id = graph.input(node_entry.output_shape, node_entry.precision);
         }
         else {
-            OpParams params;
-            params.output_precision = node_entry.params.output_precision;
+            OpParams params = node_entry.params;
+            params.output_precision = node_entry.precision;
             new_node_id = graph.add_node(node_entry.op_type, runtime_inputs, node_entry.output_shape, params);
 
             if (node_entry.op_type == OpType::PERSISTENT) {
