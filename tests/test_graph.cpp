@@ -7,6 +7,155 @@
 #include <iostream>
 #include <cstdio>
 
+namespace {
+
+const char* precision_to_string(Precision p) {
+    switch (p) {
+        case Precision::INT8: return "INT8";
+        case Precision::FP16: return "FP16";
+        case Precision::FP32: return "FP32";
+        case Precision::INT4: return "INT4";
+        default: return "UNKNOWN";
+    }
+}
+
+const char* op_type_to_string(OpType op) {
+    switch (op) {
+        case OpType::INPUT: return "INPUT";
+        case OpType::PRECISION_CAST: return "PRECISION_CAST";
+        case OpType::ADD: return "ADD";
+        case OpType::ADD_CLIPPED: return "ADD_CLIPPED";
+        case OpType::SUBTRACT: return "SUBTRACT";
+        case OpType::MULTIPLY: return "MULTIPLY";
+        case OpType::DIVIDE: return "DIVIDE";
+        case OpType::ABS: return "ABS";
+        case OpType::POW: return "POW";
+        case OpType::FLATTEN: return "FLATTEN";
+        case OpType::VIEW: return "VIEW";
+        case OpType::MATMUL: return "MATMUL";
+        case OpType::TRANSPOSE: return "TRANSPOSE";
+        case OpType::RESHAPE: return "RESHAPE";
+        case OpType::SLICE: return "SLICE";
+        case OpType::GATHER: return "GATHER";
+        case OpType::EMBEDDING: return "EMBEDDING";
+        case OpType::BILINEAR_INTERPOLATION: return "BILINEAR_INTERPOLATION";
+        case OpType::SUM: return "SUM";
+        case OpType::MEAN: return "MEAN";
+        case OpType::VARIANCE: return "VARIANCE";
+        case OpType::MIN: return "MIN";
+        case OpType::MAX: return "MAX";
+        case OpType::RMS_NORM: return "RMS_NORM";
+        case OpType::ROPE: return "ROPE";
+        case OpType::ROPE_GPTJ: return "ROPE_GPTJ";
+        case OpType::SOFTMAX: return "SOFTMAX";
+        case OpType::ATTENTION: return "ATTENTION";
+        case OpType::ATTENTION_INT8_HYBRID: return "ATTENTION_INT8_HYBRID";
+        case OpType::REL_POS_BIAS: return "REL_POS_BIAS";
+        case OpType::CONV1D_CAUSAL: return "CONV1D_CAUSAL";
+        case OpType::CONV1D_K3: return "CONV1D_K3";
+        case OpType::CONV1D_K7S3: return "CONV1D_K7S3";
+        case OpType::CONV1D: return "CONV1D";
+        case OpType::CONV1D_SAME_DEPTHWISE_K9: return "CONV1D_SAME_DEPTHWISE_K9";
+        case OpType::CONV1D_POINTWISE: return "CONV1D_POINTWISE";
+        case OpType::CONV2D_K3S2P1: return "CONV2D_K3S2P1";
+        case OpType::CONV2D_DEPTHWISE_K3S2P1: return "CONV2D_DEPTHWISE_K3S2P1";
+        case OpType::CONV2D_POINTWISE_1X1: return "CONV2D_POINTWISE_1X1";
+        case OpType::GLU: return "GLU";
+        case OpType::BATCHNORM: return "BATCHNORM";
+        case OpType::SCALAR_ADD: return "SCALAR_ADD";
+        case OpType::SCALAR_SUBTRACT: return "SCALAR_SUBTRACT";
+        case OpType::SCALAR_MULTIPLY: return "SCALAR_MULTIPLY";
+        case OpType::SCALAR_DIVIDE: return "SCALAR_DIVIDE";
+        case OpType::SCALAR_EXP: return "SCALAR_EXP";
+        case OpType::SCALAR_SQRT: return "SCALAR_SQRT";
+        case OpType::SCALAR_COS: return "SCALAR_COS";
+        case OpType::SCALAR_SIN: return "SCALAR_SIN";
+        case OpType::SCALAR_LOG: return "SCALAR_LOG";
+        case OpType::RELU: return "RELU";
+        case OpType::SILU: return "SILU";
+        case OpType::GELU: return "GELU";
+        case OpType::GELU_ERF: return "GELU_ERF";
+        case OpType::SIGMOID: return "SIGMOID";
+        case OpType::TANH: return "TANH";
+        case OpType::SAMPLE: return "SAMPLE";
+        case OpType::CONCAT: return "CONCAT";
+        case OpType::CAT: return "CAT";
+        case OpType::SCATTER_TOPK: return "SCATTER_TOPK";
+        case OpType::TOPK: return "TOPK";
+        case OpType::LAYERNORM: return "LAYERNORM";
+        case OpType::GROUPNORM: return "GROUPNORM";
+        case OpType::MOE_LAYER: return "MOE_LAYER";
+        case OpType::INDEX: return "INDEX";
+        case OpType::PERSISTENT: return "PERSISTENT";
+        case OpType::QUANTIZE_ACTIVATIONS: return "QUANTIZE_ACTIVATIONS";
+        case OpType::LSTM_CELL: return "LSTM_CELL";
+        case OpType::GATED_DELTANET_DECODE: return "GATED_DELTANET_DECODE";
+        case OpType::GATED_DELTANET_PREFILL: return "GATED_DELTANET_PREFILL";
+        case OpType::STFT: return "STFT";
+        case OpType::ALTUP_PREDICT: return "ALTUP_PREDICT";
+        case OpType::ALTUP_CORRECT: return "ALTUP_CORRECT";
+        case OpType::GAUSSIAN_TOPK: return "GAUSSIAN_TOPK";
+        case OpType::MAXPOOL1D: return "MAXPOOL1D";
+        case OpType::BILSTM_SEQUENCE: return "BILSTM_SEQUENCE";
+        case OpType::LEAKY_RELU: return "LEAKY_RELU";
+        case OpType::CONV2D_K3S1P1: return "CONV2D_K3S1P1";
+        case OpType::STATS_POOL: return "STATS_POOL";
+        default: return "UNKNOWN";
+    }
+}
+
+template <typename T>
+void print_vector_inline(const std::vector<T>& values) {
+    std::cout << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << values[i];
+    }
+    std::cout << "]";
+}
+
+void dump_serialized_graph(const GraphFile::SerializedGraph& sg) {
+    std::cout << "=== Serialized Graph Dump ===" << std::endl;
+    std::cout << "magic: 0x" << std::hex << sg.header.magic << std::dec << std::endl;
+    std::cout << "version: " << sg.header.version << std::endl;
+    std::cout << "node_count: " << sg.header.node_count << std::endl;
+    std::cout << "flags: " << sg.header.flags << std::endl;
+    std::cout << "graph_inputs: ";
+    print_vector_inline(sg.graph_inputs);
+    std::cout << std::endl;
+    std::cout << "graph_outputs: ";
+    print_vector_inline(sg.graph_outputs);
+    std::cout << std::endl;
+
+    for (const auto& node : sg.nodes) {
+        std::cout << "node " << node.index << ":" << std::endl;
+        std::cout << "  op_type: " << op_type_to_string(node.op_type) << std::endl;
+        std::cout << "  inputs: ";
+        print_vector_inline(node.inputs);
+        std::cout << std::endl;
+        std::cout << "  output_shape: ";
+        print_vector_inline(node.output_shape);
+        std::cout << std::endl;
+        std::cout << "  precision: " << precision_to_string(node.precision) << std::endl;
+        std::cout << "  params: "
+                  << "scalar=" << node.params.scalar
+                  << " axis=" << node.params.axis
+                  << " epsilon=" << node.params.epsilon
+                  << " pretransposed_rhs=" << node.params.pretransposed_rhs
+                  << " slice_start=" << node.params.slice_start
+                  << " slice_length=" << node.params.slice_length
+                  << std::endl;
+        if (!node.params.new_shape.empty()) {
+            std::cout << "  params.new_shape: ";
+            print_vector_inline(node.params.new_shape);
+            std::cout << std::endl;
+        }
+    }
+    std::cout << "=== End Serialized Graph Dump ===" << std::endl;
+}
+
+} // namespace
+
 bool test_abs() {
     TestUtils::FP16TestFixture fixture("absval");
     size_t input = fixture.create_input({2, 3});
@@ -772,10 +921,47 @@ bool test_graph_save_load_roundtrip_execution() {
             }
         }
 
+        // print file content for debugging
         std::remove(filename.c_str());
         return true;
     } catch (const std::exception& e) {
         std::cout << "[graph_save_load_roundtrip] exception: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool test_graph_save_for_inspection() {
+    try {
+        const std::string filename = "test_graph_inspect.cg";
+
+        CactusGraph graph;
+        size_t input_a = graph.input({2, 3}, Precision::FP16);
+        size_t input_b = graph.input({2, 3}, Precision::FP16);
+        size_t sum_id = graph.add(input_a, input_b);
+        size_t pow_id = graph.pow(sum_id, 2.0f);
+
+        (void)input_a;
+        (void)input_b;
+        (void)sum_id;
+        (void)pow_id;
+
+        graph.save(filename);
+        std::cout << "[graph_save_for_inspection] wrote " << filename << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cout << "[graph_save_for_inspection] exception: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool test_graph_dump_for_inspection() {
+    try {
+        const std::string filename = "test_graph_inspect.cg";
+        GraphFile::SerializedGraph sg = GraphFile::load_graph(filename);
+        dump_serialized_graph(sg);
+        return true;
+    } catch (const std::exception& e) {
+        std::cout << "[graph_dump_for_inspection] exception: " << e.what() << std::endl;
         return false;
     }
 }
@@ -1331,6 +1517,8 @@ int main() {
     runner.run_test("Precision Conversion", test_precision_conversion());
     runner.run_test("Graph Save/Load", test_graph_save_load());
     runner.run_test("Graph Save/Load Roundtrip Execution", test_graph_save_load_roundtrip_execution());
+    runner.run_test("Graph Save For Inspection", test_graph_save_for_inspection());
+    runner.run_test("Graph Dump For Inspection", test_graph_dump_for_inspection());
     runner.run_test("Complex Graph Structure", test_complex_graph_structure());
     runner.run_test("Multiple Outputs", test_multiple_outputs());
     runner.run_test("Graph Reset", test_graph_reset());
