@@ -1495,39 +1495,33 @@ inline void parse_function_calls_from_response(const std::string& response_text,
             json_content = json_content.substr(first, last - first + 1);
         }
 
-        if (json_content.size() > 2 && json_content[0] == '{' &&
-            json_content.find("\"name\"") != std::string::npos) {
-            size_t depth = 0;
-            bool in_string = false;
-            bool escaped = false;
-            size_t end_pos = 0;
-            for (size_t c = 0; c < json_content.size(); c++) {
-                char ch = json_content[c];
-                if (escaped) {
-                    escaped = false;
-                    continue;
-                }
-                if (ch == '\\' && in_string) {
-                    escaped = true;
-                    continue;
-                }
-                if (ch == '"') {
-                    in_string = !in_string;
-                    continue;
-                }
-                if (!in_string) {
-                    if (ch == '{') depth++;
-                    else if (ch == '}') {
-                        depth--;
-                        if (depth == 0) {
-                            end_pos = c + 1;
-                            break;
-                        }
-                    }
+        if (json_content.size() > 2 && json_content.find("\"name\"") != std::string::npos) {
+            // Unwrap array wrapper if present: [{"name":...}] -> {"name":...}
+            if (json_content[0] == '[') {
+                size_t obj_start = json_content.find('{');
+                size_t obj_end = json_content.rfind('}');
+                if (obj_start != std::string::npos && obj_end != std::string::npos && obj_end > obj_start) {
+                    json_content = json_content.substr(obj_start, obj_end - obj_start + 1);
                 }
             }
-            if (end_pos > 0) {
-                function_calls.push_back(json_content.substr(0, end_pos));
+            if (json_content[0] == '{') {
+                size_t depth = 0;
+                bool in_string = false;
+                bool escaped = false;
+                size_t end_pos = 0;
+                for (size_t c = 0; c < json_content.size(); c++) {
+                    char ch = json_content[c];
+                    if (escaped) { escaped = false; continue; }
+                    if (ch == '\\' && in_string) { escaped = true; continue; }
+                    if (ch == '"') { in_string = !in_string; continue; }
+                    if (!in_string) {
+                        if (ch == '{') depth++;
+                        else if (ch == '}' && --depth == 0) { end_pos = c + 1; break; }
+                    }
+                }
+                if (end_pos > 0) {
+                    function_calls.push_back(json_content.substr(0, end_pos));
+                }
             }
         }
 
@@ -1536,10 +1530,10 @@ inline void parse_function_calls_from_response(const std::string& response_text,
 
     const std::string TOOL_CALL_START = "<|tool_call_start|>";
     const std::string TOOL_CALL_END = "<|tool_call_end|>";
-    size_t tool_start_pos = 0;
+    size_t lfm2_start_pos = 0;
 
-    while ((tool_start_pos = regular_response.find(TOOL_CALL_START, tool_start_pos)) != std::string::npos) {
-        size_t content_start = tool_start_pos + TOOL_CALL_START.length();
+    while ((lfm2_start_pos = regular_response.find(TOOL_CALL_START, lfm2_start_pos)) != std::string::npos) {
+        size_t content_start = lfm2_start_pos + TOOL_CALL_START.length();
         size_t tool_end_pos = regular_response.find(TOOL_CALL_END, content_start);
 
         if (tool_end_pos != std::string::npos) {
@@ -1610,7 +1604,7 @@ inline void parse_function_calls_from_response(const std::string& response_text,
                 append_lfm2_call(content, function_calls);
             }
 
-            regular_response.erase(tool_start_pos, tool_end_pos + TOOL_CALL_END.length() - tool_start_pos);
+            regular_response.erase(lfm2_start_pos, tool_end_pos + TOOL_CALL_END.length() - lfm2_start_pos);
         } else {
             break;
         }
