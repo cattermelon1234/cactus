@@ -23,6 +23,15 @@ def __getattr__(name):
     if name == "convert_hf_tokenizer":
         from .tokenizer import convert_hf_tokenizer
         return convert_hf_tokenizer
+    if name == "capture_model":
+        from .capture import capture_model
+        return capture_model
+    if name == "capture_model_with_fallback":
+        from .capture import capture_model_with_fallback
+        return capture_model_with_fallback
+    if name == "dump_graph":
+        from .capture import dump_graph
+        return dump_graph
     if name == "CactusModel":
         from .cactus import CactusModel
         return CactusModel
