@@ -71,6 +71,7 @@ namespace {
       constexpr uint32_t PARAM_EPSILON           = 1u << 6;
       constexpr uint32_t PARAM_NUM_GROUPS        = 1u << 7;
       constexpr uint32_t PARAM_INDEX_VALUE       = 1u << 8;
+      constexpr uint32_t PARAM_PERMUTATION       = 1u << 9;
 
       switch (node.op_type) {
         case OpType::POW:
@@ -116,6 +117,11 @@ namespace {
 
       if (node.op_type == OpType::MATMUL) {
         param_flags |= PARAM_PRETRANSPOSED_RHS;
+        param_flags |= PARAM_BACKEND;
+      }
+
+      if (node.op_type == OpType::TRANSPOSE) {
+        param_flags |= PARAM_PERMUTATION;
         param_flags |= PARAM_BACKEND;
       }
 
@@ -168,6 +174,9 @@ namespace {
       }
       if (param_flags & PARAM_INDEX_VALUE) {
         write_u64(out, static_cast<uint64_t>(node.params.index_value));
+      }
+      if (param_flags & PARAM_PERMUTATION) {
+        write_size_vector(out, node.params.permutation);
       }
     }
 
@@ -287,6 +296,7 @@ namespace {
         constexpr uint32_t PARAM_EPSILON           = 1u << 6;
         constexpr uint32_t PARAM_NUM_GROUPS        = 1u << 7;
         constexpr uint32_t PARAM_INDEX_VALUE       = 1u << 8;
+        constexpr uint32_t PARAM_PERMUTATION       = 1u << 9;
         constexpr uint32_t PARAM_KNOWN_MASK =
             PARAM_SCALAR |
             PARAM_AXIS |
@@ -296,7 +306,8 @@ namespace {
             PARAM_SLICE |
             PARAM_EPSILON |
             PARAM_NUM_GROUPS |
-            PARAM_INDEX_VALUE;
+            PARAM_INDEX_VALUE |
+            PARAM_PERMUTATION;
 
         if ((param_flags & ~PARAM_KNOWN_MASK) != 0) {
             throw std::runtime_error("Graph file corrupted: unknown param flags");
@@ -333,6 +344,9 @@ namespace {
         }
         if (param_flags & PARAM_INDEX_VALUE) {
             node.params.index_value = static_cast<size_t>(read_u64(in));
+        }
+        if (param_flags & PARAM_PERMUTATION) {
+            node.params.permutation = read_size_vector(in);
         }
     }
 
@@ -373,7 +387,7 @@ namespace {
         if (header.magic != CACTUS_GRAPH_MAGIC) {
             throw std::runtime_error("Invalid graph file: bad magic");
         }
-        if (header.version != 1) {
+        if (header.version != 1 && header.version != 2) {
             throw std::runtime_error("Unsupported graph file version: " +
                 std::to_string(header.version));
         }
@@ -607,7 +621,7 @@ void save_graph(const CactusGraph& graph,
 
   SerializedGraph sg;
   sg.header.magic = CACTUS_GRAPH_MAGIC;
-  sg.header.version = 1;
+  sg.header.version = 2;
   sg.header.node_count = static_cast<uint32_t>(graph.nodes_.size());
   sg.header.flags = 0;
 
