@@ -175,6 +175,19 @@ static std::string call_cloud_endpoint(const std::string& url,
     headers = curl_slist_append(headers, ("X-API-Key: " + api_key).c_str());
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
+    const char* extra_hdrs = std::getenv("CACTUS_CLOUD_HEADERS");
+    if (extra_hdrs && extra_hdrs[0] != '\0') {
+        std::istringstream stream(extra_hdrs);
+        std::string pair;
+        while (std::getline(stream, pair, ',')) {
+            auto eq = pair.find('=');
+            if (eq != std::string::npos && eq > 0) {
+                std::string header = pair.substr(0, eq) + ": " + pair.substr(eq + 1);
+                headers = curl_slist_append(headers, header.c_str());
+            }
+        }
+    }
+
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
@@ -281,7 +294,8 @@ CloudResponse cloud_transcribe_request(const std::string& audio_b64,
                                        long timeout_seconds,
                                        const char* cloud_key) {
 #ifdef CACTUS_USE_CURL
-    std::string endpoint = "https://104.198.76.3/api/v1/transcribe";
+    std::string base = env_or_default("CACTUS_CLOUD_API_BASE", "https://104.198.76.3/api/v1");
+    std::string endpoint = base + "/transcribe";
 
     std::string payload = "{\"audio\":\"" + audio_b64 + "\",\"mime_type\":\"audio/wav\",\"language\":\"en-US\"}";
 
@@ -324,6 +338,7 @@ CloudResponse cloud_transcribe_request(const std::string& audio_b64,
 CloudCompletionResult cloud_complete_request(const CloudCompletionRequest& request,
                                              long timeout_ms) {
 #ifdef CACTUS_USE_CURL
+    std::string base = env_or_default("CACTUS_CLOUD_API_BASE", "https://104.198.76.3/api/v1");
     std::string text_model = env_or_default("CACTUS_CLOUD_TEXT_MODEL", "gemini-2.5-flash");
     std::string vlm_model = env_or_default("CACTUS_CLOUD_VLM_MODEL", "gemini-2.5-flash");
 
@@ -361,7 +376,7 @@ CloudCompletionResult cloud_complete_request(const CloudCompletionRequest& reque
         std::string mime = infer_mime_type(image_path);
         std::string prompt = build_cloud_text_prompt(request);
 
-        endpoint = "https://104.198.76.3/api/v1/vlm";
+        endpoint = base + "/vlm";
         payload = "{"
                   "\"image\":\"" + img_b64 + "\"," 
                   "\"mime_type\":\"" + mime + "\"," 
@@ -370,7 +385,7 @@ CloudCompletionResult cloud_complete_request(const CloudCompletionRequest& reque
                   "\"model\":\"" + escape_json_string(vlm_model) + "\""
                   "}";
     } else {
-        endpoint = "https://104.198.76.3/api/v1/text";
+        endpoint = base + "/text";
         std::string text = build_cloud_text_prompt(request);
         payload = "{"
                   "\"text\":\"" + escape_json_string(text) + "\"," 

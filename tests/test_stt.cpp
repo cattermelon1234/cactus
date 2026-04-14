@@ -8,11 +8,16 @@
 #include <cctype>
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
+#include <cmath>
 
 using namespace EngineTestUtils;
 
 static const char* g_transcribe_model_path = std::getenv("CACTUS_TEST_TRANSCRIBE_MODEL");
+static const char* g_whisper_model_path = std::getenv("CACTUS_TEST_WHISPER_MODEL");
 static const char* g_vad_model_path = std::getenv("CACTUS_TEST_VAD_MODEL");
+static const char* g_diarize_model_path = std::getenv("CACTUS_TEST_DIARIZE_MODEL");
+static const char* g_embed_speaker_model_path = std::getenv("CACTUS_TEST_EMBED_SPEAKER_MODEL");
 static const char* g_assets_path = std::getenv("CACTUS_TEST_ASSETS");
 
 static const char* get_transcribe_prompt() {
@@ -20,13 +25,34 @@ static const char* get_transcribe_prompt() {
         std::string path = g_transcribe_model_path;
         std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c){ return std::tolower(c); });
         if (path.find("whisper") != std::string::npos) {
-            return "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>";
+            return "<|startoftranscript|><|en|><|transcribe|>";
         }
     }
     return "";
 }
 
 static const char* g_whisper_prompt = get_transcribe_prompt();
+
+static std::vector<float> parse_float_array(const std::string& json, const std::string& key) {
+    std::vector<float> values;
+    std::string search = "\"" + key + "\":[";
+    size_t start = json.find(search);
+    if (start == std::string::npos) return values;
+    start += search.size();
+    size_t end = json.find("]", start);
+    if (end == std::string::npos) return values;
+    const char* p = json.c_str() + start;
+    const char* end_p = json.c_str() + end;
+    while (p < end_p) {
+        char* next;
+        float v = strtof(p, &next);
+        if (next == p) break;
+        values.push_back(v);
+        p = next;
+        while (p < end_p && (*p == ',' || *p == ' ')) ++p;
+    }
+    return values;
+}
 
 bool test_audio_processor() {
     std::cout << "\n╔══════════════════════════════════════════╗\n"
@@ -508,7 +534,7 @@ bool test_irfft_correctness() {
 }
 
 template<typename Predicate>
-bool run_whisper_test(const char* title, const char* options_json, Predicate check) {
+bool run_transcription_test(const char* title, const char* audio_file, const char* options_json, Predicate check) {
     if (!g_transcribe_model_path) {
         std::cout << "⊘ SKIP │ " << std::left << std::setw(25) << title
                   << " │ CACTUS_TEST_TRANSCRIBE_MODEL not set\n";
@@ -521,7 +547,7 @@ bool run_whisper_test(const char* title, const char* options_json, Predicate che
 
     cactus_model_t model = cactus_init(g_transcribe_model_path, nullptr, false);
     if (!model) {
-        std::cerr << "[✗] Failed to initialize Whisper model\n";
+        std::cerr << "[✗] Failed to initialize transcription model\n";
         return false;
     }
 
@@ -529,7 +555,7 @@ bool run_whisper_test(const char* title, const char* options_json, Predicate che
     StreamingData stream;
     stream.model = model;
 
-    std::string audio_path = std::string(g_assets_path) + "/test.wav";
+    std::string audio_path = std::string(g_assets_path) + "/" + audio_file;
     std::cout << "Transcript: ";
     int rc = cactus_transcribe(model, audio_path.c_str(), g_whisper_prompt,
                                response, sizeof(response), options_json,
@@ -552,8 +578,203 @@ bool run_whisper_test(const char* title, const char* options_json, Predicate che
 }
 
 static bool test_transcription() {
-    return run_whisper_test("TRANSCRIPTION", R"({"max_tokens": 100, "telemetry_enabled": false})",
+    return run_transcription_test("TRANSCRIPTION", "test.wav", R"({"max_tokens": 100, "telemetry_enabled": false})",
         [](int rc, const Metrics& m) { return rc > 0 && m.completion_tokens >= 8; });
+}
+
+static bool test_stream_transcription() {
+    std::cout << "\n╔══════════════════════════════════════════╗\n"
+              << "║        STREAM TRANSCRIPTION TEST         ║\n"
+              << "╚══════════════════════════════════════════╝\n";
+
+    if (!g_transcribe_model_path) {
+        std::cout << "⊘ SKIP │ CACTUS_TEST_TRANSCRIBE_MODEL not set\n";
+        return true;
+    }
+
+    cactus_model_t model = cactus_init(g_transcribe_model_path, nullptr, false);
+    if (!model) {
+        std::cerr << "[✗] Failed to initialize Whisper model\n";
+        return false;
+    }
+
+    cactus_stream_transcribe_t stream = cactus_stream_transcribe_start(
+        model,  R"({"telemetry_enabled": false})"
+    );
+    if (!stream) {
+        std::cerr << "[✗] Failed to initialize stream transcribe\n";
+        cactus_destroy(model);
+        return false;
+    }
+
+    std::string audio_path = std::string(g_assets_path) + "/test_long.wav";
+    FILE* wav_file = fopen(audio_path.c_str(), "rb");
+    if (!wav_file) {
+        std::cerr << "[✗] Failed to open audio file\n";
+        cactus_stream_transcribe_stop(stream, nullptr, 0);
+        cactus_destroy(model);
+        return false;
+    }
+
+    fseek(wav_file, 44, SEEK_SET);
+    std::vector<int16_t> pcm_samples;
+    int16_t sample;
+    while (fread(&sample, sizeof(int16_t), 1, wav_file) == 1) {
+        pcm_samples.push_back(sample);
+    }
+    fclose(wav_file);
+
+    const size_t chunk_size = 96000;
+    Timer timer;
+    std::string full_transcription;
+
+    for (size_t offset = 0; offset < pcm_samples.size(); offset += chunk_size) {
+        size_t size = std::min(chunk_size, pcm_samples.size() - offset);
+
+        char response[1 << 15] = {0};
+        int result = cactus_stream_transcribe_process(
+            stream,
+            reinterpret_cast<const uint8_t*>(pcm_samples.data() + offset),
+            size * sizeof(int16_t),
+            response,
+            sizeof(response)
+        );
+
+        if (result < 0) {
+            std::cerr << "\n[✗] Processing failed\n";
+            cactus_stream_transcribe_stop(stream, nullptr, 0);
+            cactus_destroy(model);
+            return false;
+        }
+
+        std::string response_str(response);
+        std::string confirmed = json_string(response_str, "confirmed");
+        std::string pending = json_string(response_str, "pending");
+
+        std::cout << "├─ transcription: " << full_transcription + pending << std::endl;
+
+        if (!confirmed.empty()) {
+            full_transcription += confirmed + " ";
+        }
+    }
+
+    char final_response[1 << 15] = {0};
+    int stop_result = cactus_stream_transcribe_stop(
+        stream,
+        final_response,
+        sizeof(final_response)
+    );
+
+    if (stop_result < 0) {
+        std::cerr << "[✗] Stop failed\n";
+        cactus_destroy(model);
+        return false;
+    }
+
+    std::string final_str(final_response);
+    std::string final_confirmed = json_string(final_str, "confirmed");
+
+    if (!final_confirmed.empty()) {
+        full_transcription += final_confirmed;
+        std::cout << "└─ confirmed: " << final_confirmed << "\n";
+    }
+
+    double elapsed = timer.elapsed_ms();
+
+    size_t word_count = 0;
+    bool in_word = false;
+    for (char c : full_transcription) {
+        if (std::isspace(c)) {
+            in_word = false;
+        } else if (!in_word) {
+            in_word = true;
+            word_count++;
+        }
+    }
+
+    std::cout << "\n[Results]\n"
+              << "  \"success\": true,\n"
+              << "  \"total_time_ms\": " << std::fixed << std::setprecision(2) << elapsed << ",\n"
+              << "  \"audio_chunks\": " << ((pcm_samples.size() + chunk_size - 1) / chunk_size) << ",\n"
+              << "  \"pcm_samples\": " << pcm_samples.size() << ",\n"
+              << "  \"duration_sec\": " << std::setprecision(2) << (pcm_samples.size() / 16000.0) << ",\n"
+              << "  \"words_transcribed\": " << word_count << "\n"
+              << "├─ Full transcription: \"" << full_transcription << "\"" << std::endl;
+
+    cactus_destroy(model);
+    return true;
+}
+
+static bool test_transcription_long() {
+    return run_transcription_test("TRANSCRIPTION LONG", "test_long.wav", R"({"max_tokens": 1000, "telemetry_enabled": false})",
+        [](int rc, const Metrics& m) { return rc > 0 && m.completion_tokens >= 8; });
+}
+
+static bool test_language_detection() {
+    std::cout << "\n╔══════════════════════════════════════════╗\n"
+              << "║         LANGUAGE DETECTION               ║\n"
+              << "╚══════════════════════════════════════════╝\n";
+
+    if (!g_assets_path) {
+        std::cout << "⊘ SKIP │ CACTUS_TEST_ASSETS not set\n";
+        return true;
+    }
+
+    const char* whisper_model_path = g_whisper_model_path;
+    if (!whisper_model_path || std::string(whisper_model_path).empty()) {
+        if (g_transcribe_model_path) {
+            std::string transcribe_path = g_transcribe_model_path;
+            std::transform(transcribe_path.begin(), transcribe_path.end(), transcribe_path.begin(),
+                           [](unsigned char c){ return std::tolower(c); });
+            if (transcribe_path.find("whisper") != std::string::npos) {
+                whisper_model_path = g_transcribe_model_path;
+            }
+        }
+    }
+    if (!whisper_model_path || std::string(whisper_model_path).empty()) {
+        std::cerr << "[✗] CACTUS_TEST_WHISPER_MODEL not set (required for language detection)\n";
+        return false;
+    }
+
+    cactus_model_t model = cactus_init(whisper_model_path, nullptr, false);
+    if (!model) {
+        std::cerr << "[✗] Failed to initialize Whisper model for language detection\n";
+        return false;
+    }
+
+    std::string audio_path = std::string(g_assets_path) + "/test.wav";
+    char response[1 << 14] = {0};
+
+    int rc = cactus_detect_language(
+        model,
+        audio_path.c_str(),
+        response,
+        sizeof(response),
+        R"({"telemetry_enabled": false})",
+        nullptr,
+        0
+    );
+
+    std::string response_str(response);
+    if (rc <= 0) {
+        std::cerr << "[✗] Language detection failed: " << response_str << "\n";
+        cactus_destroy(model);
+        return false;
+    }
+
+    const bool success = response_str.find("\"success\":true") != std::string::npos;
+    const std::string language = json_string(response_str, "language");
+    const std::string language_token = json_string(response_str, "language_token");
+    const double confidence = json_number(response_str, "confidence", -1.0);
+
+    std::cout << "\n[Results]\n"
+              << "  \"success\": " << (success ? "true" : "false") << ",\n"
+              << "  \"language\": \"" << language << "\",\n"
+              << "  \"language_token\": \"" << language_token << "\",\n"
+              << "  \"confidence\": " << std::fixed << std::setprecision(4) << confidence << "\n";
+
+    cactus_destroy(model);
+    return success && language == "en" && confidence >= 0.0 && confidence <= 1.0;
 }
 
 static bool test_vad_process() {
@@ -561,13 +782,12 @@ static bool test_vad_process() {
               << "║           VAD PROCESS TEST               ║\n"
               << "╚══════════════════════════════════════════╝\n";
 
-    const char* vad_model_path = std::getenv("CACTUS_TEST_VAD_MODEL");
-    if (!vad_model_path) {
+    if (!g_vad_model_path) {
         std::cout << "⊘ SKIP │ CACTUS_TEST_VAD_MODEL not set\n";
         return true;
     }
 
-    cactus_model_t model = cactus_init(vad_model_path, nullptr, false);
+    cactus_model_t model = cactus_init(g_vad_model_path, nullptr, false);
     if (!model) {
         std::cerr << "[✗] Failed to initialize VAD model\n";
         return false;
@@ -632,12 +852,270 @@ static bool test_vad_process() {
     return result > 0 && !segments.empty();
 }
 
+static bool test_diarize() {
+    std::cout << "\n╔══════════════════════════════════════════╗\n"
+              << "║           DIARIZE TEST                   ║\n"
+              << "╚══════════════════════════════════════════╝\n";
+
+    if (!g_diarize_model_path) {
+        std::cout << "⊘ SKIP │ CACTUS_TEST_DIARIZE_MODEL not set\n";
+        return true;
+    }
+    if (!g_assets_path) {
+        std::cout << "⊘ SKIP │ CACTUS_TEST_ASSETS not set\n";
+        return true;
+    }
+
+    cactus_model_t model = cactus_init(g_diarize_model_path, nullptr, false);
+    if (!model) {
+        std::cerr << "[✗] Failed to initialize diarization model\n";
+        return false;
+    }
+
+    std::string audio_path = std::string(g_assets_path) + "/test.wav";
+    char response[1 << 20] = {0};
+
+    int result = cactus_diarize(model, audio_path.c_str(), response, sizeof(response), nullptr, nullptr, 0);
+    cactus_destroy(model);
+
+    if (result < 0) {
+        std::cerr << "[✗] Diarization failed: " << response << "\n";
+        return false;
+    }
+
+    std::string response_str(response);
+    if (response_str.find("\"success\":true") == std::string::npos) {
+        std::cerr << "[✗] Diarization response indicates failure: " << response_str << "\n";
+        return false;
+    }
+
+    std::vector<float> scores = parse_float_array(response_str, "scores");
+    if (scores.empty() || scores.size() % 3 != 0) {
+        std::cerr << "[✗] scores array size " << scores.size() << " is not a multiple of 3\n";
+        return false;
+    }
+    const size_t num_frames = scores.size() / 3;
+    const double frame_dur_s = 10.0 / 589.0;
+
+    bool probs_valid = true;
+    for (size_t f = 0; f < num_frames; ++f) {
+        for (int s = 0; s < 3; ++s) {
+            float v = scores[f * 3 + s];
+            if (v < -0.01f || v > 1.01f) { probs_valid = false; break; }
+        }
+        if (!probs_valid) break;
+    }
+
+    float activity[3] = {0.0f, 0.0f, 0.0f};
+    for (size_t f = 0; f < num_frames; ++f)
+        for (int s = 0; s < 3; ++s)
+            activity[s] += scores[f * 3 + s];
+
+    struct Seg { int speaker; double start, end; };
+    std::vector<Seg> segments;
+    int last_spk = -1;
+    static constexpr float ACTIVE_THRESHOLD = 0.5f;
+
+    for (size_t f = 0; f < num_frames; ++f) {
+        int dom = -1;
+        float best = ACTIVE_THRESHOLD;
+        for (int s = 0; s < 3; ++s)
+            if (scores[f * 3 + s] > best) { best = scores[f * 3 + s]; dom = s; }
+        double t = f * frame_dur_s;
+        if (dom != last_spk) {
+            if (!segments.empty()) segments.back().end = t;
+            segments.push_back({dom, t, t + frame_dur_s});
+            last_spk = dom;
+        }
+    }
+    if (!segments.empty()) segments.back().end = num_frames * frame_dur_s;
+
+    float max_activity = std::max({activity[0], activity[1], activity[2]});
+    float dom_fraction = max_activity / static_cast<float>(num_frames);
+
+    std::cout << "\n[Results]\n"
+              << "  frames: " << num_frames
+              << "  (" << std::fixed << std::setprecision(1) << frame_dur_s * 1000 << "ms/frame)\n"
+              << "  total_time_ms: " << std::fixed << std::setprecision(2)
+              << json_number(response_str, "total_time_ms") << "\n"
+              << "\n[Speaker activity]\n";
+    for (int s = 0; s < 3; ++s)
+        std::cout << "  speaker_" << s << ": avg_prob=" << std::fixed << std::setprecision(3)
+                  << activity[s] / num_frames << "\n";
+
+    std::cout << "\n[Speaker timeline]\n";
+    for (const auto& seg : segments) {
+        std::cout << "  " << std::fixed << std::setprecision(2) << seg.start << "s - "
+                  << seg.end << "s  ->  "
+                  << (seg.speaker >= 0 ? ("speaker_" + std::to_string(seg.speaker)) : "silence") << "\n";
+    }
+
+    if (!probs_valid) {
+        std::cerr << "[✗] Scores contain values outside [0, 1]\n";
+        return false;
+    }
+    if (dom_fraction < 0.1f) {
+        std::cerr << "[✗] No speaker shows meaningful activity (max avg prob: " << dom_fraction << ")\n";
+        return false;
+    }
+
+    return true;
+}
+
+static bool test_embed_speaker() {
+    std::cout << "\n╔══════════════════════════════════════════╗\n"
+              << "║        EMBED SPEAKER TEST                ║\n"
+              << "╚══════════════════════════════════════════╝\n";
+
+    if (!g_embed_speaker_model_path) {
+        std::cout << "⊘ SKIP │ CACTUS_TEST_EMBED_SPEAKER_MODEL not set\n";
+        return true;
+    }
+    if (!g_assets_path) {
+        std::cout << "⊘ SKIP │ CACTUS_TEST_ASSETS not set\n";
+        return true;
+    }
+
+    cactus_model_t model = cactus_init(g_embed_speaker_model_path, nullptr, false);
+    if (!model) {
+        std::cerr << "[✗] Failed to initialize speaker embedding model\n";
+        return false;
+    }
+
+    std::string audio_path = std::string(g_assets_path) + "/test.wav";
+    char response1[1 << 16] = {0};
+    char response2[1 << 16] = {0};
+
+    int r1 = cactus_embed_speaker(model, audio_path.c_str(), response1, sizeof(response1), nullptr, nullptr, 0, nullptr, 0);
+    int r2 = cactus_embed_speaker(model, audio_path.c_str(), response2, sizeof(response2), nullptr, nullptr, 0, nullptr, 0);
+    cactus_destroy(model);
+
+    if (r1 < 0) { std::cerr << "[✗] Speaker embedding (run 1) failed: " << response1 << "\n"; return false; }
+    if (r2 < 0) { std::cerr << "[✗] Speaker embedding (run 2) failed: " << response2 << "\n"; return false; }
+
+    std::string rs1(response1), rs2(response2);
+    if (rs1.find("\"success\":true") == std::string::npos) {
+        std::cerr << "[✗] Embedding response indicates failure: " << rs1 << "\n";
+        return false;
+    }
+
+    std::vector<float> emb1 = parse_float_array(rs1, "embedding");
+    std::vector<float> emb2 = parse_float_array(rs2, "embedding");
+
+    if (emb1.size() != 256) {
+        std::cerr << "[✗] Expected 256-dim embedding, got " << emb1.size() << "\n";
+        return false;
+    }
+
+    bool has_nan = false, has_inf = false;
+    for (float v : emb1) {
+        if (std::isnan(v)) has_nan = true;
+        if (std::isinf(v)) has_inf = true;
+    }
+
+    float norm = 0.0f;
+    for (float v : emb1) norm += v * v;
+    norm = std::sqrt(norm);
+
+    float dot = 0.0f, n1 = 0.0f, n2 = 0.0f;
+    for (size_t i = 0; i < 256; ++i) {
+        dot += emb1[i] * emb2[i];
+        n1  += emb1[i] * emb1[i];
+        n2  += emb2[i] * emb2[i];
+    }
+    float cos_sim = (n1 > 0 && n2 > 0) ? dot / (std::sqrt(n1) * std::sqrt(n2)) : 0.0f;
+
+    std::cout << "\n[Results]\n"
+              << "  dims:         " << emb1.size() << "\n"
+              << "  norm:         " << std::fixed << std::setprecision(4) << norm << "\n"
+              << "  has_nan:      " << (has_nan ? "YES" : "no") << "\n"
+              << "  has_inf:      " << (has_inf ? "YES" : "no") << "\n"
+              << "  cos_sim(same file x2): " << std::fixed << std::setprecision(6) << cos_sim
+              << "  (expected 1.0)\n"
+              << "  total_time_ms: " << std::fixed << std::setprecision(2)
+              << json_number(rs1, "total_time_ms") << "\n"
+              << "\n[First 8 values]\n  ";
+    for (int i = 0; i < 8; ++i)
+        std::cout << std::fixed << std::setprecision(4) << emb1[i]
+                  << (i < 7 ? "  " : "\n");
+
+    if (has_nan) { std::cerr << "[✗] Embedding contains NaN\n"; return false; }
+    if (has_inf) { std::cerr << "[✗] Embedding contains Inf\n"; return false; }
+    if (norm < 0.01f) { std::cerr << "[✗] Embedding norm is near zero\n"; return false; }
+    if (cos_sim < 0.9999f) {
+        std::cerr << "[✗] Same-file cosine similarity " << cos_sim << " < 0.9999 (not deterministic)\n";
+        return false;
+    }
+
+    return true;
+}
+
+static bool test_vocab_bias_base_class() {
+    if (!g_transcribe_model_path || !g_assets_path) {
+        std::cout << "⊘ SKIP │ VOCAB BIAS BASE CLASS │ test model/assets not set\n";
+        return true;
+    }
+
+    std::cout << "\n╔══════════════════════════════════════════╗\n"
+              << "║       VOCAB BIAS BASE CLASS TEST         ║\n"
+              << "╚══════════════════════════════════════════╝\n";
+
+    char response_no_bias[1 << 15] = {0};
+    char response_with_bias[1 << 15] = {0};
+
+    {
+        cactus_model_t model = cactus_init(g_transcribe_model_path, nullptr, false);
+        if (!model) return false;
+        StreamingData stream; stream.model = model;
+        std::string audio_path = std::string(g_assets_path) + "/hotword.wav";
+        cactus_transcribe(model, audio_path.c_str(), g_whisper_prompt,
+                          response_no_bias, sizeof(response_no_bias),
+                          R"({"max_tokens": 100, "telemetry_enabled": false})",
+                          stream_callback, &stream, nullptr, 0);
+        cactus_destroy(model);
+    }
+
+    {
+        cactus_model_t model = cactus_init(g_transcribe_model_path, nullptr, false);
+        if (!model) return false;
+        StreamingData stream; stream.model = model;
+        std::string audio_path = std::string(g_assets_path) + "/hotword.wav";
+        cactus_transcribe(model, audio_path.c_str(), g_whisper_prompt,
+                          response_with_bias, sizeof(response_with_bias),
+                          R"({
+                              "max_tokens": 100,
+                              "telemetry_enabled": false,
+                              "custom_vocabulary": ["Omeprazole", "HIPAA", "Cactus"],
+                              "vocabulary_boost": 3.0
+                          })",
+                          stream_callback, &stream, nullptr, 0);
+        cactus_destroy(model);
+    }
+
+    std::string no_bias_text = json_string(std::string(response_no_bias), "response");
+    std::string with_bias_text = json_string(std::string(response_with_bias), "response");
+
+    std::cout << "├─ Without bias: \"" << no_bias_text << "\"\n";
+    std::cout << "└─ With bias:    \"" << with_bias_text << "\"\n";
+
+    bool outputs_differ = (no_bias_text != with_bias_text);
+    std::cout << (outputs_differ ? "✓ Bias affected output\n" : "⚠ Bias had no effect on output\n");
+
+    return !with_bias_text.empty();
+}
+
 int main() {
     TestUtils::TestRunner runner("STT Tests");
     runner.run_test("audio_processor", test_audio_processor());
     runner.run_test("irfft_correctness", test_irfft_correctness());
     runner.run_test("vad_process", test_vad_process());
+    runner.run_test("diarize", test_diarize());
+    runner.run_test("embed_speaker", test_embed_speaker());
     runner.run_test("transcription", test_transcription());
+    runner.run_test("transcription_long", test_transcription_long());
+    runner.run_test("language_detection", test_language_detection());
+    runner.run_test("stream_transcription", test_stream_transcription());
+    runner.run_test("vocab_bias_base_class", test_vocab_bias_base_class());
     runner.print_summary();
     return runner.all_passed() ? 0 : 1;
 }

@@ -10,7 +10,7 @@ size_t CactusGraph::input(const std::vector<size_t>& shape, Precision precision)
 
 size_t CactusGraph::add(size_t input1, size_t input2) {
     const auto& lhs_buffer = get_output_buffer(input1);
-    const auto& rhs_buffer = get_output_buffer(input2);                  
+    const auto& rhs_buffer = get_output_buffer(input2);
     BroadcastInfo broadcast_info = BroadcastInfo::compute(lhs_buffer.shape, rhs_buffer.shape);
     OpParams params{.broadcast_info = broadcast_info};
 
@@ -57,6 +57,73 @@ size_t CactusGraph::divide(size_t input1, size_t input2) {
     return add_node(OpType::DIVIDE, {input1, input2}, broadcast_info.output_shape, params);
 }
 
+size_t CactusGraph::abs(size_t input) {
+    const auto& input_buffer = get_output_buffer(input);
+    OpParams params{.output_precision = input_buffer.precision};
+    return add_node(OpType::ABS, {input}, input_buffer.shape, params);
+}
+
+size_t CactusGraph::pow(size_t input, float exponent) {
+    const auto& input_buffer = get_output_buffer(input);
+    OpParams params{.scalar = exponent, .output_precision = input_buffer.precision};
+    return add_node(OpType::POW, {input}, input_buffer.shape, params);
+}
+
+size_t CactusGraph::view(size_t input, const std::vector<size_t>& new_shape) {
+    const auto& input_buffer = get_output_buffer(input);
+
+    size_t input_elements = 1;
+    for (size_t dim : input_buffer.shape) {
+        input_elements *= dim;
+    }
+
+    size_t new_elements = 1;
+    for (size_t dim : new_shape) {
+        new_elements *= dim;
+    }
+
+    if (input_elements != new_elements) {
+        throw std::runtime_error("View operation requires total number of elements to remain the same");
+    }
+
+    OpParams params{.new_shape = new_shape};
+    return add_node(OpType::VIEW, {input}, new_shape, params);
+}
+
+size_t CactusGraph::flatten(size_t input, int start_dim, int end_dim) {
+    const auto& input_buffer = get_output_buffer(input);
+    const auto& shape = input_buffer.shape;
+    size_t rank = shape.size();
+
+    if (start_dim < 0) start_dim += rank;
+    if (end_dim < 0) end_dim += rank;
+
+    if (start_dim < 0 || static_cast<size_t>(start_dim) >= rank ||
+        end_dim < 0 || static_cast<size_t>(end_dim) >= rank ||
+        start_dim > end_dim) {
+        throw std::runtime_error("Invalid start_dim or end_dim for flatten operation");
+    }
+
+    std::vector<size_t> output_shape;
+
+    for (int i = 0; i < start_dim; ++i) {
+        output_shape.push_back(shape[i]);
+    }
+
+    size_t flattened_dim = 1;
+    for (int i = start_dim; i <= end_dim; ++i) {
+        flattened_dim *= shape[i];
+    }
+    output_shape.push_back(flattened_dim);
+
+    for (size_t i = end_dim + 1; i < rank; ++i) {
+        output_shape.push_back(shape[i]);
+    }
+
+    OpParams params{.new_shape = output_shape};
+    return add_node(OpType::FLATTEN, {input}, output_shape, params);
+}
+
 size_t CactusGraph::matmul(size_t input1, size_t input2, bool pretransposed_rhs, ComputeBackend backend) {
     const auto& lhs_buffer = get_output_buffer(input1);
     const auto& rhs_buffer = get_output_buffer(input2);
@@ -78,7 +145,10 @@ size_t CactusGraph::matmul(size_t input1, size_t input2, bool pretransposed_rhs,
     }
 
     if (K != rhs_K) {
-        std::cout << "Matrix dimensions incompatible for multiplication: " << K << " != " << rhs_K << std::endl;
+        std::cout << "Matrix dimensions incompatible for multiplication: "
+                  << "lhs=[" << M << "," << K << "] rhs=[" << rhs_buffer.shape[0] << "," << rhs_buffer.shape[1] << "]"
+                  << " pretransposed=" << pretransposed_rhs
+                  << " (K=" << K << " != rhs_K=" << rhs_K << ")" << std::endl;
         throw std::invalid_argument("Matrix dimensions incompatible for multiplication");
     }
 
@@ -295,7 +365,9 @@ size_t CactusGraph::moe_layer(size_t hidden,
                               size_t num_experts_per_tok,
                               bool normalize_routing,
                               float epsilon,
-                              float routed_scaling_factor) {
+                              float routed_scaling_factor,
+                              Activation activation,
+                              size_t per_expert_scale) {
     const auto& hidden_buffer = get_output_buffer(hidden);
     const auto& routing_buffer = get_output_buffer(routing_probs);
     const auto& topk_buffer = get_output_buffer(topk_indices);
@@ -314,13 +386,14 @@ size_t CactusGraph::moe_layer(size_t hidden,
     }
 
     std::vector<size_t> input_ids;
-    input_ids.reserve(3 + 3 * num_experts);
+    input_ids.reserve(3 + 3 * num_experts + 1);
     input_ids.push_back(hidden);
     input_ids.push_back(routing_probs);
     input_ids.push_back(topk_indices);
     for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w1_weights[i]);
     for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w3_weights[i]);
     for (size_t i = 0; i < num_experts; ++i) input_ids.push_back(w2_weights[i]);
+    if (per_expert_scale != 0) input_ids.push_back(per_expert_scale);
 
     OpParams params;
     params.num_experts = num_experts;
@@ -329,6 +402,8 @@ size_t CactusGraph::moe_layer(size_t hidden,
     params.epsilon = epsilon;
     params.scalar = routed_scaling_factor;
     params.output_precision = hidden_buffer.precision;
+    params.activation = activation;
+    params.moe_gated = true;
 
     return add_node(OpType::MOE_LAYER, input_ids, hidden_buffer.shape, params);
 }
@@ -428,22 +503,28 @@ size_t CactusGraph::batchnorm(size_t input, size_t weight, size_t bias, size_t r
 
 size_t CactusGraph::attention(size_t query, size_t key, size_t value, float scale, bool is_causal, ComputeBackend backend) {
     OpParams params{.scale = scale, .is_causal = is_causal, .backend = backend};
-    return add_node(OpType::ATTENTION, {query, key, value}, {}, params);
+    const auto& qs = get_output_buffer(query).shape;
+    const auto& vs = get_output_buffer(value).shape;
+    return add_node(OpType::ATTENTION, {query, key, value}, {qs[0], qs[1], qs[2], vs[3]}, params);
 }
 
 size_t CactusGraph::attention(size_t query, size_t key, size_t value, float scale, size_t position_offset, ComputeBackend backend) {
     OpParams params{.scale = scale, .position_offset = position_offset, .backend = backend};
-    return add_node(OpType::ATTENTION, {query, key, value}, {}, params);
+    const auto& qs = get_output_buffer(query).shape;
+    const auto& vs = get_output_buffer(value).shape;
+    return add_node(OpType::ATTENTION, {query, key, value}, {qs[0], qs[1], qs[2], vs[3]}, params);
 }
 
 size_t CactusGraph::attention(size_t query, size_t key, size_t value, float scale, size_t position_offset, size_t window_size, ComputeBackend backend) {
     OpParams params{.scale = scale, .position_offset = position_offset, .window_size = window_size, .backend = backend};
-    return add_node(OpType::ATTENTION, {query, key, value}, {}, params);
+    const auto& qs = get_output_buffer(query).shape;
+    const auto& vs = get_output_buffer(value).shape;
+    return add_node(OpType::ATTENTION, {query, key, value}, {qs[0], qs[1], qs[2], vs[3]}, params);
 }
 
 size_t CactusGraph::attention_masked(size_t query, size_t key, size_t value, size_t mask, float scale,
                                      bool is_causal, ComputeBackend backend, bool additive_mask,
-                                     size_t position_offset, size_t window_size) {
+                                     size_t position_offset, size_t window_size, float logit_cap) {
     OpParams params{
         .scale = scale,
         .position_offset = position_offset,
@@ -452,7 +533,10 @@ size_t CactusGraph::attention_masked(size_t query, size_t key, size_t value, siz
         .backend = backend
     };
     params.attention_mask_is_additive = additive_mask;
-    return add_node(OpType::ATTENTION, {query, key, value, mask}, {}, params);
+    params.logit_cap = logit_cap;
+    const auto& qs = get_output_buffer(query).shape;
+    const auto& vs = get_output_buffer(value).shape;
+    return add_node(OpType::ATTENTION, {query, key, value, mask}, {qs[0], qs[1], qs[2], vs[3]}, params);
 }
 
 size_t CactusGraph::rel_pos_bias(size_t query, size_t relative_key, float scale) {
@@ -489,7 +573,8 @@ size_t CactusGraph::rel_pos_bias(size_t query, size_t relative_key, float scale)
 size_t CactusGraph::attention_int8_hybrid(size_t query, size_t key_new, size_t value_new, float scale, size_t position_offset,
                                           const int8_t* cached_keys, const int8_t* cached_values,
                                           const float* k_scales, const float* v_scales,
-                                          size_t cache_len, size_t num_kv_heads, size_t head_dim, size_t window_size) {
+                                          size_t cache_len, size_t num_kv_heads, size_t head_dim,
+                                          size_t window_size, size_t v_head_dim) {
     OpParams params;
     params.scale = scale;
     params.position_offset = position_offset;
@@ -501,7 +586,13 @@ size_t CactusGraph::attention_int8_hybrid(size_t query, size_t key_new, size_t v
     params.cache_seq_len = cache_len;
     params.num_kv_heads = num_kv_heads;
     params.head_dim = head_dim;
-    return add_node(OpType::ATTENTION_INT8_HYBRID, {query, key_new, value_new}, {}, params);
+    params.v_head_dim = v_head_dim;
+    std::vector<size_t> out_shape;
+    if (v_head_dim != 0 && v_head_dim != head_dim) {
+        const auto& q_buf = get_output_buffer(query);
+        out_shape = {q_buf.shape[0], q_buf.shape[1], q_buf.shape[2], v_head_dim};
+    }
+    return add_node(OpType::ATTENTION_INT8_HYBRID, {query, key_new, value_new}, out_shape, params);
 }
 
 size_t CactusGraph::conv1d_causal(size_t input, size_t weight, size_t, size_t dilation) {
@@ -768,17 +859,14 @@ size_t CactusGraph::conv2d_k3s2p1(size_t input, size_t weight, size_t bias) {
     if (xin.shape.size() != 4) {
         throw std::runtime_error("conv2d_k3s2p1 expects input [N, C_in, H, W]");
     }
-    if (w.shape.size() != 4) {
-        throw std::runtime_error("conv2d_k3s2p1 weight must be [C_out, C_in, 3, 3]");
-    }
 
     const size_t C_in = xin.shape[1];
     const size_t H = xin.shape[2];
     const size_t W = xin.shape[3];
     const size_t C_out = w.shape[0];
 
-    if (w.shape[1] != C_in || w.shape[2] != 3 || w.shape[3] != 3) {
-        throw std::runtime_error("conv2d_k3s2p1 weight must match [C_out, C_in, 3, 3]");
+    if (w.shape.size() != 4 || w.shape[1] != C_in || w.shape[2] != 3 || w.shape[3] != 3) {
+        throw std::runtime_error("conv2d_k3s2p1 weight must be [C_out, C_in, 3, 3]");
     }
     if (b.total_size != C_out) {
         throw std::runtime_error("conv2d_k3s2p1 bias size mismatch");
@@ -956,6 +1044,112 @@ size_t CactusGraph::lstm_cell(size_t input, size_t h_prev, size_t c_prev, size_t
     return add_node(OpType::LSTM_CELL, {input, h_prev, c_prev, weight_ih, weight_hh, bias_ih, bias_hh}, output_shape, {});
 }
 
+size_t CactusGraph::gated_deltanet_decode(size_t query, size_t key, size_t value, size_t gate_log, size_t beta,
+                                          size_t initial_state, float scale) {
+    const auto& q = get_output_buffer(query);
+    const auto& k = get_output_buffer(key);
+    const auto& v = get_output_buffer(value);
+    const auto& g = get_output_buffer(gate_log);
+    const auto& b = get_output_buffer(beta);
+    const auto& s = get_output_buffer(initial_state);
+
+    if (q.shape.size() != 4 || k.shape.size() != 4 || v.shape.size() != 4) {
+        throw std::runtime_error("gated_deltanet_decode expects query/key/value rank 4 [B, T, H, D]");
+    }
+    if (g.shape.size() != 3 || b.shape.size() != 3) {
+        throw std::runtime_error("gated_deltanet_decode expects gate_log/beta rank 3 [B, T, H]");
+    }
+    if (s.shape.size() != 4) {
+        throw std::runtime_error("gated_deltanet_decode expects initial_state rank 4 [B, K, H, V]");
+    }
+
+    const size_t B = q.shape[0];
+    const size_t T = q.shape[1];
+    const size_t Hq = q.shape[2];
+    const size_t K = q.shape[3];
+    const size_t Hv = v.shape[2];
+    const size_t V = v.shape[3];
+    if (T != 1) {
+        throw std::runtime_error("gated_deltanet_decode expects sequence length T=1");
+    }
+    auto is_supported_precision = [](Precision p) {
+        return p == Precision::FP16 || p == Precision::FP32;
+    };
+    if (!is_supported_precision(q.precision) || !is_supported_precision(k.precision) ||
+        !is_supported_precision(v.precision) || !is_supported_precision(g.precision) ||
+        !is_supported_precision(b.precision) || !is_supported_precision(s.precision)) {
+        throw std::runtime_error("gated_deltanet_decode requires FP16/FP32 inputs");
+    }
+
+    float op_scale = scale;
+    if (op_scale == 0.0f) {
+        op_scale = 1.0f / std::sqrt(static_cast<float>(K));
+    }
+
+    OpParams params;
+    params.scale = op_scale;
+    params.num_kv_heads = Hq;
+    params.output_precision = Precision::FP16;
+    return add_node(OpType::GATED_DELTANET_DECODE,
+                    {query, key, value, gate_log, beta, initial_state},
+                    {B, static_cast<size_t>(1 + K), Hv, V},
+                    params);
+}
+
+size_t CactusGraph::gated_deltanet_prefill(size_t query, size_t key, size_t value, size_t gate_log, size_t beta,
+                                           size_t initial_state, size_t chunk_size, float scale) {
+    const auto& q = get_output_buffer(query);
+    const auto& k = get_output_buffer(key);
+    const auto& v = get_output_buffer(value);
+    const auto& g = get_output_buffer(gate_log);
+    const auto& b = get_output_buffer(beta);
+    const auto& s = get_output_buffer(initial_state);
+
+    if (q.shape.size() != 4 || k.shape.size() != 4 || v.shape.size() != 4) {
+        throw std::runtime_error("gated_deltanet_prefill expects query/key/value rank 4 [B, T, H, D]");
+    }
+    if (g.shape.size() != 3 || b.shape.size() != 3) {
+        throw std::runtime_error("gated_deltanet_prefill expects gate_log/beta rank 3 [B, T, H]");
+    }
+    if (s.shape.size() != 4) {
+        throw std::runtime_error("gated_deltanet_prefill expects initial_state rank 4 [B, K, H, V]");
+    }
+
+    const size_t B = q.shape[0];
+    const size_t T = q.shape[1];
+    const size_t Hq = q.shape[2];
+    const size_t K = q.shape[3];
+    const size_t Hv = v.shape[2];
+    const size_t V = v.shape[3];
+    auto is_supported_precision = [](Precision p) {
+        return p == Precision::FP16 || p == Precision::FP32;
+    };
+    if (!is_supported_precision(q.precision) || !is_supported_precision(k.precision) ||
+        !is_supported_precision(v.precision) || !is_supported_precision(g.precision) ||
+        !is_supported_precision(b.precision) || !is_supported_precision(s.precision)) {
+        throw std::runtime_error("gated_deltanet_prefill requires FP16/FP32 inputs");
+    }
+
+    if (chunk_size == 0) {
+        chunk_size = 64;
+    }
+
+    float op_scale = scale;
+    if (op_scale == 0.0f) {
+        op_scale = 1.0f / std::sqrt(static_cast<float>(K));
+    }
+
+    OpParams params;
+    params.scale = op_scale;
+    params.chunk_size = chunk_size;
+    params.num_kv_heads = Hq;
+    params.output_precision = Precision::FP16;
+    return add_node(OpType::GATED_DELTANET_PREFILL,
+                    {query, key, value, gate_log, beta, initial_state},
+                    {B, T + K, Hv, V},
+                    params);
+}
+
 size_t CactusGraph::stft(size_t input, size_t weight, size_t stride, size_t num_fft_bins) {
     const auto& xin = get_output_buffer(input);
     const auto& w = get_output_buffer(weight);
@@ -1004,6 +1198,38 @@ size_t CactusGraph::concat(size_t input1, size_t input2, int axis) {
     return add_node(OpType::CONCAT, {input1, input2}, output_shape, params);
 }
 
+size_t CactusGraph::cat(const std::vector<size_t>& inputs, int axis) {
+    if (inputs.empty()) {
+        throw std::runtime_error("Cat requires at least one input");
+    }
+
+    const auto& first_buffer = get_output_buffer(inputs[0]);
+    std::vector<size_t> output_shape = first_buffer.shape;
+    size_t ndims = output_shape.size();
+
+    if (axis < 0) axis += ndims;
+    if (axis < 0 || static_cast<size_t>(axis) >= ndims) {
+        throw std::runtime_error("Invalid axis for cat operation");
+    }
+
+    for (size_t i = 1; i < inputs.size(); ++i) {
+        const auto& buffer = get_output_buffer(inputs[i]);
+        if (buffer.shape.size() != ndims) {
+            throw std::runtime_error("All inputs to cat must have same number of dimensions");
+        }
+        for (size_t d = 0; d < ndims; ++d) {
+            if (d != static_cast<size_t>(axis) && buffer.shape[d] != output_shape[d]) {
+                throw std::runtime_error("All inputs to cat must have same shape except on cat axis");
+            }
+        }
+        output_shape[axis] += buffer.shape[axis];
+    }
+
+    OpParams params;
+    params.axis = axis;
+    return add_node(OpType::CAT, inputs, output_shape, params);
+}
+
 size_t CactusGraph::scatter_topk(size_t indices, size_t values, size_t num_classes) {
     const auto& indices_buffer = get_output_buffer(indices);
     const auto& values_buffer = get_output_buffer(values);
@@ -1025,6 +1251,12 @@ size_t CactusGraph::scatter_topk(size_t indices, size_t values, size_t num_class
 
 size_t CactusGraph::sample(size_t logits, float temperature, float top_p, size_t top_k,
                            const std::unordered_map<uint32_t, float>& logit_bias) {
+    return this->sample_with_options(logits, temperature, top_p, 0.15f, 1.1f, top_k, logit_bias);
+}
+
+size_t CactusGraph::sample_with_options(size_t logits, float temperature, float top_p,
+                                        float min_p, float repetition_penalty, size_t top_k,
+                                        const std::unordered_map<uint32_t, float>& logit_bias) {
     const auto& logits_buffer = get_output_buffer(logits);
 
     if (logits_buffer.shape.empty()) {
@@ -1034,6 +1266,8 @@ size_t CactusGraph::sample(size_t logits, float temperature, float top_p, size_t
     OpParams params;
     params.temperature = temperature;
     params.top_p = top_p;
+    params.min_p = min_p;
+    params.repetition_penalty = repetition_penalty;
     params.top_k = top_k;
     params.random_seed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     params.output_precision = Precision::FP32;
@@ -1219,12 +1453,11 @@ size_t CactusGraph::embedding(size_t embedding_tensor, size_t indices) {
     output_shape.push_back(emb_buffer.shape[1]);
 
     OpParams params;
-    params.output_precision = (emb_buffer.precision == Precision::INT8) ? Precision::FP16 : emb_buffer.precision;
-
+    params.output_precision = Precision::FP16;
     return add_node(OpType::EMBEDDING, {embedding_tensor, indices}, output_shape, params);
 }
 
-size_t CactusGraph::bilinear_interpolation(size_t pos_embeds, size_t dst_height, size_t dst_width) {
+size_t CactusGraph::bilinear_interpolation(size_t pos_embeds, size_t dst_height, size_t dst_width, bool align_corners) {
     const auto& pos_embeds_buffer = get_output_buffer(pos_embeds);
     size_t embed_dim = pos_embeds_buffer.shape[1];
     std::vector<size_t> output_shape = {dst_height * dst_width, embed_dim};
@@ -1232,6 +1465,7 @@ size_t CactusGraph::bilinear_interpolation(size_t pos_embeds, size_t dst_height,
     OpParams params;
     params.dst_height = dst_height;
     params.dst_width = dst_width;
+    params.align_corners = align_corners;
     params.output_precision = Precision::FP16;
 
     return add_node(OpType::BILINEAR_INTERPOLATION, {pos_embeds}, output_shape, params);
@@ -1301,4 +1535,148 @@ bool CactusGraph::is_populated(size_t persistent_node_id) const {
 void CactusGraph::invalidate_persistent(size_t persistent_node_id) {
     populated_node_ids_.erase(persistent_node_id);
     persistent_node_ids_.erase(persistent_node_id);
+}
+
+size_t CactusGraph::altup_predict(size_t coefs, const size_t* streams, size_t num_streams) {
+    const auto& stream0_buf = get_output_buffer(streams[0]);
+
+    size_t seq_len = stream0_buf.shape[0];
+    size_t hidden_dim = stream0_buf.shape[1];
+
+    std::vector<size_t> input_ids = {coefs};
+    for (size_t i = 0; i < num_streams; i++)
+        input_ids.push_back(streams[i]);
+
+    OpParams params;
+    params.num_altup_inputs = num_streams;
+    return add_node(OpType::ALTUP_PREDICT, input_ids, {num_streams * seq_len, hidden_dim}, params);
+}
+
+size_t CactusGraph::altup_correct(size_t coefs, size_t innovation, const size_t* predictions, size_t num_predictions) {
+    const auto& pred0_buf = get_output_buffer(predictions[0]);
+
+    size_t seq_len = pred0_buf.shape[0];
+    size_t hidden_dim = pred0_buf.shape[1];
+
+    std::vector<size_t> input_ids = {coefs, innovation};
+    for (size_t i = 0; i < num_predictions; i++)
+        input_ids.push_back(predictions[i]);
+
+    OpParams params;
+    params.num_altup_inputs = num_predictions;
+    return add_node(OpType::ALTUP_CORRECT, input_ids, {num_predictions * seq_len, hidden_dim}, params);
+}
+
+size_t CactusGraph::gaussian_topk(size_t input, float ppf) {
+    const auto& in_buf = get_output_buffer(input);
+    OpParams params;
+    params.scalar = ppf;
+    return add_node(OpType::GAUSSIAN_TOPK, {input}, in_buf.shape, params);
+}
+
+size_t CactusGraph::leaky_relu(size_t input, float negative_slope) {
+    const auto& in_buf = get_output_buffer(input);
+    OpParams params;
+    params.scalar = negative_slope;
+    return add_node(OpType::LEAKY_RELU, {input}, in_buf.shape, params);
+}
+
+size_t CactusGraph::bilstm_sequence(size_t input, size_t w_ih_fwd, size_t w_hh_fwd, size_t b_ih_fwd, size_t b_hh_fwd,
+                                    size_t w_ih_bwd, size_t w_hh_bwd, size_t b_ih_bwd, size_t b_hh_bwd) {
+    const auto& in_buf = get_output_buffer(input);
+    const auto& w_ih = get_output_buffer(w_ih_fwd);
+    size_t batch = in_buf.shape[0];
+    size_t seq_len = in_buf.shape[1];
+    size_t hidden_size = w_ih.shape[0] / 4;
+    return add_node(OpType::BILSTM_SEQUENCE,
+                    {input, w_ih_fwd, w_hh_fwd, b_ih_fwd, b_hh_fwd, w_ih_bwd, w_hh_bwd, b_ih_bwd, b_hh_bwd},
+                    {batch, seq_len, 2 * hidden_size}, {});
+}
+
+size_t CactusGraph::maxpool1d(size_t input, size_t kernel_size, size_t stride) {
+    const auto& in_buf = get_output_buffer(input);
+    size_t batch = in_buf.shape[0];
+    size_t channels = in_buf.shape[1];
+    size_t input_length = in_buf.shape[2];
+    size_t output_length = (input_length - kernel_size) / stride + 1;
+
+    OpParams params;
+    params.kernel_size = kernel_size;
+    params.stride = stride;
+    return add_node(OpType::MAXPOOL1D, {input}, {batch, channels, output_length}, params);
+}
+
+size_t CactusGraph::conv2d_k3s1p1(size_t input, size_t weight) {
+    const auto& xin = get_output_buffer(input);
+    const auto& w = get_output_buffer(weight);
+
+    if (xin.shape.size() != 4) {
+        throw std::runtime_error("conv2d_k3s1p1 expects input [N, C_in, H, W]");
+    }
+    if (w.shape.size() != 4) {
+        throw std::runtime_error("conv2d_k3s1p1 weight must be [C_out, C_in, 3, 3]");
+    }
+
+    const size_t N = xin.shape[0];
+    const size_t C_in = xin.shape[1];
+    const size_t H = xin.shape[2];
+    const size_t W = xin.shape[3];
+    const size_t C_out = w.shape[0];
+
+    if (w.shape[1] != C_in || w.shape[2] != 3 || w.shape[3] != 3) {
+        throw std::runtime_error("conv2d_k3s1p1 weight must match [C_out, C_in, 3, 3]");
+    }
+    if (H == 0 || W == 0) {
+        throw std::runtime_error("conv2d_k3s1p1 input spatial dimensions must be > 0");
+    }
+
+    OpParams params{};
+    params.output_precision = xin.precision;
+    return add_node(OpType::CONV2D_K3S1P1, {input, weight}, {N, C_out, H, W}, params);
+}
+
+size_t CactusGraph::conv2d_k3s1p1(size_t input, size_t weight, size_t bias) {
+    const auto& xin = get_output_buffer(input);
+    const auto& w = get_output_buffer(weight);
+    const auto& b = get_output_buffer(bias);
+
+    if (xin.shape.size() != 4) {
+        throw std::runtime_error("conv2d_k3s1p1 expects input [N, C_in, H, W]");
+    }
+
+    const size_t N = xin.shape[0];
+    const size_t C_in = xin.shape[1];
+    const size_t H = xin.shape[2];
+    const size_t W = xin.shape[3];
+
+    if (w.shape.size() != 4 || w.shape[1] != C_in || w.shape[2] != 3 || w.shape[3] != 3) {
+        throw std::runtime_error("conv2d_k3s1p1 weight must be [C_out, C_in, 3, 3]");
+    }
+    const size_t C_out = w.shape[0];
+    if (b.total_size != C_out) {
+        throw std::runtime_error("conv2d_k3s1p1 bias size mismatch");
+    }
+    if (H == 0 || W == 0) {
+        throw std::runtime_error("conv2d_k3s1p1 input spatial dimensions must be > 0");
+    }
+
+    OpParams params{};
+    params.output_precision = xin.precision;
+    return add_node(OpType::CONV2D_K3S1P1, {input, weight, bias}, {N, C_out, H, W}, params);
+}
+
+size_t CactusGraph::stats_pool(size_t input) {
+    const auto& xin = get_output_buffer(input);
+    size_t batch = xin.shape[0];
+    size_t features = 1;
+    for (size_t i = 1; i < xin.shape.size() - 1; ++i) features *= xin.shape[i];
+    return add_node(OpType::STATS_POOL, {input}, {batch, features * 2});
+}
+
+size_t CactusGraph::weighted_stats_pool(size_t input, size_t weights) {
+    const auto& xin = get_output_buffer(input);
+    size_t batch = xin.shape[0];
+    size_t features = 1;
+    for (size_t i = 1; i < xin.shape.size() - 1; ++i) features *= xin.shape[i];
+    return add_node(OpType::WEIGHTED_STATS_POOL, {input, weights}, {batch, features * 2});
 }

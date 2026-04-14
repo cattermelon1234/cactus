@@ -6,6 +6,7 @@
 #include <vector>
 #include <stdexcept>
 #include <limits>
+#include <random>
 
 #ifdef __APPLE__
 #include <Accelerate/Accelerate.h>
@@ -561,11 +562,10 @@ static void compute_spectrogram_f32(
             std::copy(input_waveform + timestep, input_waveform + timestep + available_length, local_buffer.data());
 
             if (dither != 0.0f) {
+                thread_local std::mt19937 rng(std::random_device{}());
+                std::normal_distribution<float> dist(0.0f, 1.0f);
                 for (size_t i = 0; i < frame_length; i++) {
-                    float u1 = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-                    float u2 = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-                    float randn = std::sqrt(-2.0f * std::log(u1)) * std::cos(2.0f * static_cast<float>(M_PI) * u2);
-                    local_buffer[i] += dither * randn;
+                    local_buffer[i] += dither * dist(rng);
                 }
             }
 
@@ -657,7 +657,9 @@ void AudioProcessor::init_mel_filters(size_t num_frequency_bins,
                                       size_t num_mel_filters,
                                       float min_freq,
                                       float max_freq,
-                                      size_t sampling_rate) {
+                                      size_t sampling_rate,
+                                      const char* norm,
+                                      const char* mel_scale) {
     num_frequency_bins_ = num_frequency_bins;
     num_mel_filters_ = num_mel_filters;
     mel_filters_.resize(num_mel_filters * num_frequency_bins);
@@ -669,8 +671,8 @@ void AudioProcessor::init_mel_filters(size_t num_frequency_bins,
         min_freq,
         max_freq,
         sampling_rate,
-        "slaney",
-        "slaney",
+        norm,
+        mel_scale,
         false
     );
 }
@@ -684,6 +686,7 @@ std::vector<float> AudioProcessor::compute_spectrogram(
     }
 
     const size_t n_samples = waveform.size();
+    const size_t fft_size = config.fft_override > 0 ? config.fft_override : config.n_fft;
     const size_t analysis_frame_length = config.n_fft;
     const size_t window_length = std::min(config.frame_length, analysis_frame_length);
     const size_t pad_length = config.center ? analysis_frame_length / 2 : 0;
@@ -701,12 +704,16 @@ std::vector<float> AudioProcessor::compute_spectrogram(
         const float denom = config.hann_periodic
             ? static_cast<float>(window_length)
             : static_cast<float>(window_length - 1);
+        const float a0 = config.window_a0;
         const size_t left_pad = (analysis_frame_length - window_length) / 2;
         for (size_t i = 0; i < window_length; ++i) {
-            const float w = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * static_cast<float>(i) / denom));
+            const float w = a0 - (1.0f - a0) * std::cos(2.0f * static_cast<float>(M_PI) * static_cast<float>(i) / denom);
             window[left_pad + i] = w;
         }
     }
+
+    float effective_floor = config.mel_floor_additive ? 0.0f : config.mel_floor;
+    const char* effective_log = config.mel_floor_additive ? nullptr : config.log_mel;
 
     compute_spectrogram_f32(
         waveform.data(),
@@ -715,7 +722,7 @@ std::vector<float> AudioProcessor::compute_spectrogram(
         window.size(),
         analysis_frame_length,
         config.hop_length,
-        &config.n_fft,
+        &fft_size,
         output.data(),
         config.power,
         config.center,
@@ -725,13 +732,25 @@ std::vector<float> AudioProcessor::compute_spectrogram(
         config.preemphasis != 0.0f ? &config.preemphasis : nullptr,
         mel_filters_.data(),
         mel_filters_.size(),
-        config.mel_floor,
-        config.log_mel,
+        effective_floor,
+        effective_log,
         config.reference,
         config.min_value,
         nullptr,
         config.remove_dc_offset
     );
+
+    if (config.mel_floor_additive) {
+        for (size_t i = 0; i < output.size(); i++) {
+#ifdef __APPLE__
+            // vDSP FFT returns 2x standard DFT magnitudes, so raw mel
+            // values are 2x too large. Halve before adding floor and log.
+            output[i] = std::log(output[i] * 0.5f + config.mel_floor);
+#else
+            output[i] = std::log(output[i] + config.mel_floor);
+#endif
+        }
+    }
 
     return output;
 }

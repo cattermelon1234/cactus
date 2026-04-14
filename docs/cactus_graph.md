@@ -1,7 +1,7 @@
 ---
 title: "Cactus Graph API Documentation"
 description: "Computational graph framework for building and executing tensor operations on mobile devices. Supports matrix multiplication, attention, normalization, and INT4/INT8/FP16 precision."
-keywords: ["computation graph", "tensor operations", "mobile AI", "matrix multiplication", "attention mechanism", "INT4", "FP16"]
+keywords: ["computation graph", "tensor operations", "mobile AI", "matrix multiplication", "attention mechanism", "INT4", "INT8", "FP16"]
 ---
 
 # Cactus Graph API Documentation
@@ -23,7 +23,7 @@ Before using the Cactus Graph API, set up your development environment:
 
 ```bash
 # Setup the environment and install dependencies
-./setup
+source ./setup
 
 # Build the Cactus library
 cactus build
@@ -63,7 +63,7 @@ For testing, use the provided fixtures that handle memory management:
 
 ```cpp
 TestUtils::Int8TestFixture fixture("My Test");
-TestUtils::FloatTestFixture fixture("Float Test");
+TestUtils::FP16TestFixture fixture("Float Test");
 ```
 
 ## Getting Started
@@ -263,6 +263,27 @@ graph.set_quantization_scale(node_id, scale);
 
 ### Graph Persistence
 
+#### Saving graphs
+```python
+const std::string filename = "test_graph_save_load.cg";
+
+CactusGraph graph;
+size_t input_a = graph.input({2, 3}, Precision::FP16);
+size_t input_b = graph.input({2, 3}, Precision::FP16);
+size_t sum_id = graph.add(input_a, input_b);
+graph.save(filename);
+
+```
+#### Loading Graphs 
+```python
+CactusGraph loaded = CactusGraph::load(filename);
+std::vector<__fp16> data_a = {1, 2, 3, 4, 5, 6};
+std::vector<__fp16> data_b = {10, 20, 30, 40, 50, 60};
+loaded.set_input(0, data_a.data(), Precision::FP16);
+loaded.set_input(1, data_b.data(), Precision::FP16);
+loaded.execute();
+```
+
 #### Saving Nodes
 ```cpp
 GraphFile::save_node(graph, node_id, "output.bin");
@@ -357,7 +378,7 @@ size_t final_embed = graph.add(embeddings, pos_embed);
 
 ### Similarity Computation
 ```cpp
-TestUtils::FloatTestFixture fixture("Similarity");
+TestUtils::FP16TestFixture fixture("Similarity");
 
 size_t text1 = fixture.create_input({1, 768}, Precision::FP16);
 size_t text2 = fixture.create_input({1, 768}, Precision::FP16);

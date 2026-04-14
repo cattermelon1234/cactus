@@ -50,32 +50,10 @@ on:
         description: Model description
         required: false
         type: string
-
-env:
-  MODELS_CONFIG: |
-    [
-      {"model": "google/gemma-3-270m-it",           "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion"],                                    "description": "Gemma 3 270M instruction-tuned model for on-device text completion."},
-      {"model": "google/functiongemma-270m-it",     "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools"],                            "description": "Gemma 3 270M fine-tuned for structured tool and function calling."},
-      {"model": "LiquidAI/LFM2-350M",               "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "LFM2 350M compact hybrid language model from Liquid AI designed for edge deployment."},
-      {"model": "Qwen/Qwen3-0.6B",                  "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "Qwen3 0.6B compact model supporting thinking and non-thinking modes for on-device chat."},
-      {"model": "LiquidAI/LFM2-700M",               "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "LFM2 700M hybrid language model from Liquid AI optimized for edge devices."},
-      {"model": "LiquidAI/LFM2-8B-A1B",             "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "LFM2 8B MoE model with 1.5B active parameters for high-quality on-device inference."},
-      {"model": "google/gemma-3-1b-it",             "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion"],                                    "description": "Gemma 3 1B instruction-tuned model for on-device text completion."},
-      {"model": "LiquidAI/LFM2.5-1.2B-Thinking",    "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "LFM2.5 1.2B reasoning model from Liquid AI with extended thinking for on-device deployment."},
-      {"model": "LiquidAI/LFM2.5-1.2B-Instruct",    "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "LFM2.5 1.2B instruction-tuned language model from Liquid AI designed for edge deployment."},
-      {"model": "Qwen/Qwen3-1.7B",                  "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "Qwen3 1.7B model supporting thinking and non-thinking modes for on-device reasoning."},
-      {"model": "LiquidAI/LFM2-2.6B",               "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "text-generation",              "tags": ["completion","tools","embed"],                    "description": "LFM2 2.6B hybrid language model from Liquid AI for on-device chat and embeddings."},
-      {"model": "LiquidAI/LFM2-VL-450M",            "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "image-text-to-text",           "tags": ["vision","text-embed","image-embed","apple-npu"], "description": "LFM2-VL 450M compact vision-language model from Liquid AI for on-device image understanding."},
-      {"model": "LiquidAI/LFM2.5-VL-1.6B",          "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "image-text-to-text",           "tags": ["vision","text-embed","image-embed","apple-npu"], "description": "LFM2.5-VL 1.6B vision-language model from Liquid AI for image and text understanding."},
-      {"model": "UsefulSensors/moonshine-base",     "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "automatic-speech-recognition", "tags": ["transcription","speech-embed"],                  "description": "Moonshine Base 61M parameter English speech recognition model optimized for live transcription."},
-      {"model": "openai/whisper-small",             "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "automatic-speech-recognition", "tags": ["transcription","speech-embed","apple-npu"],      "description": "Whisper Small 244M parameter multilingual speech recognition model by OpenAI."},
-      {"model": "openai/whisper-medium",            "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "automatic-speech-recognition", "tags": ["transcription","speech-embed","apple-npu"],      "description": "Whisper Medium 769M parameter multilingual speech recognition model by OpenAI."},
-      {"model": "snakers4/silero-vad",              "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "voice-activity-detection",     "tags": ["vad"],                                           "description": "Silero VAD tiny voice activity detection model supporting over 100 languages."},
-      {"model": "nomic-ai/nomic-embed-text-v2-moe", "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "feature-extraction",           "tags": ["embed"],                                         "description": "Nomic Embed Text v2 MoE 305M multilingual text embedding model using mixture-of-experts."},
-      {"model": "Qwen/Qwen3-Embedding-0.6B",        "int4": true,  "int8": true,  "fp16": false, "apple": false, "pipeline_tag": "feature-extraction",           "tags": ["embed"],                                         "description": "Qwen3 0.6B text embedding model supporting 100+ languages with 1024-dimensional vectors."},
-      {"model": "nvidia/parakeet-ctc-0.6b",         "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "automatic-speech-recognition", "tags": ["transcription","speech-embed","apple-npu"],      "description": "Parakeet CTC 0.6b is a speech recognition model optimized for on-device performance and live transcription."},
-      {"model": "nvidia/parakeet-ctc-1.1b",         "int4": true,  "int8": true,  "fp16": false, "apple": true,  "pipeline_tag": "automatic-speech-recognition", "tags": ["transcription","speech-embed","apple-npu"],      "description": "Parakeet CTC 1.1b is a speech recognition model optimized for on-device performance and live transcription."}
-    ]
+      branch:
+        description: Branch override (uses version tag if empty)
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -92,7 +70,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.version.outputs.tag }}
+          ref: ${{ github.event.inputs.branch || steps.version.outputs.tag }}
 
       - uses: actions/checkout@v4
         with:
@@ -115,14 +93,18 @@ jobs:
 
           publish_model() {
             local model=$1 int4=$2 int8=$3 fp16=$4 apple=$5 pipeline_tag=$6 tags=$7 description="${8:-}"
-            FLAGS=(--version "$VERSION" --org "$ORG" --model "$model")
+            local FLAGS=(--version "$VERSION" --org "$ORG" --model "$model")
             [ "$int4" == "true" ] && FLAGS+=(--int4)
             [ "$int8" == "true" ] && FLAGS+=(--int8)
             [ "$fp16" == "true" ] && FLAGS+=(--fp16)
             [ "$apple" == "true" ] && FLAGS+=(--apple)
             [ -n "$pipeline_tag" ] && FLAGS+=(--pipeline-tag "$pipeline_tag")
             [ -n "$tags" ] && FLAGS+=(--tags "$tags")
+            set +e
             python -m src.publish_to_hf --task export_model "${FLAGS[@]}" --description "$description"
+            local rc=$?
+            set -e
+            return $rc
           }
 
           if [ -n "${{ github.event.inputs.model }}" ]; then
@@ -136,7 +118,8 @@ jobs:
               "${{ github.event.inputs.tags }}" \
               "${{ github.event.inputs.description }}"
           else
-            echo "$MODELS_CONFIG" | jq -c '.[]' | while read -r config; do
+            FAILED_MODELS=()
+            while read -r config; do
               model=$(echo "$config" | jq -r '.model')
               int4=$(echo "$config" | jq -r '.int4')
               int8=$(echo "$config" | jq -r '.int8')
@@ -145,11 +128,20 @@ jobs:
               pipeline_tag=$(echo "$config" | jq -r '.pipeline_tag // ""')
               tags=$(echo "$config" | jq -r 'if .tags then .tags | join(",") else "" end')
               description=$(echo "$config" | jq -r '.description // ""')
-              publish_model "$model" "$int4" "$int8" "$fp16" "$apple" "$pipeline_tag" "$tags" "$description"
-            done
+              if ! publish_model "$model" "$int4" "$int8" "$fp16" "$apple" "$pipeline_tag" "$tags" "$description"; then
+                echo "::error::Failed to publish $model"
+                FAILED_MODELS+=("$model")
+              fi
+            done < <(jq -c '.[]' "$GITHUB_WORKSPACE/models.json")
+
+            if [ ${#FAILED_MODELS[@]} -gt 0 ]; then
+              echo "::error::Failed models: ${FAILED_MODELS[*]}"
+              exit 1
+            fi
           fi
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_HUB_DISABLE_XET: "1"
 
       - name: Update organization README
         if: "!github.event.inputs.model"
