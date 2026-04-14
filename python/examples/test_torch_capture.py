@@ -7,6 +7,7 @@ from src.transpile.capture_pytorch import (
     get_dtype,
     get_shape,
 )
+from src.transpile.lower import transpile_captured
 
 
 class TinyBlock(nn.Module):
@@ -47,6 +48,22 @@ def main():
 
     print("=== Full Dump ===")
     print(dump_graph(captured))
+    print()
+
+    print("=== Lower To Cactus ===")
+    try:
+        transpiled = transpile_captured(captured)
+        print("lowering succeeded")
+        print("lowered graph type:", type(transpiled.graph).__name__)
+        print("runtime inputs:", transpiled.runtime_inputs)
+        print("bound constants:", transpiled.bound_constants)
+        print("outputs:", transpiled.outputs)
+        print()
+        print("binding runtime input 0 from example tensor")
+        transpiled.set_input(0, x)
+    except NotImplementedError as exc:
+        print("lowering stopped on unimplemented case:")
+        print(f"  {exc}")
 
 
 if __name__ == "__main__":
