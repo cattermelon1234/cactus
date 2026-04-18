@@ -4,7 +4,6 @@ import numpy as np
 
 from .cactus import _lib, cactus_node_t, cactus_tensor_info_t
 
-
 class Graph:
     INT8 = 0
     FP16 = 1

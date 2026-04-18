@@ -14,7 +14,6 @@ from src.transpile.capture_pytorch import (
     resolve_attr,
 )
 
-
 @dataclass
 class TranspiledGraph:
     graph: Graph
