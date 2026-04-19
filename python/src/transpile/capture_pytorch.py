@@ -5,6 +5,8 @@ from typing import Iterable
 import torch
 from torch.export import export
 
+from src.transpile.graph_ir import IRGraph
+
 
 @dataclass
 class TensorMetadata:
@@ -20,6 +22,7 @@ class CapturedModel:
     graph_module: Any
     graph: Any
     state_dict: dict[str, Any]
+    ir_graph: IRGraph
     example_args: tuple[Any, ...]
     example_kwargs: dict[str, Any]
     strict: bool
@@ -90,12 +93,26 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
     example_args, example_kwargs = _clone_examples(normalized_args, normalized_kwargs)
 
     ep = export(model, args=example_args, kwargs=example_kwargs, strict=strict)
+    from src.transpile.import_ir import import_captured_to_ir
+
+    raw_captured = CapturedModel(
+        exported_program=ep,
+        graph_module=ep.graph_module,
+        graph=ep.graph,
+        state_dict=dict(ep.state_dict),
+        ir_graph=IRGraph(values={}, nodes={}, order=[], inputs=[], outputs=[]),
+        example_args=example_args,
+        example_kwargs=example_kwargs,
+        strict=strict,
+    )
+    ir_graph = import_captured_to_ir(raw_captured)
 
     return CapturedModel(
         exported_program=ep,
         graph_module=ep.graph_module,
         graph=ep.graph,
         state_dict=dict(ep.state_dict),
+        ir_graph=ir_graph,
         example_args=example_args,
         example_kwargs=example_kwargs,
         strict=strict,
@@ -118,7 +135,6 @@ def resolve_attr(root: Any, target: str) -> Any:
 
 def format_target(node: Any) -> str:
     return str(node.target)
-
 
 def get_tensor_metadata(node: Any) -> TensorMetadata | None:
     meta = getattr(node, "meta", {}) or {}
