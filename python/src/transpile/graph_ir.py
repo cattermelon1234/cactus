@@ -28,6 +28,7 @@ class IRGraph:
     inputs: list[str]
     outputs: list[str]
     constants: dict[str, object] = field(default_factory=dict)
+    meta: dict[str, object] = field(default_factory=dict)
 
     def add_node(self, node: IRNode) -> None:
         if node.id in self.nodes:

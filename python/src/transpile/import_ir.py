@@ -22,8 +22,10 @@ from src.transpile.normalize import dtype_to_ir
 
 
 def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
-    ir = IRGraph(values={}, nodes={}, order=[], inputs=[], outputs=[], constants={})
-    ctx = ImportContext(strict=strict)
+    transpile_metadata = getattr(captured, "transpile_metadata", {}) or {}
+    graph_meta = transpile_metadata.get("graph", {})
+    ir = IRGraph(values={}, nodes={}, order=[], inputs=[], outputs=[], constants={}, meta=dict(graph_meta))
+    ctx = ImportContext(strict=strict, transpile_metadata=transpile_metadata)
     placeholder_specs: dict[str, Any] = {}
 
     def _resolve_target(target: str) -> Any:

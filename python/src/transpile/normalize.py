@@ -36,7 +36,7 @@ def normalize_target(target: str) -> str:
         return "type_as"
     if target.startswith("aten.neg"):
         return "negate"
-    if target.startswith("aten.ne"):
+    if target.startswith("aten.ne.") or target == "aten.ne":
         return "not_equal"
     if target.startswith("aten.abs"):
         return "abs"

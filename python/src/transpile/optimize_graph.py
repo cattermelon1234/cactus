@@ -162,19 +162,29 @@ def fuse_attention(graph: IRGraph) -> bool:
         if value_base is not None:
             value_value_id = value_base
 
-        window_size = 0
+        window_size = int(node.attrs.get("window_size", 0))
         if len(node.inputs) > 3:
             mask_info = _extract_sliding_window_mask(graph, node.inputs[3])
             if mask_info is not None:
-                window_size = int(mask_info["window_size"])
+                node.meta["mask_window_size_hint"] = int(mask_info["window_size"])
+                if window_size == 0:
+                    window_size = int(mask_info["window_size"])
+                    node.meta["window_size_source"] = "mask_pattern"
+
+        if window_size != 0 and "window_size_source" not in node.meta:
+            node.meta["window_size_source"] = "import_attr"
 
         node.op = "attention"
         node.inputs = [query_value_id, key_value_id, value_value_id]
-        node.attrs = {
+        semantic_attrs = {
+            k: v for k, v in node.attrs.items() if k not in {"mask", "dropout_p", "scale", "is_causal"}
+        }
+        semantic_attrs.update({
             "scale": float(node.attrs.get("scale", 1.0)),
             "is_causal": bool(node.attrs.get("is_causal", True)),
             "window_size": window_size,
-        }
+        })
+        node.attrs = semantic_attrs
         node.kind = "semantic"
         changed = True
 
@@ -204,11 +214,24 @@ def fuse_add_clipped(graph: IRGraph) -> bool:
 
 
 def _match_rms_norm(graph: IRGraph, node: IRNode) -> dict[str, object] | None:
-    anchor_input = node.inputs[0] if node.op == "type_as" else node.outputs[0]
-    final_mul = _producer(graph, anchor_input)
-    if final_mul is None or final_mul.op != "multiply" or len(final_mul.inputs) != 2:
+    anchor_value_id = node.inputs[0] if node.op == "type_as" else node.outputs[0]
+    anchor_value_id = _strip_passthrough(graph, anchor_value_id)
+    anchor_node = _producer(graph, anchor_value_id)
+    if anchor_node is None or anchor_node.op != "multiply" or len(anchor_node.inputs) != 2:
         return None
 
+    scaled_match = _match_scaled_rms_norm(graph, anchor_node)
+    if scaled_match is not None:
+        return scaled_match
+
+    unscaled_match = _match_unscaled_rms_norm(graph, anchor_node)
+    if unscaled_match is not None:
+        return unscaled_match
+
+    return None
+
+
+def _match_scaled_rms_norm(graph: IRGraph, final_mul: IRNode) -> dict[str, object] | None:
     for normed_value_id, scale_value_id in (
         (final_mul.inputs[0], final_mul.inputs[1]),
         (final_mul.inputs[1], final_mul.inputs[0]),
@@ -234,6 +257,48 @@ def _match_rms_norm(graph: IRGraph, node: IRNode) -> dict[str, object] | None:
     return None
 
 
+def _match_unscaled_rms_norm(graph: IRGraph, final_mul: IRNode) -> dict[str, object] | None:
+    output_value = graph.values.get(final_mul.outputs[0])
+    if output_value is None:
+        return None
+    for user_id in output_value.users:
+        user_node = graph.nodes.get(user_id)
+        if user_node is None:
+            continue
+        if user_node.op in {"type_as", "precision_cast", "contiguous"}:
+            continue
+        return None
+
+    norm_match = _extract_rms_normed_value(graph, final_mul.outputs[0])
+    if norm_match is None:
+        return None
+
+    if _strip_passthrough(graph, norm_match["input_value_id"]) != _strip_passthrough(graph, norm_match["pow_input_value_id"]):
+        return None
+
+    input_value_id = norm_match["input_value_id"]
+    input_value = graph.values.get(input_value_id)
+    if input_value is None or input_value.shape is None or not input_value.shape:
+        return None
+
+    hidden_dim = input_value.shape[-1]
+    if not isinstance(hidden_dim, int) or hidden_dim <= 0:
+        return None
+
+    weight_value_id = _materialize_ones_constant(
+        graph,
+        hidden_dim,
+        dtype=input_value.dtype,
+        suffix="rms_norm_ones",
+    )
+    return {
+        "input_value_id": input_value_id,
+        "weight_value_id": weight_value_id,
+        "weight_offset": 0.0,
+        "eps": norm_match["eps"],
+    }
+
+
 def _extract_rms_scale(graph: IRGraph, value_id: str) -> dict[str, object] | None:
     offset = 0.0
     current = value_id
@@ -254,7 +319,7 @@ def _extract_rms_scale(graph: IRGraph, value_id: str) -> dict[str, object] | Non
 
 
 def _extract_rms_normed_value(graph: IRGraph, value_id: str) -> dict[str, object] | None:
-    producer = _producer(graph, value_id)
+    producer = _producer(graph, _strip_passthrough(graph, value_id))
     if producer is None or producer.op != "multiply" or len(producer.inputs) != 2:
         return None
 
@@ -279,7 +344,7 @@ def _extract_rms_normed_value(graph: IRGraph, value_id: str) -> dict[str, object
 
 
 def _extract_rsqrt_chain(graph: IRGraph, value_id: str) -> dict[str, object] | None:
-    pow_node = _producer(graph, value_id)
+    pow_node = _producer(graph, _strip_passthrough(graph, value_id))
     if pow_node is None or pow_node.op != "pow":
         return None
     if float(pow_node.attrs.get("exponent", 0.0)) != -0.5:
@@ -567,6 +632,30 @@ def _materialize_shifted_constant(graph: IRGraph, value_id: str, offset: float, 
         id=new_value_id,
         shape=tuple(shifted.shape),
         dtype=dtype_to_ir(shifted.dtype),
+        producer=None,
+        users=[],
+    )
+    return new_value_id
+
+
+def _materialize_ones_constant(graph: IRGraph, size: int, *, dtype: str | None, suffix: str) -> str:
+    dtype_map = {
+        "fp16": torch.float16,
+        "bf16": torch.bfloat16,
+        "fp32": torch.float32,
+        "fp64": torch.float64,
+    }
+    torch_dtype = dtype_map.get(dtype, torch.float32)
+    new_value_id = f"c_{suffix}_{size}_{dtype or 'fp32'}"
+    if new_value_id in graph.constants:
+        return new_value_id
+
+    value = torch.ones((size,), dtype=torch_dtype)
+    graph.constants[new_value_id] = value
+    graph.values[new_value_id] = IRValue(
+        id=new_value_id,
+        shape=(size,),
+        dtype=dtype_to_ir(value.dtype),
         producer=None,
         users=[],
     )

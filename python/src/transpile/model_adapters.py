@@ -25,6 +25,14 @@ class CausalLMLogitsAdapter(torch.nn.Module):
             return_dict=False,
         )[0]
 
+    def get_transpile_metadata(self):
+        return {
+            "graph": {
+                "adapter_family": "generic",
+                "adapter_type": type(self).__name__,
+            }
+        }
+
 
 class GemmaCausalLMLogitsAdapter(torch.nn.Module):
     def __init__(self, model: torch.nn.Module):
@@ -67,6 +75,15 @@ class GemmaCausalLMLogitsAdapter(torch.nn.Module):
         hidden_states = self.backbone.norm(hidden_states)
         checkpoints.append(hidden_states)
         return self.model.lm_head(hidden_states), checkpoints
+
+    def get_transpile_metadata(self):
+        return {
+            "graph": {
+                "adapter_family": "gemma",
+                "adapter_type": type(self).__name__,
+                "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
+            }
+        }
 
 
 class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
@@ -119,6 +136,36 @@ class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
         hidden_states = self.backbone.norm(hidden_states)
         checkpoints.append(hidden_states)
         return self.model.lm_head(hidden_states), checkpoints
+
+    def get_transpile_metadata(self):
+        sliding_window = getattr(self.backbone.config, "sliding_window", None)
+        layer_types = list(getattr(self.backbone.config, "layer_types", []))
+        import_hints: list[dict[str, object]] = []
+        for layer_index, layer_type in enumerate(layer_types):
+            attrs: dict[str, object] = {}
+            if layer_type == "sliding_attention" and sliding_window is not None:
+                attrs["window_size"] = int(sliding_window)
+            import_hints.append(
+                {
+                    "module_path_suffix": f"backbone.layers.{layer_index}.self_attn",
+                    "op": "scaled_dot_product_attention",
+                    "attrs": attrs,
+                    "meta": {
+                        "attention_layer_type": layer_type,
+                        "attention_layer_index": layer_index,
+                    },
+                }
+            )
+        return {
+            "graph": {
+                "adapter_family": "gemma3",
+                "adapter_type": type(self).__name__,
+                "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
+                "layer_types": tuple(layer_types),
+                "sliding_window": None if sliding_window is None else int(sliding_window),
+            },
+            "import_hints": import_hints,
+        }
 
 
 class Gemma4CausalLMLogitsAdapter(torch.nn.Module):
@@ -263,6 +310,36 @@ class Gemma4CausalLMLogitsAdapter(torch.nn.Module):
         checkpoints["layer_scalar_out"] = after_ffn
         return checkpoints
 
+    def get_transpile_metadata(self):
+        sliding_window = getattr(self.backbone.config, "sliding_window", None)
+        layer_types = list(getattr(self.backbone.config, "layer_types", []))
+        import_hints: list[dict[str, object]] = []
+        for layer_index, layer_type in enumerate(layer_types):
+            attrs: dict[str, object] = {}
+            if layer_type == "sliding_attention" and sliding_window is not None:
+                attrs["window_size"] = int(sliding_window)
+            import_hints.append(
+                {
+                    "module_path_suffix": f"backbone.layers.{layer_index}.self_attn",
+                    "op": "scaled_dot_product_attention",
+                    "attrs": attrs,
+                    "meta": {
+                        "attention_layer_type": layer_type,
+                        "attention_layer_index": layer_index,
+                    },
+                }
+            )
+        return {
+            "graph": {
+                "adapter_family": "gemma4",
+                "adapter_type": type(self).__name__,
+                "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
+                "layer_types": tuple(layer_types),
+                "sliding_window": None if sliding_window is None else int(sliding_window),
+            },
+            "import_hints": import_hints,
+        }
+
 
 class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
     def __init__(self, model: torch.nn.Module):
@@ -311,6 +388,16 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
         hidden_states = self.backbone.norm(hidden_states)
         checkpoints.append(hidden_states)
         return self.model.lm_head(hidden_states), checkpoints
+
+    def get_transpile_metadata(self):
+        return {
+            "graph": {
+                "adapter_family": "qwen3_5",
+                "adapter_type": type(self).__name__,
+                "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
+                "layer_types": tuple(getattr(self.backbone.config, "layer_types", [])),
+            }
+        }
 
 
 def _family_key(model: torch.nn.Module) -> str:

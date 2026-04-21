@@ -35,6 +35,7 @@ class CapturedModel:
     example_args: tuple[Any, ...]
     example_kwargs: dict[str, Any]
     strict: bool
+    transpile_metadata: dict[str, Any]
 
     def named_parameters(self):
         return self.exported_program.named_parameters()
@@ -106,6 +107,67 @@ def _inject_export_safe_kwargs(model: torch.nn.Module, kwargs: dict[str, Any]) -
         updated["return_dict"] = False
     return updated
 
+
+def _call_transpile_metadata_provider(module: torch.nn.Module, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    for attr_name in ("get_transpile_metadata", "transpile_metadata"):
+        provider = getattr(module, attr_name, None)
+        if not callable(provider):
+            continue
+        try:
+            metadata = provider(args=args, kwargs=kwargs)
+        except TypeError:
+            metadata = provider()
+        if metadata is None:
+            return {}
+        if not isinstance(metadata, dict):
+            raise TypeError(f"{type(module).__name__}.{attr_name} must return a dict or None")
+        return metadata
+    return {}
+
+
+def _collect_transpile_metadata(model: torch.nn.Module, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    graph_meta: dict[str, Any] = {}
+    provider_graph_meta: dict[str, dict[str, Any]] = {}
+    import_hints: list[dict[str, Any]] = []
+    seen_modules: set[int] = set()
+
+    for module_path, module in model.named_modules():
+        module_id = id(module)
+        if module_id in seen_modules:
+            continue
+        seen_modules.add(module_id)
+
+        metadata = _call_transpile_metadata_provider(module, args, kwargs)
+        if not metadata:
+            continue
+
+        provider_key = module_path or type(module).__name__
+        provider_meta = metadata.get("graph", {})
+        if isinstance(provider_meta, dict) and provider_meta:
+            provider_graph_meta[provider_key] = dict(provider_meta)
+            if not module_path:
+                graph_meta.update(provider_meta)
+
+        raw_hints = metadata.get("import_hints", ())
+        for raw_hint in raw_hints:
+            if not isinstance(raw_hint, dict):
+                raise TypeError(f"{type(module).__name__} import hints must be dictionaries")
+            hint = dict(raw_hint)
+            hint.setdefault("provider", provider_key)
+            import_hints.append(hint)
+
+    if provider_graph_meta:
+        graph_meta.setdefault("transpile_metadata_providers", provider_graph_meta)
+    if import_hints:
+        graph_meta["import_hint_count"] = len(import_hints)
+
+    if not graph_meta and not import_hints:
+        return {}
+    return {
+        "graph": graph_meta,
+        "import_hints": import_hints,
+    }
+
 def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
     if not isinstance(model, torch.nn.Module):
         raise TypeError("model must be a torch.nn.Module")
@@ -118,6 +180,7 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
 
     model = model.eval()
     example_args, example_kwargs = _clone_examples(normalized_args, normalized_kwargs)
+    transpile_metadata = _collect_transpile_metadata(model, example_args, example_kwargs)
 
     try:
         ep = export(model, args=example_args, kwargs=example_kwargs, strict=strict)
@@ -139,6 +202,7 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
         example_args=example_args,
         example_kwargs=example_kwargs,
         strict=strict,
+        transpile_metadata=transpile_metadata,
     )
     try:
         ir_graph = import_captured_to_ir(raw_captured, strict=strict)
@@ -159,6 +223,7 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
         example_args=example_args,
         example_kwargs=example_kwargs,
         strict=strict,
+        transpile_metadata=transpile_metadata,
     )
 
 

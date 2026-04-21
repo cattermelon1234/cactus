@@ -598,10 +598,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--model-id",
-        default=os.environ.get("CACTUS_GEMMA_HF_MODEL_ID", "google/gemma-4-E2B"),
+        # default=os.environ.get("CACTUS_GEMMA_HF_MODEL_ID", "google/gemma-4-E2B"),
         # default=os.environ.get("CACTUS_GEMMA_HF_MODEL_ID", "google/gemma-3-270m-it"),
         # default=os.environ.get("CACTUS_GEMMA_HF_MODEL_ID", "google/gemma-2b-it"),
-        # default=os.environ.get("CACTUS_QWEN_HF_MODEL_ID", "Qwen/Qwen3.5-2B"),
+        default=os.environ.get("CACTUS_QWEN_HF_MODEL_ID", "Qwen/Qwen3.5-2B"),
 
         help="Hugging Face model id.",
     )

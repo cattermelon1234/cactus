@@ -24,6 +24,7 @@ class ImportContext:
     tuple_aliases: dict[str, list[str]] = field(default_factory=dict)
     local_alias_stack: list[dict[str, str]] = field(default_factory=list)
     node_stack: list[str] = field(default_factory=list)
+    transpile_metadata: dict[str, object] = field(default_factory=dict)
 
     def push_local_aliases(self, aliases: dict[str, str]) -> None:
         self.local_alias_stack.append(aliases)
@@ -59,6 +60,73 @@ class ImportContext:
         if self.node_stack:
             self.node_stack.pop()
 
+    def _node_module_paths(self, node: Any) -> tuple[str, ...]:
+        meta = getattr(node, "meta", {}) or {}
+        raw_stack = meta.get("nn_module_stack")
+        if not isinstance(raw_stack, dict):
+            return ()
+        paths: list[str] = []
+        for entry in raw_stack.values():
+            if not isinstance(entry, (tuple, list)) or not entry:
+                continue
+            module_path = entry[0]
+            if isinstance(module_path, str) and module_path:
+                paths.append(module_path)
+        # Prefer the deepest module path first.
+        paths.reverse()
+        deduped: list[str] = []
+        for path in paths:
+            if path not in deduped:
+                deduped.append(path)
+        return tuple(deduped)
+
+    def lookup_import_hint(self, node: Any, *, torch_op: str, op_name: str) -> dict[str, object]:
+        hints = self.transpile_metadata.get("import_hints", ())
+        if not isinstance(hints, list):
+            return {}
+
+        module_paths = self._node_module_paths(node)
+        matched_attrs: dict[str, object] = {}
+        matched_meta: dict[str, object] = {}
+        matched_provider: list[str] = []
+
+        for hint in hints:
+            if not isinstance(hint, dict):
+                continue
+            hint_op = hint.get("op")
+            if hint_op is not None and hint_op != op_name:
+                continue
+            hint_torch_op = hint.get("torch_op")
+            if hint_torch_op is not None and hint_torch_op != torch_op:
+                continue
+
+            module_path = hint.get("module_path")
+            if module_path is not None and module_path not in module_paths:
+                continue
+            module_path_suffix = hint.get("module_path_suffix")
+            if module_path_suffix is not None and not any(
+                path == module_path_suffix or path.endswith(f".{module_path_suffix}") for path in module_paths
+            ):
+                continue
+
+            attrs = hint.get("attrs", {})
+            if isinstance(attrs, dict):
+                matched_attrs.update(attrs)
+            meta = hint.get("meta", {})
+            if isinstance(meta, dict):
+                matched_meta.update(meta)
+            provider = hint.get("provider")
+            if isinstance(provider, str) and provider not in matched_provider:
+                matched_provider.append(provider)
+
+        if not matched_attrs and not matched_meta and not matched_provider:
+            return {}
+
+        if matched_provider:
+            matched_meta.setdefault("import_hint_providers", tuple(matched_provider))
+            matched_meta.setdefault("import_hint_source", "capture_metadata")
+        return {"attrs": matched_attrs, "meta": matched_meta}
+
 
 def value_id(node: Any, ctx: ImportContext) -> str:
     return ctx.resolve_value_id(node)
@@ -78,6 +146,11 @@ def extract_input_ids(arg: Any, ctx: ImportContext) -> list[str]:
     if isinstance(arg, (tuple, list)):
         ids: list[str] = []
         for item in arg:
+            ids.extend(extract_input_ids(item, ctx))
+        return ids
+    if isinstance(arg, dict):
+        ids: list[str] = []
+        for item in arg.values():
             ids.extend(extract_input_ids(item, ctx))
         return ids
     return []
@@ -275,10 +348,54 @@ def import_call_function(
     torch_op: str,
 ) -> None:
     op = normalize_target(torch_op)
+    import_hint = ctx.lookup_import_hint(node, torch_op=torch_op, op_name=op)
     importer = OP_IMPORTERS.get(op)
     if importer is None:
-        ctx.fail(f"unsupported imported op {op} from {torch_op} on node {node.name}")
-    importer(ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op)
+        import_opaque_call_function(ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op, op_name=op)
+    else:
+        importer(ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op)
+    _apply_import_hint(ir, node, import_hint)
+
+
+def _apply_import_hint(ir: IRGraph, node: Any, hint: dict[str, object]) -> None:
+    if not hint:
+        return
+    ir_node = ir.nodes.get(node_id(node))
+    if ir_node is None:
+        return
+    attrs = hint.get("attrs", {})
+    if isinstance(attrs, dict):
+        ir_node.attrs.update(attrs)
+    meta = hint.get("meta", {})
+    if isinstance(meta, dict):
+        ir_node.meta.update(meta)
+
+
+def import_opaque_call_function(
+    ir: IRGraph,
+    node: Any,
+    ctx: ImportContext,
+    *,
+    shape: tuple[int, ...] | None,
+    dtype: str | None,
+    torch_op: str,
+    op_name: str,
+) -> None:
+    ir_node = IRNode(
+        id=node_id(node),
+        op=op_name,
+        inputs=extract_input_ids(getattr(node, "args", ()), ctx) + extract_input_ids(getattr(node, "kwargs", {}), ctx),
+        outputs=[value_id(node, ctx)],
+        attrs={
+            "opaque": True,
+            "torch_op": torch_op,
+            "args": extract_literals(getattr(node, "args", ())),
+            "kwargs": extract_literals(getattr(node, "kwargs", {})),
+        },
+        meta=_base_meta(shape, dtype, torch_op, node),
+        kind="opaque",
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
 
 
 def import_add(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:

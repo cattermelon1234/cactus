@@ -12,6 +12,7 @@ from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
 from src.transpile.graph_ir import verify_ir
+from src.transpile.optimize_graph import optimize_graph
 
 
 @dataclass
@@ -54,6 +55,7 @@ def transpile_captured(captured: CapturedModel) -> TranspiledGraph:
 
 def transpile_ir(ir: IRGraph) -> TranspiledGraph:
     verify_ir(ir)
+    optimize_graph(ir)
     g = Graph()
     env: dict[str, Any] = {}
     runtime_inputs: list[Tensor] = []
