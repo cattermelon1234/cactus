@@ -70,6 +70,9 @@ void dispatch_binary_op_f16(OpType op, const __fp16* lhs, const __fp16* rhs, __f
         case OpType::DIVIDE:
             cactus_divide_f16(lhs, rhs, output, count);
             break;
+        case OpType::NOT_EQUAL:
+            cactus_not_equal_f16(lhs, rhs, output, count);
+            break;
         default:
             break;
     }
@@ -82,6 +85,7 @@ void dispatch_unary_op_f16(OpType op, const __fp16* input, __fp16* output, size_
         case OpType::SCALAR_SUBTRACT: scalar_op = ScalarOpType::SUBTRACT; break;
         case OpType::SCALAR_MULTIPLY: scalar_op = ScalarOpType::MULTIPLY; break;
         case OpType::SCALAR_DIVIDE: scalar_op = ScalarOpType::DIVIDE; break;
+        case OpType::SCALAR_NOT_EQUAL: scalar_op = ScalarOpType::NOT_EQUAL; break;
         case OpType::SCALAR_EXP: scalar_op = ScalarOpType::EXP; break;
         case OpType::SCALAR_SQRT: scalar_op = ScalarOpType::SQRT; break;
         case OpType::SCALAR_COS: scalar_op = ScalarOpType::COS; break;
@@ -136,6 +140,13 @@ void compute_binary_op_node(GraphNode& node, const std::vector<std::unique_ptr<G
                                             lhs_strides.data(), rhs_strides.data(),
                                             node.params.broadcast_info.output_shape.data(),
                                             node.params.broadcast_info.output_shape.size());
+                break;
+            case OpType::NOT_EQUAL:
+                cactus_not_equal_broadcast_f16(lhs.data_as<__fp16>(), rhs.data_as<__fp16>(),
+                                               node.output_buffer.data_as<__fp16>(),
+                                               lhs_strides.data(), rhs_strides.data(),
+                                               node.params.broadcast_info.output_shape.data(),
+                                               node.params.broadcast_info.output_shape.size());
                 break;
             default: break;
         }

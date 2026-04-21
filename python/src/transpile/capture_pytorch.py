@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import inspect
 from typing import Any
 from typing import Iterable
 
@@ -6,6 +7,13 @@ import torch
 from torch.export import export
 
 from src.transpile.graph_ir import IRGraph
+
+
+class CapturePhaseError(RuntimeError):
+    def __init__(self, phase: str, message: str, *, cause: Exception | None = None):
+        super().__init__(f"[capture:{phase}] {message}")
+        self.phase = phase
+        self.cause = cause
 
 
 @dataclass
@@ -23,6 +31,7 @@ class CapturedModel:
     graph: Any
     state_dict: dict[str, Any]
     ir_graph: IRGraph
+    source_module: Any
     example_args: tuple[Any, ...]
     example_kwargs: dict[str, Any]
     strict: bool
@@ -79,12 +88,30 @@ def _clone_examples(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[tupl
     )
 
 
+def _inject_export_safe_kwargs(model: torch.nn.Module, kwargs: dict[str, Any]) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(model.forward)
+    except (TypeError, ValueError):
+        return kwargs
+
+    updated = dict(kwargs)
+    parameters = signature.parameters
+
+    # HF causal LM forwards often default to returning cache objects and ModelOutput
+    # containers, which torch.export cannot serialize cleanly. Keep the capture
+    # boundary tensor-only unless the caller explicitly asked otherwise.
+    if "use_cache" in parameters and "use_cache" not in updated:
+        updated["use_cache"] = False
+    if "return_dict" in parameters and "return_dict" not in updated:
+        updated["return_dict"] = False
+    return updated
+
 def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
     if not isinstance(model, torch.nn.Module):
         raise TypeError("model must be a torch.nn.Module")
 
     normalized_args = _normalize_args(args)
-    normalized_kwargs = _normalize_kwargs(kwargs)
+    normalized_kwargs = _inject_export_safe_kwargs(model, _normalize_kwargs(kwargs))
 
     if not normalized_args and not normalized_kwargs:
         raise ValueError("capture_model requires example args or kwargs")
@@ -92,7 +119,14 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
     model = model.eval()
     example_args, example_kwargs = _clone_examples(normalized_args, normalized_kwargs)
 
-    ep = export(model, args=example_args, kwargs=example_kwargs, strict=strict)
+    try:
+        ep = export(model, args=example_args, kwargs=example_kwargs, strict=strict)
+    except Exception as exc:
+        raise CapturePhaseError(
+            "export",
+            f"torch.export failed for model={type(model).__name__} strict={strict}: {exc}",
+            cause=exc,
+        ) from exc
     from src.transpile.import_ir import import_captured_to_ir
 
     raw_captured = CapturedModel(
@@ -101,11 +135,19 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
         graph=ep.graph,
         state_dict=dict(ep.state_dict),
         ir_graph=IRGraph(values={}, nodes={}, order=[], inputs=[], outputs=[]),
+        source_module=model,
         example_args=example_args,
         example_kwargs=example_kwargs,
         strict=strict,
     )
-    ir_graph = import_captured_to_ir(raw_captured)
+    try:
+        ir_graph = import_captured_to_ir(raw_captured, strict=strict)
+    except Exception as exc:
+        raise CapturePhaseError(
+            "import",
+            f"failed to import exported graph to IR for model={type(model).__name__} strict={strict}: {exc}",
+            cause=exc,
+        ) from exc
 
     return CapturedModel(
         exported_program=ep,
@@ -113,6 +155,7 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
         graph=ep.graph,
         state_dict=dict(ep.state_dict),
         ir_graph=ir_graph,
+        source_module=model,
         example_args=example_args,
         example_kwargs=example_kwargs,
         strict=strict,

@@ -149,7 +149,9 @@ enum class OpType {
     LEAKY_RELU,
     CONV2D_K3S1P1,
     STATS_POOL,
-    WEIGHTED_STATS_POOL
+    WEIGHTED_STATS_POOL,
+    NOT_EQUAL,
+    SCALAR_NOT_EQUAL
 };
 
 struct PrecisionTraits {
@@ -499,11 +501,13 @@ public:
     size_t subtract(size_t input1, size_t input2);
     size_t multiply(size_t input1, size_t input2);
     size_t divide(size_t input1, size_t input2);
+    size_t not_equal(size_t input1, size_t input2);
     
     size_t scalar_add(size_t input, float value);
     size_t scalar_subtract(size_t input, float value);
     size_t scalar_multiply(size_t input, float value);
     size_t scalar_divide(size_t input, float value);
+    size_t scalar_not_equal(size_t input, float value);
     size_t scalar_exp(size_t input);
     size_t scalar_sqrt(size_t input);
     size_t scalar_cos(size_t input);

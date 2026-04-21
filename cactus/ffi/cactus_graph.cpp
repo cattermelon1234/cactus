@@ -244,6 +244,17 @@ int cactus_graph_divide(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, 
     }
 }
 
+int cactus_graph_not_equal(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_not_equal");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.not_equal(static_cast<size_t>(a), static_cast<size_t>(b)));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
 int cactus_graph_scalar_add(cactus_graph_t graph, cactus_node_t x, float value, cactus_node_t *out) {
     if (!graph || !out) {
         last_error_message = "Invalid args to cactus_graph_scalar_add";
@@ -290,6 +301,17 @@ int cactus_graph_scalar_divide(cactus_graph_t graph, cactus_node_t x, float valu
     }
     try {
         *out = static_cast<cactus_node_t>(as_graph(graph)->graph.scalar_divide(static_cast<size_t>(x), value));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
+int cactus_graph_scalar_not_equal(cactus_graph_t graph, cactus_node_t x, float value, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_scalar_not_equal");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.scalar_not_equal(static_cast<size_t>(x), value));
         return 0;
     } catch (const std::exception& e) {
         last_error_message = e.what();

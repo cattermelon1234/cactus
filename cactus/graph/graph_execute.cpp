@@ -79,10 +79,12 @@ static const std::unordered_map<OpType, ComputeFn> dispatch_table = {
     {OpType::SUBTRACT, compute_binary_op_node},
     {OpType::MULTIPLY, compute_binary_op_node},
     {OpType::DIVIDE, compute_binary_op_node},
+    {OpType::NOT_EQUAL, compute_binary_op_node},
     {OpType::SCALAR_ADD, compute_unary_op_node},
     {OpType::SCALAR_SUBTRACT, compute_unary_op_node},
     {OpType::SCALAR_MULTIPLY, compute_unary_op_node},
     {OpType::SCALAR_DIVIDE, compute_unary_op_node},
+    {OpType::SCALAR_NOT_EQUAL, compute_unary_op_node},
     {OpType::SCALAR_EXP, compute_unary_op_node},
     {OpType::SCALAR_SQRT, compute_unary_op_node},
     {OpType::SCALAR_COS, compute_unary_op_node},
@@ -185,7 +187,9 @@ static const char* op_type_names[] = {
     "LEAKY_RELU",
     "CONV2D_K3S1P1",
     "STATS_POOL",
-    "WEIGHTED_STATS_POOL"
+    "WEIGHTED_STATS_POOL",
+    "NOT_EQUAL",
+    "SCALAR_NOT_EQUAL"
 };
 
 static const char* get_op_name(OpType op) {

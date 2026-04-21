@@ -40,6 +40,16 @@ void cactus_scalar_op_f16(const __fp16* input, __fp16* output, size_t num_elemen
                 [scalar_f16](__fp16 v) { return static_cast<__fp16>(v / scalar_f16); });
             break;
         }
+        case ScalarOpType::NOT_EQUAL:
+            CactusThreading::parallel_for(num_elements,
+                CactusThreading::Thresholds::SCALAR_BASIC,
+                [&](size_t start, size_t end) {
+                    for (size_t i = start; i < end; ++i) {
+                        output[i] = static_cast<__fp16>(
+                            static_cast<float>(input[i]) != scalar_value ? 1.0f : 0.0f);
+                    }
+                });
+            break;
         case ScalarOpType::ABS:
             elementwise_op_f16(input, output, num_elements, use_streaming,
                 CactusThreading::Thresholds::SCALAR_BASIC,

@@ -24,14 +24,15 @@ static inline void increment_coords(size_t* coords, const size_t* shape, size_t 
     }
 }
 
-enum class BroadcastOp { ADD, SUB, MUL, DIV };
+enum class BroadcastOp { ADD, SUB, MUL, DIV, NE };
 
 template<BroadcastOp Op>
 static inline float16x8_t broadcast_op_vec(float16x8_t a, float16x8_t b) {
     if constexpr (Op == BroadcastOp::ADD) return vaddq_f16(a, b);
     else if constexpr (Op == BroadcastOp::SUB) return vsubq_f16(a, b);
     else if constexpr (Op == BroadcastOp::MUL) return vmulq_f16(a, b);
-    else return vdivq_f16(a, b);
+    else if constexpr (Op == BroadcastOp::DIV) return vdivq_f16(a, b);
+    else return vreinterpretq_f16_u16(vdupq_n_u16(0));
 }
 
 template<BroadcastOp Op>
@@ -39,7 +40,8 @@ static inline __fp16 broadcast_op_scalar(__fp16 a, __fp16 b) {
     if constexpr (Op == BroadcastOp::ADD) return a + b;
     else if constexpr (Op == BroadcastOp::SUB) return a - b;
     else if constexpr (Op == BroadcastOp::MUL) return a * b;
-    else return a / b;
+    else if constexpr (Op == BroadcastOp::DIV) return a / b;
+    else return static_cast<__fp16>(a != b ? 1.0f : 0.0f);
 }
 
 template<BroadcastOp Op>
@@ -60,6 +62,37 @@ static void broadcast_op_optimized(const __fp16* a, const __fp16* b, __fp16* out
     bool b_inner_broadcast = (b_strides[ndim - 1] == 0);
 
     size_t outer_size = total_elements / inner_size;
+
+    if constexpr (Op == BroadcastOp::NE) {
+        CactusThreading::parallel_for(outer_size, CactusThreading::Thresholds::ELEMENT_WISE,
+            [&](size_t start_outer, size_t end_outer) {
+                std::vector<size_t> coords(ndim, 0);
+
+                size_t tmp = start_outer;
+                for (int i = ndim - 2; i >= 0; --i) {
+                    coords[i] = tmp % output_shape[i];
+                    tmp /= output_shape[i];
+                }
+
+                for (size_t outer_idx = start_outer; outer_idx < end_outer; ++outer_idx) {
+                    size_t a_base = 0, b_base = 0;
+                    for (size_t i = 0; i < ndim - 1; ++i) {
+                        a_base += coords[i] * a_strides[i];
+                        b_base += coords[i] * b_strides[i];
+                    }
+
+                    __fp16* out_ptr = output + outer_idx * inner_size;
+                    for (size_t i = 0; i < inner_size; ++i) {
+                        const size_t a_idx = a_base + (a_inner_broadcast ? 0 : i);
+                        const size_t b_idx = b_base + (b_inner_broadcast ? 0 : i);
+                        out_ptr[i] = static_cast<__fp16>(a[a_idx] != b[b_idx] ? 1.0f : 0.0f);
+                    }
+
+                    increment_coords(coords.data(), output_shape, ndim);
+                }
+            });
+        return;
+    }
 
     if (a_inner_contiguous && b_inner_contiguous && inner_size >= 8) {
         CactusThreading::parallel_for(outer_size, CactusThreading::Thresholds::ELEMENT_WISE,
@@ -367,6 +400,15 @@ void cactus_divide_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t 
         });
 }
 
+void cactus_not_equal_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements) {
+    CactusThreading::parallel_for(num_elements, CactusThreading::Thresholds::ELEMENT_WISE,
+        [&](size_t start_idx, size_t end_idx) {
+            for (size_t i = start_idx; i < end_idx; ++i) {
+                output[i] = static_cast<__fp16>(a[i] != b[i] ? 1.0f : 0.0f);
+            }
+        });
+}
+
 void cactus_add_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* output,
                               const size_t* a_strides, const size_t* b_strides,
                               const size_t* output_shape, size_t ndim) {
@@ -389,6 +431,12 @@ void cactus_divide_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* outpu
                                  const size_t* a_strides, const size_t* b_strides,
                                  const size_t* output_shape, size_t ndim) {
     broadcast_op_optimized<BroadcastOp::DIV>(a, b, output, a_strides, b_strides, output_shape, ndim);
+}
+
+void cactus_not_equal_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* output,
+                                    const size_t* a_strides, const size_t* b_strides,
+                                    const size_t* output_shape, size_t ndim) {
+    broadcast_op_optimized<BroadcastOp::NE>(a, b, output, a_strides, b_strides, output_shape, ndim);
 }
 
 void cactus_concat_f16(const __fp16* input1, const __fp16* input2, __fp16* output,

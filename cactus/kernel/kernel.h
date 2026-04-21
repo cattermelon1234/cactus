@@ -11,6 +11,7 @@ enum class ScalarOpType {
     SUBTRACT,
     MULTIPLY,
     DIVIDE,
+    NOT_EQUAL,
     ABS,
     EXP,
     POW,
@@ -28,6 +29,7 @@ void cactus_subtract_f16(const __fp16* a, const __fp16* b, __fp16* output, size_
 void cactus_multiply_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
 void cactus_add_scaled_f16(const __fp16* base, const __fp16* src, __fp16* output, size_t num_elements, float scale);
 void cactus_divide_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
+void cactus_not_equal_f16(const __fp16* a, const __fp16* b, __fp16* output, size_t num_elements);
 
 void cactus_add_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* output,
                                const size_t* a_strides, const size_t* b_strides,
@@ -41,6 +43,9 @@ void cactus_multiply_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* out
 void cactus_divide_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* output,
                                  const size_t* a_strides, const size_t* b_strides,
                                  const size_t* output_shape, size_t ndim);
+void cactus_not_equal_broadcast_f16(const __fp16* a, const __fp16* b, __fp16* output,
+                                    const size_t* a_strides, const size_t* b_strides,
+                                    const size_t* output_shape, size_t ndim);
 
 void cactus_scalar_op_f16(const __fp16* input, __fp16* output, size_t num_elements, float scalar_value, ScalarOpType op_type);
 

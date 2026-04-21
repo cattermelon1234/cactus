@@ -57,6 +57,16 @@ size_t CactusGraph::divide(size_t input1, size_t input2) {
     return add_node(OpType::DIVIDE, {input1, input2}, broadcast_info.output_shape, params);
 }
 
+size_t CactusGraph::not_equal(size_t input1, size_t input2) {
+    const auto& lhs_buffer = get_output_buffer(input1);
+    const auto& rhs_buffer = get_output_buffer(input2);
+
+    BroadcastInfo broadcast_info = BroadcastInfo::compute(lhs_buffer.shape, rhs_buffer.shape);
+    OpParams params{.broadcast_info = broadcast_info, .output_precision = Precision::FP16};
+
+    return add_node(OpType::NOT_EQUAL, {input1, input2}, broadcast_info.output_shape, params);
+}
+
 size_t CactusGraph::abs(size_t input) {
     const auto& input_buffer = get_output_buffer(input);
     OpParams params{.output_precision = input_buffer.precision};
@@ -1311,6 +1321,13 @@ size_t CactusGraph::scalar_divide(size_t input, float value) {
     params.scalar = value;
     params.output_precision = get_output_buffer(input).precision;
     return add_node(OpType::SCALAR_DIVIDE, {input}, {}, params);
+}
+
+size_t CactusGraph::scalar_not_equal(size_t input, float value) {
+    OpParams params{};
+    params.scalar = value;
+    params.output_precision = Precision::FP16;
+    return add_node(OpType::SCALAR_NOT_EQUAL, {input}, {}, params);
 }
 
 size_t CactusGraph::scalar_exp(size_t input) {
