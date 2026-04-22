@@ -87,6 +87,8 @@ sedi 's|(/blog/hybrid_transcription\.md)|(blog/hybrid_transcription.md)|g' site_
 sedi 's|(/blog/lfm2_24b_a2b\.md)|(blog/lfm2_24b_a2b.md)|g' site_docs/index.md
 sedi 's|(/blog/parakeet\.md)|(blog/parakeet.md)|g' site_docs/index.md
 sedi 's|(/blog/lfm2\.5_350m\.md)|(blog/lfm2.5_350m.md)|g' site_docs/index.md
+sedi 's|(/blog/gemma4\.md)|(blog/gemma4.md)|g' site_docs/index.md
+sedi 's|(/blog/turboquant-h\.md)|(blog/turboquant-h.md)|g' site_docs/index.md
 sedi 's|(quickstart\.md)|(docs/quickstart.md)|g' site_docs/index.md
 sedi 's|(choose-sdk\.md)|(docs/choose-sdk.md)|g' site_docs/index.md
 
@@ -158,6 +160,8 @@ if ls site_docs/blog/*.md >/dev/null 2>&1; then
     sedi 's|(/blog/lfm2_24b_a2b\.md)|(lfm2_24b_a2b.md)|g' "$f"
     sedi 's|(/blog/parakeet\.md)|(parakeet.md)|g' "$f"
     sedi 's|(/blog/lfm2\.5_350m\.md)|(lfm2.5_350m.md)|g' "$f"
+    sedi 's|(/blog/gemma4\.md)|(gemma4.md)|g' "$f"
+    sedi 's|(/blog/turboquant-h\.md)|(turboquant-h.md)|g' "$f"
   done
 fi
 
@@ -185,6 +189,8 @@ for nav_path in \
   "blog/lfm2_24b_a2b.md" \
   "blog/parakeet.md" \
   "blog/lfm2.5_350m.md" \
+  "blog/gemma4.md" \
+  "blog/turboquant-h.md" \
   "CONTRIBUTING.md" \
   "docs/compatibility.md"; do
   if [ ! -f "site_docs/$nav_path" ]; then

@@ -95,6 +95,8 @@ nav:
   - Contributing: CONTRIBUTING.md
   - Blog:
     - All Posts: blog/README.md
+    - "TurboQuant-H": blog/turboquant-h.md
+    - "Gemma 4 on Cactus": blog/gemma4.md
     - Hybrid Transcription: blog/hybrid_transcription.md
     - "LFM2-24B on Mac": blog/lfm2_24b_a2b.md
     - "Parakeet CTC 1.1B": blog/parakeet.md
