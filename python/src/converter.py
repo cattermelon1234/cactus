@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from pathlib import Path
@@ -78,6 +79,9 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     """Convert HuggingFace model weights to Cactus binary format."""
     import gc
     quantization_stats = create_quantization_stats()
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    weights_manifest: dict[str, dict[str, object]] = {}
 
     state_dict = model.state_dict()
     root_config = model.config
@@ -137,6 +141,33 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
         if set(remapped_state_dict.keys()) != set(state_dict.keys()):
             print("  Normalized gemma4 audio tower key naming for conversion")
         state_dict = remapped_state_dict
+
+    def save_and_record(
+        tensor,
+        output_path,
+        tensor_precision,
+        *,
+        transpose=False,
+        source_name: str | None = None,
+        source_names: list[str] | tuple[str, ...] | None = None,
+        kind: str = "weight",
+    ):
+        save_tensor_with_header(
+            tensor,
+            output_path,
+            tensor_precision,
+            transpose=transpose,
+            stats_tracker=quantization_stats,
+            args=args,
+            model_type=detected_model_type,
+        )
+        names: list[str] = []
+        if source_name is not None:
+            names.append(source_name)
+        if source_names:
+            names.extend(str(name) for name in source_names)
+        for name in names:
+            weights_manifest[str(name)] = {"filename": Path(output_path).name, "kind": kind}
 
     model_config = extract_base_config(config, root_config)
     model_config['tie_word_embeddings'] = tie_word_embeddings
@@ -279,7 +310,14 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     for name in EMBED_NAMES:
         if name in state_dict:
             embedding_tensor = state_dict[name]
-            save_tensor_with_header(embedding_tensor, output_dir / "token_embeddings.weights", precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+            save_and_record(
+                embedding_tensor,
+                output_dir / "token_embeddings.weights",
+                precision,
+                transpose=False,
+                source_name=name,
+                kind="embedding",
+            )
             saved_tensor_full_names.add(name)
             embedding_found = True
             break
@@ -287,7 +325,14 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     if model_type_str == 'nomic_bert':
         if 'embeddings.word_embeddings.weight' in state_dict:
             fused_embedding_tensor = state_dict['embeddings.word_embeddings.weight'] + state_dict.get('embeddings.token_type_embeddings.weight', torch.zeros([1]))
-            save_tensor_with_header(fused_embedding_tensor, output_dir / "token_embeddings.weights", precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+            save_and_record(
+                fused_embedding_tensor,
+                output_dir / "token_embeddings.weights",
+                precision,
+                transpose=False,
+                source_names=['embeddings.word_embeddings.weight', 'embeddings.token_type_embeddings.weight'],
+                kind="embedding",
+            )
             saved_tensor_full_names.add('embeddings.word_embeddings.weight')
             if 'embeddings.token_type_embeddings.weight' in state_dict:
                 saved_tensor_full_names.add('embeddings.token_type_embeddings.weight')
@@ -296,7 +341,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     elif model_type_str == 'whisper':
         for name, save_name in WHISPER_GLOBAL_WEIGHTS:
             if name in state_dict:
-                save_tensor_with_header(state_dict[name], output_dir / save_name, precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                save_and_record(state_dict[name], output_dir / save_name, precision, transpose=False, source_name=name)
                 saved_tensor_full_names.add(name)
         embedding_found = True
         model_config['num_mel_bins'] = int(cfg_get(config, 'num_mel_bins', 80))
@@ -309,8 +354,8 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                 tensor = state_dict[name]
                 if name == 'model.encoder.conv2.weight':
                     tensor = tensor.permute(1, 2, 0).contiguous()
-                
-                save_tensor_with_header(tensor, output_dir / save_name, precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+
+                save_and_record(tensor, output_dir / save_name, precision, transpose=False, source_name=name)
                 saved_tensor_full_names.add(name)
         embedding_found = True
         model_config['dec_hidden_act'] = config.decoder_hidden_act
@@ -330,7 +375,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
         embedding_norm_names = {'emb_ln.weight': 'embedding_layernorm.weight', 'emb_ln.bias': 'embedding_layernorm.bias'}
         for name, file_name in embedding_norm_names.items():
             if name in state_dict:
-                save_tensor_with_header(state_dict[name], output_dir / file_name, precision, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                save_and_record(state_dict[name], output_dir / file_name, precision, source_name=name)
                 saved_tensor_full_names.add(name)
 
     if tie_word_embeddings:
@@ -342,14 +387,14 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
         for name in OUTPUT_NAMES:
             if name in state_dict:
                 tensor = state_dict[name]
-                save_tensor_with_header(tensor, output_dir / "output_weight.weights", precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                save_and_record(tensor, output_dir / "output_weight.weights", precision, transpose=False, source_name=name)
                 saved_tensor_full_names.add(name)
                 break
 
     for name in OUTPUT_NORM_NAMES:
         if name in state_dict:
             tensor = state_dict[name]
-            save_tensor_with_header(tensor, output_dir / "output_norm.weights", precision, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+            save_and_record(tensor, output_dir / "output_norm.weights", precision, source_name=name)
             saved_tensor_full_names.add(name)
             break
 
@@ -361,10 +406,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     ]
     for key, out_name in mtp_global_mappings:
         if key in state_dict:
-            save_tensor_with_header(
-                state_dict[key], output_dir / out_name, precision, transpose=False,
-                stats_tracker=quantization_stats, args=args, model_type=detected_model_type
-            )
+            save_and_record(state_dict[key], output_dir / out_name, precision, transpose=False, source_name=key)
             saved_tensor_full_names.add(key)
 
     mtp_layer_mappings = [
@@ -382,10 +424,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
     ]
     for key, out_name in mtp_layer_mappings:
         if key in state_dict:
-            save_tensor_with_header(
-                state_dict[key], output_dir / out_name, precision, transpose=False,
-                stats_tracker=quantization_stats, args=args, model_type=detected_model_type
-            )
+            save_and_record(state_dict[key], output_dir / out_name, precision, transpose=False, source_name=key)
             saved_tensor_full_names.add(key)
 
     if is_vlm:
@@ -849,6 +888,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                     tensor, output_dir / out_name, precision, transpose=False,
                     stats_tracker=quantization_stats, args=args, model_type=detected_model_type
                 )
+                weights_manifest[key] = {"filename": Path(out_name).name, "kind": "weight"}
                 saved_tensor_full_names.add(key)
             tracked_keys = [
                 layer_prefix + 'conv.norm.num_batches_tracked',
@@ -892,7 +932,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
 
                                 channel_output_name = output_name.replace('{channel}', str(channel_idx))
                                 tensor = state_dict[full_name]
-                                save_tensor_with_header(tensor, output_dir / channel_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                save_and_record(tensor, output_dir / channel_output_name, tensor_precision, transpose=should_transpose, source_name=full_name)
                                 saved_tensor_full_names.add(full_name)
                                 matched_any_channel = True
 
@@ -923,8 +963,8 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                                     if 'encoder' in layer_prefix:
                                         save_name_prefix = "encoder_" + save_name_prefix
 
-                                    save_tensor_with_header(w_gate, output_dir / (save_name_prefix + "ffn_gate.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                                    save_tensor_with_header(w_up, output_dir / (save_name_prefix + "ffn_up.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    save_and_record(w_gate, output_dir / (save_name_prefix + "ffn_gate.weights"), precision, transpose=should_transpose, source_name=full_name)
+                                    save_and_record(w_up, output_dir / (save_name_prefix + "ffn_up.weights"), precision, transpose=should_transpose, source_name=full_name)
 
                                     if b is not None:
                                         b_up = b[:half_dim]
@@ -947,10 +987,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                                 v_dim = int(model_config.get('linear_v_proj_dim', 0))
                                 row_dim = int(tensor.shape[0])
 
-                                save_tensor_with_header(
-                                    tensor, output_dir / output_name, tensor_precision, transpose=should_transpose,
-                                    stats_tracker=quantization_stats, args=args, model_type=detected_model_type
-                                )
+                                save_and_record(tensor, output_dir / output_name, tensor_precision, transpose=should_transpose, source_name=full_name)
 
                                 if q_dim > 0 and k_dim > 0 and v_dim > 0 and row_dim == (q_dim + k_dim + v_dim):
                                     q_weight = tensor[:q_dim, :]
@@ -983,7 +1020,7 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                                     raise ValueError(f"Invalid tensor shape: {tensor.shape}")
                                 for j, ch in enumerate(['q', 'k', 'v']):
                                     channel_output_name = output_name.replace('{channel}', ch)
-                                    save_tensor_with_header(tensor[j], output_dir / channel_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    save_and_record(tensor[j], output_dir / channel_output_name, tensor_precision, transpose=should_transpose, source_name=full_name)
                                     saved_tensor_full_names.add(full_name)
                                 found = True
                                 break
@@ -995,18 +1032,18 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                                 for expert_idx in range(num_experts):
                                     expert_tensor = tensor[expert_idx]
                                     expert_output_name = output_name.replace('{channel}', str(expert_idx))
-                                    save_tensor_with_header(expert_tensor, output_dir / expert_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    save_and_record(expert_tensor, output_dir / expert_output_name, tensor_precision, transpose=should_transpose, source_name=full_name)
                                     saved_tensor_full_names.add(full_name)
                                 found = True
                                 break
                             if model_type_str == 'whisper':
                                 temp = layer_prefix[:layer_prefix.find('.')] + "." + output_name
-                                save_tensor_with_header(tensor, output_dir / temp, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                save_and_record(tensor, output_dir / temp, tensor_precision, transpose=should_transpose, source_name=full_name)
                             elif model_type_str == 'moonshine' and 'encoder' in layer_prefix:
                                 enc_output_name = "encoder_" + output_name
-                                save_tensor_with_header(tensor, output_dir / enc_output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                save_and_record(tensor, output_dir / enc_output_name, tensor_precision, transpose=should_transpose, source_name=full_name)
                             else:
-                                save_tensor_with_header(tensor, output_dir / output_name, tensor_precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                save_and_record(tensor, output_dir / output_name, tensor_precision, transpose=should_transpose, source_name=full_name)
                             saved_tensor_full_names.add(full_name)
                             found = True
                             break
@@ -1039,8 +1076,8 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                                 if 'encoder' in layer_prefix:
                                     save_name_prefix = "encoder_" + save_name_prefix
 
-                                save_tensor_with_header(w_gate, output_dir / (save_name_prefix + "ffn_gate.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                                save_tensor_with_header(w_up, output_dir / (save_name_prefix + "ffn_up.weights"), precision, transpose=should_transpose, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                                    save_and_record(w_gate, output_dir / (save_name_prefix + "ffn_gate.weights"), precision, transpose=should_transpose, source_name=w_name)
+                                    save_and_record(w_up, output_dir / (save_name_prefix + "ffn_up.weights"), precision, transpose=should_transpose, source_name=w_name)
 
                                 if b is not None:
                                     b_up = b[:half_dim]
@@ -1063,9 +1100,9 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                             k_weight = combined_weight[:, hidden_size:2*hidden_size]
                             v_weight = combined_weight[:, 2*hidden_size:]
 
-                            save_tensor_with_header(q_weight, output_dir / f'layer_{i}_attn_q.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                            save_tensor_with_header(k_weight, output_dir / f'layer_{i}_attn_k.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
-                            save_tensor_with_header(v_weight, output_dir / f'layer_{i}_attn_v.weights', precision, transpose=False, stats_tracker=quantization_stats, args=args, model_type=detected_model_type)
+                            save_and_record(q_weight, output_dir / f'layer_{i}_attn_q.weights', precision, transpose=False, source_name=attn_name)
+                            save_and_record(k_weight, output_dir / f'layer_{i}_attn_k.weights', precision, transpose=False, source_name=attn_name)
+                            save_and_record(v_weight, output_dir / f'layer_{i}_attn_v.weights', precision, transpose=False, source_name=attn_name)
                             saved_tensor_full_names.add(attn_name)
                             found = True
 
@@ -1091,6 +1128,10 @@ def convert_hf_model_weights(model, output_dir, precision='INT8', args=None):
                 pattern_list = ', '.join(patterns)
                 fh.write(f"layer={layer_idx}, output={output_name}, patterns=[{pattern_list}]\n")
         print(f"Warning: {len(missing_tensors)} tensors were not exported. See {missing_report.name} for details.")
+
+    manifest_path = output_dir / "weights_manifest.json"
+    with open(manifest_path, "w") as fh:
+        json.dump(dict(sorted(weights_manifest.items())), fh, indent=2, sort_keys=True)
 
     print_quantization_summary(quantization_stats, args)
 

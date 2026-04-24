@@ -18,7 +18,7 @@ from src.cactus import cactus_destroy
 from src.cactus import cactus_init
 from src.cactus import cactus_score_window
 from src.transpile.capture_pytorch import capture_model
-from src.transpile.cleanup_passes import run_cleanup_passes
+from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.lower import transpile_captured
 from src.transpile.model_adapters import canonicalize_model_interface
 from src.transpile.optimize_graph import FusionConfig
@@ -455,9 +455,9 @@ def _run_case(
     print(f"Capture adapter: task={adapter.task} family={adapter.family} module={type(adapter.module).__name__}")
     capture_module = adapter.module
     captured = capture_model(capture_module, (input_ids,))
-    run_cleanup_passes(captured.ir_graph)
+    canonicalize_exported_graph(captured.ir_graph)
     optimize_graph(captured.ir_graph, config=fusion_config)
-    run_cleanup_passes(captured.ir_graph)
+    canonicalize_exported_graph(captured.ir_graph)
 
     op_counts, leftover_counts = _summarize_ir_ops(captured.ir_graph)
     print(f"Optimized IR node count: {len(captured.ir_graph.order)}")
@@ -469,6 +469,7 @@ def _run_case(
         f"add_clipped={op_counts.get('add_clipped', 0)}, "
         f"linear={op_counts.get('linear', 0)}"
     )
+    print(f"graph ops in order: {', '.join(captured.ir_graph.nodes[node_id].op for node_id in captured.ir_graph.order)}")
     rms_offsets = Counter(
         int(captured.ir_graph.nodes[node_id].meta.get("rms_weight_offset", 0.0))
         for node_id in captured.ir_graph.order

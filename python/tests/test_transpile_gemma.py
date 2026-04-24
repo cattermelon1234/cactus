@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.transpile.capture_pytorch import capture_model
-from src.transpile.cleanup_passes import run_cleanup_passes
+from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.lower import transpile_captured
 from src.transpile.model_adapters import canonicalize_model_interface
 from src.transpile.optimize_graph import optimize_graph
@@ -256,7 +256,7 @@ class TestTranspileGemma(unittest.TestCase):
         max_nodes: int | None = None,
     ) -> None:
         captured = capture_model(module, args)
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured, max_nodes=max_nodes)
         self.assertGreater(len(captured.ir_graph.order), 0)
 
@@ -267,7 +267,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -286,7 +286,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -305,7 +305,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -324,7 +324,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -343,7 +343,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -363,7 +363,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, intermediate_size, dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -382,7 +382,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -401,7 +401,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -420,7 +420,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, self._hidden_size(), dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -440,7 +440,7 @@ class TestTranspileGemma(unittest.TestCase):
         x = torch.randn(2, out_features, dtype=torch.float16)
 
         captured = capture_model(module, (x,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured)
 
         tg = transpile_captured(captured)
@@ -507,9 +507,9 @@ class TestTranspileGemma(unittest.TestCase):
         input_ids = self._first_block_input_ids()
 
         captured = capture_model(module, (input_ids,))
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         optimize_graph(captured.ir_graph)
-        run_cleanup_passes(captured.ir_graph)
+        canonicalize_exported_graph(captured.ir_graph)
         self._print_ir_summary(captured, max_nodes=80)
 
         tg = transpile_captured(captured)
