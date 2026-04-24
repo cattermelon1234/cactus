@@ -10,6 +10,7 @@ import torch
 from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
+from src.transpile.normalize import dtype_to_ir
 from src.transpile.normalize import normalize_target
 
 
@@ -329,9 +330,15 @@ def import_get_attr(
     *,
     shape: tuple[int, ...] | None,
     dtype: str | None,
+    source_name: str | None = None,
 ) -> None:
     add_value_if_missing(ir, IRValue(id=value_id(node, ctx), shape=shape, dtype=dtype, producer=None))
     ir.constants[value_id(node, ctx)] = value.detach().cpu() if isinstance(value, torch.Tensor) else value
+    ir.values[value_id(node, ctx)].meta["source_name"] = source_name
+    if source_name is not None:
+        bindings = ir.meta.setdefault("weight_bindings", {})
+        if isinstance(bindings, dict):
+            bindings.setdefault(value_id(node, ctx), {})["source_name"] = source_name
 
 
 def import_output(ir: IRGraph, node: Any, ctx: ImportContext) -> None:
@@ -691,7 +698,6 @@ def import_softmax(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[i
     )
     register_node(ir, ir_node, shape=shape, dtype=dtype)
 
-
 def import_scaled_dot_product_attention(
     ir: IRGraph,
     node: Any,
@@ -761,6 +767,46 @@ def import_cat(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, 
         inputs=extract_input_ids(tensors_arg, ctx),
         outputs=[value_id(node, ctx)],
         attrs={"axis": axis},
+        meta=_base_meta(shape, dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
+
+
+def import_split_with_sizes(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
+    if len(node.args) < 2:
+        ctx.fail(f"unsupported split_with_sizes signature for {torch_op}: {node.args!r}")
+    sizes = extract_literals(node.args[1])
+    if not isinstance(sizes, (tuple, list)) or not all(isinstance(v, int) for v in sizes):
+        ctx.fail(f"unsupported split sizes for {torch_op}: {node.args!r}")
+    axis = -1
+    if len(node.args) > 2 and extract_literals(node.args[2]) is not None:
+        axis = int(extract_literals(node.args[2]))
+    ir_node = IRNode(
+        id=node_id(node),
+        op="split_with_sizes",
+        inputs=[value_id(node.args[0], ctx)],
+        outputs=[value_id(node, ctx)],
+        attrs={"sizes": tuple(int(v) for v in sizes), "axis": axis},
+        meta=_base_meta(shape, dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
+
+
+def import_chunk(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
+    if len(node.args) < 2:
+        ctx.fail(f"unsupported chunk signature for {torch_op}: {node.args!r}")
+    chunks = extract_literals(node.args[1])
+    if not isinstance(chunks, int):
+        ctx.fail(f"unsupported chunk count for {torch_op}: {node.args!r}")
+    axis = 0
+    if len(node.args) > 2 and extract_literals(node.args[2]) is not None:
+        axis = int(extract_literals(node.args[2]))
+    ir_node = IRNode(
+        id=node_id(node),
+        op="chunk",
+        inputs=[value_id(node.args[0], ctx)],
+        outputs=[value_id(node, ctx)],
+        attrs={"chunks": int(chunks), "axis": axis},
         meta=_base_meta(shape, dtype, torch_op, node),
     )
     register_node(ir, ir_node, shape=shape, dtype=dtype)
@@ -940,6 +986,105 @@ def import_embedding(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple
     register_node(ir, ir_node, shape=shape, dtype=dtype)
 
 
+def _extract_int_list_or_scalar(value: Any, *, default: int) -> int:
+    literal = extract_literals(value)
+    if literal is None:
+        return default
+    if isinstance(literal, int):
+        return int(literal)
+    if isinstance(literal, (tuple, list)) and literal:
+        first = literal[0]
+        if isinstance(first, int):
+            return int(first)
+    raise UnsupportedImportError(f"unsupported integer/list literal: {value!r}")
+
+
+def import_conv1d(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
+    if len(node.args) < 2:
+        ctx.fail(f"unsupported conv1d signature for {torch_op}: {node.args!r}")
+
+    inputs = [value_id(node.args[0], ctx), value_id(node.args[1], ctx)]
+    if len(node.args) > 2 and is_fx_node(node.args[2]):
+        inputs.append(value_id(node.args[2], ctx))
+
+    stride = _extract_int_list_or_scalar(node.args[3], default=1) if len(node.args) > 3 else 1
+    padding = _extract_int_list_or_scalar(node.args[4], default=0) if len(node.args) > 4 else 0
+    dilation = _extract_int_list_or_scalar(node.args[5], default=1) if len(node.args) > 5 else 1
+    groups = _extract_int_list_or_scalar(node.args[6], default=1) if len(node.args) > 6 else 1
+
+    ir_node = IRNode(
+        id=node_id(node),
+        op="conv1d",
+        inputs=inputs,
+        outputs=[value_id(node, ctx)],
+        attrs={"stride": stride, "padding": padding, "dilation": dilation, "groups": groups},
+        meta=_base_meta(shape, dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
+
+
+def import_pad(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
+    if len(node.args) < 2:
+        ctx.fail(f"unsupported pad signature for {torch_op}: {node.args!r}")
+
+    pads = extract_literals(node.args[1])
+    if not isinstance(pads, (tuple, list)) or not all(isinstance(v, int) for v in pads):
+        ctx.fail(f"unsupported pads for {torch_op}: {node.args!r}")
+
+    mode = "constant"
+    if len(node.args) > 2 and extract_literals(node.args[2]) is not None:
+        mode = str(extract_literals(node.args[2]))
+    if "mode" in getattr(node, "kwargs", {}) and extract_literals(node.kwargs["mode"]) is not None:
+        mode = str(extract_literals(node.kwargs["mode"]))
+
+    value = 0.0
+    if len(node.args) > 3 and extract_literals(node.args[3]) is not None:
+        value = float(extract_literals(node.args[3]))
+    if "value" in getattr(node, "kwargs", {}) and extract_literals(node.kwargs["value"]) is not None:
+        value = float(extract_literals(node.kwargs["value"]))
+
+    ir_node = IRNode(
+        id=node_id(node),
+        op="pad",
+        inputs=[value_id(node.args[0], ctx)],
+        outputs=[value_id(node, ctx)],
+        attrs={"pads": tuple(int(v) for v in pads), "mode": mode, "value": value},
+        meta=_base_meta(shape, dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
+
+
+def import_ones(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
+    if not node.args:
+        ctx.fail(f"unsupported ones signature for {torch_op}: {node.args!r}")
+
+    shape_literal = extract_literals(node.args[0])
+    if isinstance(shape_literal, int):
+        output_shape = (int(shape_literal),)
+    elif isinstance(shape_literal, (tuple, list)) and all(isinstance(v, int) for v in shape_literal):
+        output_shape = tuple(int(v) for v in shape_literal)
+    else:
+        ctx.fail(f"unsupported ones shape for {torch_op}: {node.args!r}")
+
+    node_dtype = dtype
+    if "dtype" in getattr(node, "kwargs", {}) and extract_literals(node.kwargs["dtype"]) is not None:
+        node_dtype = dtype_to_ir(extract_literals(node.kwargs["dtype"]))
+    elif len(node.args) > 1 and extract_literals(node.args[1]) is not None:
+        node_dtype = dtype_to_ir(extract_literals(node.args[1]))
+    if node_dtype is None:
+        node_dtype = "fp32"
+
+    ir_node = IRNode(
+        id=node_id(node),
+        op="ones",
+        inputs=[],
+        outputs=[value_id(node, ctx)],
+        attrs={"shape": output_shape, "dtype": node_dtype},
+        meta=_base_meta(shape or output_shape, node_dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape or output_shape, dtype=node_dtype)
+
+
 def import_layer_norm(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
     inputs = [value_id(node.args[0], ctx), value_id(node.args[2], ctx), value_id(node.args[3], ctx)]
     attrs = {"normalized_shape": tuple(int(v) for v in node.args[1]), "eps": float(node.args[4])}
@@ -1061,6 +1206,7 @@ OP_IMPORTERS = {
     "gelu": import_unary("gelu"),
     "gelu_erf": import_unary("gelu_erf"),
     "sigmoid": import_unary("sigmoid"),
+    "softplus": import_unary("softplus"),
     "tanh": import_unary("tanh"),
     "softmax": import_softmax,
     "scaled_dot_product_attention": import_scaled_dot_product_attention,
@@ -1070,12 +1216,17 @@ OP_IMPORTERS = {
     "min": import_reduce("min"),
     "max": import_reduce("max"),
     "cat": import_cat,
+    "split_with_sizes": import_split_with_sizes,
+    "chunk": import_chunk,
+    "ones": import_ones,
+    "pad": import_pad,
     "pow": import_pow,
     "aten.diff.default": import_diff,
     "slice": import_slice,
     "index": import_index,
     "gather": import_gather,
     "embedding": import_embedding,
+    "conv1d": import_conv1d,
     "layer_norm": import_layer_norm,
     "rms_norm": import_rms_norm,
     "group_norm": import_group_norm,

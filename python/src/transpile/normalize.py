@@ -82,6 +82,8 @@ def normalize_target(target: str) -> str:
         return "gelu"
     if target.startswith("aten.sigmoid"):
         return "sigmoid"
+    if target.startswith("aten.softplus"):
+        return "softplus"
     if target.startswith("aten.tanh"):
         return "tanh"
     if target.startswith("aten.softmax"):
@@ -100,14 +102,24 @@ def normalize_target(target: str) -> str:
         return "max"
     if target.startswith("aten.cat"):
         return "cat"
+    if target.startswith("aten.split_with_sizes"):
+        return "split_with_sizes"
+    if target.startswith("aten.chunk"):
+        return "chunk"
+    if target.startswith("aten.ones"):
+        return "ones"
     if target.startswith("aten.slice"):
         return "slice"
     if target.startswith("aten.select"):
         return "index"
     if target.startswith("aten.gather"):
         return "gather"
+    if target.startswith("aten.pad"):
+        return "pad"
     if target.startswith("aten.embedding"):
         return "embedding"
+    if target.startswith("aten.conv1d"):
+        return "conv1d"
     if target.startswith("aten.pow"):
         return "pow"
     if target.startswith("aten.layer_norm"):

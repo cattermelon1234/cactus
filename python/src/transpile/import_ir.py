@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
+import torch
 from torch.export.graph_signature import ConstantArgument
 from torch.export.graph_signature import InputKind
 
@@ -17,8 +19,11 @@ from src.transpile.importers import import_call_function
 from src.transpile.importers import import_get_attr
 from src.transpile.importers import import_output
 from src.transpile.importers import import_placeholder
-from src.transpile.importers import make_prefixed_node
+from src.transpile.importers import value_id
 from src.transpile.normalize import dtype_to_ir
+from src.transpile.import_semantics import apply_import_semantics
+from src.transpile.weight_binding import resolve_transpile_weights_dir
+from src.transpile.weight_binding import resolve_weight_binding
 
 
 def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
@@ -26,7 +31,46 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
     graph_meta = transpile_metadata.get("graph", {})
     ir = IRGraph(values={}, nodes={}, order=[], inputs=[], outputs=[], constants={}, meta=dict(graph_meta))
     ctx = ImportContext(strict=strict, transpile_metadata=transpile_metadata)
+    weights_dir = resolve_transpile_weights_dir(ir.meta)
+    if weights_dir:
+        ir.meta["weights_dir"] = weights_dir
     placeholder_specs: dict[str, Any] = {}
+    inline_counter = 0
+
+    def _try_register_weight_binding(value_id_str: str, target: str, value: Any) -> None:
+        if not isinstance(value, torch.Tensor):
+            return
+        binding = resolve_weight_binding(
+            weights_dir=weights_dir,
+            source_name=target,
+        )
+        if binding is None:
+            return
+        bindings = ir.meta.setdefault("weight_bindings", {})
+        if isinstance(bindings, dict):
+            bindings[value_id_str] = {
+                "path": binding.path,
+                "kind": binding.kind,
+                "source_name": binding.source_name,
+            }
+        if value_id_str in ir.values:
+            ir.values[value_id_str].meta.update(
+                {
+                    "path": binding.path,
+                    "kind": binding.kind,
+                    "source_name": binding.source_name,
+                }
+            )
+
+    def _make_inlined_node(node: Any, *, inline_index: int) -> Any:
+        return SimpleNamespace(
+            name=f"inl_{inline_index}_{node.name}",
+            op=node.op,
+            target=node.target,
+            args=node.args,
+            kwargs=getattr(node, "kwargs", {}),
+            meta=getattr(node, "meta", {}),
+        )
 
     def _resolve_target(target: str) -> Any:
         candidates: list[str] = []
@@ -83,6 +127,7 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
         return []
 
     def _inline_wrap_with_set_grad_enabled(node: Any, shape: Any, dtype: Any) -> None:
+        nonlocal inline_counter
         subgraph_ref = node.args[1]
         if not hasattr(subgraph_ref, "op") or subgraph_ref.op != "get_attr":
             raise NotImplementedError("wrap_with_set_grad_enabled without get_attr submodule is not supported")
@@ -91,7 +136,8 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
         if not hasattr(subgraph_module, "graph"):
             raise NotImplementedError("wrap_with_set_grad_enabled target is not a GraphModule")
 
-        prefix = f"{node.name}__"
+        inline_counter += 1
+        inline_index = inline_counter
         local_alias: dict[str, str] = {}
         subgraph_inputs = list(node.args[2:])
         input_index = 0
@@ -115,14 +161,15 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
                         continue
 
                     if sub_node.op == "get_attr":
-                        prefixed = make_prefixed_node(sub_node, prefix)
+                        prefixed = _make_inlined_node(sub_node, inline_index=inline_index)
                         value = _resolve_target(sub_node.target)
-                        import_get_attr(ir, prefixed, ctx, value, shape=sub_shape, dtype=sub_dtype)
+                        import_get_attr(ir, prefixed, ctx, value, shape=sub_shape, dtype=sub_dtype, source_name=str(sub_node.target))
+                        _try_register_weight_binding(f"v_{prefixed.name}", str(sub_node.target), value)
                         local_alias[sub_node.name] = f"v_{prefixed.name}"
                         continue
 
                     if sub_node.op == "call_function":
-                        prefixed = make_prefixed_node(sub_node, prefix)
+                        prefixed = _make_inlined_node(sub_node, inline_index=inline_index)
                         import_call_function(
                             ir,
                             prefixed,
@@ -168,6 +215,7 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
                         spec.arg.value,
                         shape=shape,
                         dtype=dtype,
+                        source_name=node.name,
                     )
                     continue
                 if spec is not None and spec.kind in {InputKind.PARAMETER, InputKind.BUFFER, InputKind.CONSTANT_TENSOR}:
@@ -175,7 +223,8 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
                     if target is None:
                         raise NotImplementedError(f"placeholder {node.name} has no target for lifted constant input")
                     value = _resolve_target(target)
-                    import_get_attr(ir, node, ctx, value, shape=shape, dtype=dtype)
+                    import_get_attr(ir, node, ctx, value, shape=shape, dtype=dtype, source_name=str(target))
+                    _try_register_weight_binding(value_id(node, ctx), str(target), value)
                     continue
                 import_placeholder(ir, node, ctx, shape=shape, dtype=dtype)
                 continue
@@ -184,7 +233,8 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
                 if str(node.target).startswith("submod_"):
                     continue
                 value = _resolve_target(node.target)
-                import_get_attr(ir, node, ctx, value, shape=shape, dtype=dtype)
+                import_get_attr(ir, node, ctx, value, shape=shape, dtype=dtype, source_name=str(node.target))
+                _try_register_weight_binding(value_id(node, ctx), str(node.target), value)
                 continue
 
             if node.op == "call_function":
@@ -211,5 +261,6 @@ def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:
         finally:
             ctx.pop_node()
 
+    apply_import_semantics(ir)
     verify_ir(ir)
     return ir

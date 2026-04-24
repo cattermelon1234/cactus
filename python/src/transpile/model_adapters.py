@@ -13,6 +13,17 @@ class CanonicalizedModel:
     family: str
 
 
+def _model_name_or_path(model: torch.nn.Module) -> str:
+    value = getattr(model, "name_or_path", None)
+    if isinstance(value, str) and value:
+        return value
+    config = getattr(model, "config", None)
+    value = getattr(config, "_name_or_path", None)
+    if isinstance(value, str) and value:
+        return value
+    return ""
+
+
 class CausalLMLogitsAdapter(torch.nn.Module):
     def __init__(self, model: torch.nn.Module):
         super().__init__()
@@ -30,6 +41,7 @@ class CausalLMLogitsAdapter(torch.nn.Module):
             "graph": {
                 "adapter_family": "generic",
                 "adapter_type": type(self).__name__,
+                "model_name_or_path": _model_name_or_path(self.model),
             }
         }
 
@@ -82,6 +94,7 @@ class GemmaCausalLMLogitsAdapter(torch.nn.Module):
                 "adapter_family": "gemma",
                 "adapter_type": type(self).__name__,
                 "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
+                "model_name_or_path": _model_name_or_path(self.model),
             }
         }
 
@@ -163,6 +176,7 @@ class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
                 "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
                 "layer_types": tuple(layer_types),
                 "sliding_window": None if sliding_window is None else int(sliding_window),
+                "model_name_or_path": _model_name_or_path(self.model),
             },
             "import_hints": import_hints,
         }
@@ -336,6 +350,7 @@ class Gemma4CausalLMLogitsAdapter(torch.nn.Module):
                 "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
                 "layer_types": tuple(layer_types),
                 "sliding_window": None if sliding_window is None else int(sliding_window),
+                "model_name_or_path": _model_name_or_path(self.model),
             },
             "import_hints": import_hints,
         }
@@ -390,13 +405,27 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
         return self.model.lm_head(hidden_states), checkpoints
 
     def get_transpile_metadata(self):
+        layer_types = tuple(getattr(self.backbone.config, "layer_types", ()))
+        import_hints: list[dict[str, object]] = []
+        for layer_index, layer_type in enumerate(layer_types):
+            import_hints.append(
+                {
+                    "module_path_suffix": f"backbone.layers.{layer_index}.self_attn",
+                    "meta": {
+                        "attention_layer_type": layer_type,
+                        "attention_layer_index": layer_index,
+                    },
+                }
+            )
         return {
             "graph": {
                 "adapter_family": "qwen3_5",
                 "adapter_type": type(self).__name__,
                 "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
-                "layer_types": tuple(getattr(self.backbone.config, "layer_types", [])),
-            }
+                "layer_types": layer_types,
+                "model_name_or_path": _model_name_or_path(self.model),
+            },
+            "import_hints": import_hints,
         }
 
 

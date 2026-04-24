@@ -9,6 +9,7 @@ class IRValue:
     dtype: str | None = None 
     producer: str | None = None
     users: list[str] = field(default_factory=list)
+    meta: dict[str, object] = field(default_factory=dict)
 
 @dataclass 
 class IRNode:

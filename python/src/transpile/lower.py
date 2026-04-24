@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import torch
@@ -8,11 +9,13 @@ import torch
 from src.graph import Graph
 from src.graph import Tensor
 from src.transpile.capture_pytorch import CapturedModel
+from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
 from src.transpile.graph_ir import verify_ir
 from src.transpile.optimize_graph import optimize_graph
+from src.transpile.weight_binding import WeightBinding
 
 
 @dataclass
@@ -55,6 +58,7 @@ def transpile_captured(captured: CapturedModel) -> TranspiledGraph:
 
 def transpile_ir(ir: IRGraph) -> TranspiledGraph:
     verify_ir(ir)
+    canonicalize_exported_graph(ir)
     optimize_graph(ir)
     g = Graph()
     env: dict[str, Any] = {}
@@ -100,6 +104,15 @@ def _lower_input_value(g: Graph, value: IRValue) -> Tensor:
 
 
 def _lower_constant_value(g: Graph, value: IRValue, const: Any) -> Any:
+    binding = _lookup_weight_binding(value)
+    if binding is not None:
+        _debug_mmap_binding(value.id, binding)
+        if binding.kind == "embedding":
+            return g.mmap_embeddings(binding.path)
+        return g.mmap_weights(binding.path)
+
+    _debug_constant_fallback(value, const)
+
     if isinstance(const, torch.nn.Parameter):
         const = const.detach()
     if isinstance(const, torch.Tensor):
@@ -113,6 +126,84 @@ def _lower_constant_value(g: Graph, value: IRValue, const: Any) -> Any:
         return tensor_value.item()
 
     return _materialize_constant_tensor(g, tensor_value)
+
+
+def _lookup_weight_binding(value: IRValue) -> WeightBinding | None:
+    meta = getattr(value, "meta", None)
+    if isinstance(meta, dict):
+        path = meta.get("path")
+        kind = meta.get("kind")
+        source_name = meta.get("source_name")
+        if isinstance(path, str) and isinstance(kind, str) and isinstance(source_name, str):
+            return WeightBinding(path=path, kind=kind, source_name=source_name)
+    return None
+
+
+def _debug_mmap_binding(value_id: str, binding: WeightBinding) -> None:
+    if os.environ.get("CACTUS_TRANSPILER_DEBUG_MMAP") != "1":
+        return
+    print(
+        "[transpile:mmap] "
+        f"value={value_id} "
+        f"kind={binding.kind} "
+        f"source={binding.source_name} "
+        f"path={binding.path}"
+    )
+
+
+def _debug_constant_fallback(value: IRValue, const: Any) -> None:
+    if os.environ.get("CACTUS_TRANSPILER_DEBUG_MMAP") != "1":
+        return
+    const_type = type(const).__name__
+    shape = None
+    dtype = None
+    if isinstance(const, torch.Tensor):
+        shape = tuple(const.shape)
+        dtype = str(const.dtype)
+    source_name = None
+    if isinstance(value.meta, dict):
+        source_name = value.meta.get("source_name")
+    print(
+        "[transpile:fallback] "
+        f"value={value.id} "
+        f"source={source_name} "
+        f"const_type={const_type} "
+        f"shape={shape} "
+        f"dtype={dtype}"
+    )
+
+
+def _debug_embedding_lowering(node: IRNode, embedding_tensor: Tensor, indices_tensor: Tensor) -> None:
+    if os.environ.get("CACTUS_TRANSPILER_DEBUG_MMAP") != "1":
+        return
+    print(
+        "[transpile:embedding] "
+        f"node={node.id} "
+        f"embedding_id={embedding_tensor.id} "
+        f"embedding_shape={tuple(embedding_tensor.shape)} "
+        f"embedding_dtype={embedding_tensor.dtype} "
+        f"indices_id={indices_tensor.id} "
+        f"indices_shape={tuple(indices_tensor.shape)} "
+        f"indices_dtype={indices_tensor.dtype}"
+    )
+
+
+def _matmul_with_quantized_rhs_legalization(
+    g: Graph,
+    lhs: Tensor,
+    rhs: Tensor,
+    *,
+    pretransposed_rhs: bool = False,
+) -> Tensor:
+    if rhs.dtype in (Graph.INT8, Graph.INT4) and lhs.dtype == Graph.FP32:
+        lhs = g.precision_cast(lhs, Graph.FP16)
+    return g.matmul(lhs, rhs, pretransposed_rhs=pretransposed_rhs)
+
+
+def _legalize_for_transpose(g: Graph, x: Tensor) -> Tensor:
+    if x.dtype == Graph.FP32:
+        return g.precision_cast(x, Graph.FP16)
+    return x
 
 
 def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> list[Any]:
@@ -202,13 +293,13 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
     if op == "scalar_log":
         return [g.scalar_log(_tensor(env, node.inputs[0]))]
 
-    if op == "cos":
+    if op == "scalar_cos":
         return [g.scalar_cos(_tensor(env, node.inputs[0]))]
 
-    if op == "sin":
+    if op == "scalar_sin":
         return [g.scalar_sin(_tensor(env, node.inputs[0]))]
 
-    if op == "reshape":
+    if op in {"reshape", "view"}:
         source = env[node.inputs[0]]
         if isinstance(source, BroadcastAlias):
             input_shape = tuple(source.logical_shape)
@@ -268,7 +359,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         )
 
     if op == "transpose":
-        x = _tensor(env, node.inputs[0])
+        x = _legalize_for_transpose(g, _tensor(env, node.inputs[0]))
         dim0 = _normalize_dim(int(node.attrs["dim0"]), len(x.shape))
         dim1 = _normalize_dim(int(node.attrs["dim1"]), len(x.shape))
         rank = len(x.shape)
@@ -279,7 +370,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         return [g.permute(x, permutation)]
 
     if op == "permute":
-        x = _tensor(env, node.inputs[0])
+        x = _legalize_for_transpose(g, _tensor(env, node.inputs[0]))
         permutation = tuple(_normalize_dim(int(dim), len(x.shape)) for dim in node.attrs["permutation"])
         if len(permutation) == 2 and permutation == (1, 0):
             return [g.transpose(x)]
@@ -289,12 +380,12 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         lhs = _tensor(env, node.inputs[0])
         rhs = _tensor(env, node.inputs[1])
         if len(lhs.shape) == 2 and len(rhs.shape) == 2:
-            return [g.matmul(lhs, rhs)]
+            return [_matmul_with_quantized_rhs_legalization(g, lhs, rhs)]
         legalized = _legalize_matmul_inputs(g, lhs, rhs, node)
         if legalized is None:
-            return [g.matmul(lhs, rhs)]
+            return [_matmul_with_quantized_rhs_legalization(g, lhs, rhs)]
         lhs_2d, rhs_2d, output_shape = legalized
-        out = g.matmul(lhs_2d, rhs_2d)
+        out = _matmul_with_quantized_rhs_legalization(g, lhs_2d, rhs_2d)
         return [g.reshape(out, output_shape)]
 
     if op == "linear":
@@ -311,7 +402,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
                 raise NotImplementedError(f"linear missing output shape metadata for node {node.id}")
             reshape_back = tuple(int(v) for v in output_shape)
 
-        out = g.matmul(x, weight, pretransposed_rhs=True)
+        out = _matmul_with_quantized_rhs_legalization(g, x, weight, pretransposed_rhs=True)
         if node.attrs.get("has_bias"):
             out = g.add(out, _tensor(env, node.inputs[2]))
         if reshape_back is not None:
@@ -322,7 +413,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         bias = _tensor(env, node.inputs[0])
         lhs = _tensor(env, node.inputs[1])
         rhs = _tensor(env, node.inputs[2])
-        return [g.add(bias, g.matmul(lhs, rhs))]
+        return [g.add(bias, _matmul_with_quantized_rhs_legalization(g, lhs, rhs))]
 
     if op == "relu":
         return [g.relu(_tensor(env, node.inputs[0]))]
@@ -338,6 +429,10 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
 
     if op == "sigmoid":
         return [g.sigmoid(_tensor(env, node.inputs[0]))]
+
+    if op == "softplus":
+        x = _tensor(env, node.inputs[0])
+        return [_lower_softplus(g, x)]
 
     if op == "tanh":
         return [g.tanh(_tensor(env, node.inputs[0]))]
@@ -374,6 +469,59 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         )
         return [g.permute(out, (0, 2, 1, 3))]
 
+    if op == "attention_block":
+        has_gate = bool(node.attrs.get("has_gate", False))
+        has_bias = bool(node.attrs.get("has_bias", False))
+        input_index = 0
+        query = g.permute(_attention_tensor(env, node.inputs[input_index]), (0, 2, 1, 3))
+        input_index += 1
+        key = g.permute(_attention_tensor(env, node.inputs[input_index]), (0, 2, 1, 3))
+        input_index += 1
+        value = g.permute(_attention_tensor(env, node.inputs[input_index]), (0, 2, 1, 3))
+        input_index += 1
+
+        attn_out = g.attention(
+            query,
+            key,
+            value,
+            scale=float(node.attrs.get("scale", 1.0)),
+            is_causal=bool(node.attrs.get("is_causal", False)),
+            window_size=int(node.attrs.get("window_size", 0)),
+        )
+        attn_out = g.permute(attn_out, (0, 2, 1, 3))
+        attn_out = g.permute(attn_out, (0, 2, 1, 3))
+        flat_shape_attr = tuple(int(v) for v in node.attrs.get("attention_output_shape", ()))
+        flat_shape = _resolve_reshape_shape(tuple(attn_out.shape), flat_shape_attr) if flat_shape_attr else ()
+        if flat_shape:
+            attn_out = g.reshape(attn_out, flat_shape)
+
+        if has_gate:
+            gate = _tensor(env, node.inputs[input_index])
+            input_index += 1
+            attn_out, gate = _legalize_elementwise_binary_inputs(g, attn_out, gate)
+            attn_out = g.multiply(attn_out, gate)
+
+        weight = _tensor(env, node.inputs[input_index])
+        input_index += 1
+        reshape_back: tuple[int, ...] | None = None
+        linear_input = attn_out
+        if len(linear_input.shape) > 2:
+            linear_input = _flatten_to_2d_for_linear(g, linear_input)
+            output_value = ir.values.get(node.outputs[0])
+            output_shape = output_value.shape if output_value is not None else None
+            if output_shape is None:
+                output_shape = node.meta.get("shape")
+            if not isinstance(output_shape, tuple):
+                raise NotImplementedError(f"attention_block missing output shape metadata for node {node.id}")
+            reshape_back = tuple(int(v) for v in output_shape)
+
+        out = _matmul_with_quantized_rhs_legalization(g, linear_input, weight, pretransposed_rhs=True)
+        if has_bias:
+            out = g.add(out, _tensor(env, node.inputs[input_index]))
+        if reshape_back is not None:
+            out = g.reshape(out, reshape_back)
+        return [out]
+
     if op in ("sum", "mean", "variance", "min", "max"):
         axis = node.attrs.get("axis")
         if isinstance(axis, (list, tuple)) and len(axis) == 1 and isinstance(axis[0], int):
@@ -408,6 +556,90 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         length = max(0, end - start)
         return [g.slice(x, axis=axis, start=start, length=length)]
 
+    if op == "split_with_sizes":
+        x = _tensor(env, node.inputs[0])
+        axis = _normalize_dim(int(node.attrs.get("axis", -1)), len(x.shape))
+        sizes = tuple(int(v) for v in node.attrs["sizes"])
+        start = 0
+        outputs: list[Tensor] = []
+        for size in sizes:
+            outputs.append(g.slice(x, axis=axis, start=start, length=int(size)))
+            start += int(size)
+        return [outputs]
+
+    if op == "chunk":
+        x = _tensor(env, node.inputs[0])
+        axis = _normalize_dim(int(node.attrs.get("axis", 0)), len(x.shape))
+        chunks = int(node.attrs["chunks"])
+        if chunks <= 0:
+            raise NotImplementedError(f"chunk requires a positive chunk count, got {chunks}")
+        dim_size = int(x.shape[axis])
+        if dim_size <= 0:
+            return [[g.slice(x, axis=axis, start=0, length=0)]]
+        chunk_size = (dim_size + chunks - 1) // chunks
+        outputs: list[Tensor] = []
+        start = 0
+        while start < dim_size:
+            length = min(chunk_size, dim_size - start)
+            outputs.append(g.slice(x, axis=axis, start=start, length=length))
+            start += length
+        return [outputs]
+
+    if op == "ones":
+        shape = tuple(int(v) for v in node.attrs.get("shape", ()))
+        if not shape:
+            raise NotImplementedError(f"ones requires a static shape, got {shape}")
+        torch_dtype = _materialize_constant_torch_dtype(node.attrs.get("dtype"))
+        return [_materialize_constant_tensor(g, torch.ones(shape, dtype=torch_dtype))]
+
+    if op == "pad":
+        x = _tensor(env, node.inputs[0])
+        mode = str(node.attrs.get("mode", "constant"))
+        if mode != "constant":
+            raise NotImplementedError(f"pad mode is unsupported: {mode}")
+        pads = tuple(int(v) for v in node.attrs.get("pads", ()))
+        if len(pads) % 2 != 0:
+            raise NotImplementedError(f"pad expects an even-length pads tuple, got {pads}")
+        value = float(node.attrs.get("value", 0.0))
+
+        current = x
+        current_shape = list(int(dim) for dim in x.shape)
+        pad_dims = len(pads) // 2
+        if pad_dims > len(current_shape):
+            raise NotImplementedError(
+                f"pad rank mismatch: pads={pads} for input shape {tuple(current_shape)}"
+            )
+
+        torch_dtype = _materialize_constant_torch_dtype(ir.values[node.outputs[0]].dtype if node.outputs and node.outputs[0] in ir.values else None)
+        for pad_index in range(pad_dims):
+            before = pads[2 * pad_index]
+            after = pads[2 * pad_index + 1]
+            axis = len(current_shape) - 1 - pad_index
+            if before < 0 or after < 0:
+                raise NotImplementedError(f"negative pad is unsupported: {pads}")
+            pieces = []
+            if before > 0:
+                left_shape = list(current_shape)
+                left_shape[axis] = before
+                left = _materialize_constant_tensor(
+                    g,
+                    torch.full(tuple(left_shape), value, dtype=torch_dtype),
+                )
+                pieces.append(left)
+            pieces.append(current)
+            if after > 0:
+                right_shape = list(current_shape)
+                right_shape[axis] = after
+                right = _materialize_constant_tensor(
+                    g,
+                    torch.full(tuple(right_shape), value, dtype=torch_dtype),
+                )
+                pieces.append(right)
+            if len(pieces) > 1:
+                current = g.cat(pieces, axis=axis)
+                current_shape[axis] += before + after
+        return [current]
+
     if op == "index":
         x = _tensor(env, node.inputs[0])
         axis = _normalize_dim(int(node.attrs.get("axis", 0)), len(x.shape))
@@ -418,7 +650,43 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         return [g.gather(_tensor(env, node.inputs[0]), _tensor(env, node.inputs[1]))]
 
     if op == "embedding":
-        return [g.embedding_from_tensor(_tensor(env, node.inputs[0]), _tensor(env, node.inputs[1]))]
+        embedding_tensor = _tensor(env, node.inputs[0])
+        indices_tensor = _tensor(env, node.inputs[1])
+        _debug_embedding_lowering(node, embedding_tensor, indices_tensor)
+        return [g.embedding_from_tensor(embedding_tensor, indices_tensor)]
+
+    if op == "conv1d":
+        x = _tensor(env, node.inputs[0])
+        weight = _tensor(env, node.inputs[1])
+        bias = _tensor(env, node.inputs[2]) if len(node.inputs) > 2 else None
+        stride = int(node.attrs.get("stride", 1))
+        padding = int(node.attrs.get("padding", 0))
+        dilation = int(node.attrs.get("dilation", 1))
+        groups = int(node.attrs.get("groups", 1))
+
+        if (
+            len(x.shape) == 3
+            and len(weight.shape) == 3
+            and groups == x.shape[1] == weight.shape[0]
+            and weight.shape[1] == 1
+            and stride == 1
+            and padding == dilation * max(weight.shape[2] - 1, 0)
+        ):
+            x_nlc = g.permute(x, (0, 2, 1))
+            out_nlc = g.conv1d_causal(x_nlc, weight, kernel_size=weight.shape[2], dilation=dilation)
+            if bias is not None:
+                bias_reshaped = g.reshape(bias, (1, 1, int(weight.shape[0])))
+                out_nlc, bias_reshaped = _legalize_elementwise_binary_inputs(g, out_nlc, bias_reshaped)
+                out_nlc = g.add(out_nlc, bias_reshaped)
+            return [g.permute(out_nlc, (0, 2, 1))]
+
+        if padding != 0:
+            raise NotImplementedError(f"conv1d with padding != 0 is unsupported by generic lowering: {padding}")
+        if dilation != 1:
+            raise NotImplementedError(f"conv1d with dilation != 1 is unsupported by generic lowering: {dilation}")
+        if groups != 1:
+            raise NotImplementedError(f"conv1d with groups != 1 is unsupported by generic lowering: {groups}")
+        return [g.conv1d(x, weight, bias=bias, stride=stride)]
 
     if op == "layer_norm":
         x = _tensor(env, node.inputs[0])
@@ -439,13 +707,149 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         return [out]
 
     if op == "rope":
+        rope_input = _tensor(env, node.inputs[0])
+        if _rope_input_is_bhsd(ir, node.inputs[0]):
+            rope_input = g.permute(rope_input, (0, 2, 1, 3))
+            rope_out = g.rope(
+                rope_input,
+                float(node.attrs["theta"]),
+                position_offset=int(node.attrs.get("position_offset", 0)),
+            )
+            return [g.permute(rope_out, (0, 2, 1, 3))]
         return [
             g.rope(
-                _tensor(env, node.inputs[0]),
+                rope_input,
                 float(node.attrs["theta"]),
                 position_offset=int(node.attrs.get("position_offset", 0)),
             )
         ]
+
+    if op in {"gated_deltanet_prefill", "gated_deltanet_decode"}:
+        x = _tensor(env, node.inputs[0])
+        qkv_weight = _tensor(env, node.inputs[1])
+        a_weight = _tensor(env, node.inputs[2])
+        b_weight = _tensor(env, node.inputs[3])
+        norm_weight = _tensor(env, node.inputs[4])
+
+        input_index = 5
+        z_weight = None
+        if bool(node.attrs.get("has_z", False)):
+            z_weight = _tensor(env, node.inputs[input_index])
+            input_index += 1
+        dt_bias = None
+        if bool(node.attrs.get("has_dt_bias", False)):
+            dt_bias = _tensor(env, node.inputs[input_index])
+            input_index += 1
+        a_log = None
+        if bool(node.attrs.get("has_a_log", False)):
+            a_log = _tensor(env, node.inputs[input_index])
+            input_index += 1
+        conv_weight = None
+        if bool(node.attrs.get("has_conv", False)):
+            conv_weight = _tensor(env, node.inputs[input_index])
+
+        if len(x.shape) != 3:
+            raise NotImplementedError(f"{op} currently expects rank-3 normalized input, got {x.shape}")
+
+        batch_size, seq_len, hidden_dim = (int(dim) for dim in x.shape)
+        if batch_size != 1:
+            raise NotImplementedError(f"{op} currently supports batch size 1, got {x.shape}")
+
+        num_k_heads = int(node.attrs["num_k_heads"])
+        num_v_heads = int(node.attrs["num_v_heads"])
+        key_dim = int(node.attrs["key_dim"])
+        value_dim = int(node.attrs["value_dim"])
+        eps = float(node.attrs.get("eps", 1e-6))
+        chunk_size = int(node.attrs.get("chunk_size", 64))
+
+        mixed_qkv = _matmul_with_quantized_rhs_legalization(
+            g,
+            _flatten_to_2d_for_linear(g, x),
+            qkv_weight,
+            pretransposed_rhs=True,
+        )
+        mixed_qkv_dim = int(qkv_weight.shape[0])
+        mixed_qkv = g.reshape(mixed_qkv, (batch_size, seq_len, mixed_qkv_dim))
+        if conv_weight is not None:
+            kernel_size = int(conv_weight.shape[2])
+            mixed_qkv = g.conv1d_causal(mixed_qkv, conv_weight, kernel_size=kernel_size, dilation=1)
+            mixed_qkv = g.silu(mixed_qkv)
+
+        q_proj_dim = num_k_heads * key_dim
+        v_proj_dim = num_v_heads * value_dim
+        k_proj_dim = num_k_heads * key_dim
+        q_proj = g.slice(mixed_qkv, axis=2, start=0, length=q_proj_dim)
+        k_proj = g.slice(mixed_qkv, axis=2, start=q_proj_dim, length=k_proj_dim)
+        v_proj = g.slice(mixed_qkv, axis=2, start=q_proj_dim + k_proj_dim, length=v_proj_dim)
+
+        q_4d = g.reshape(q_proj, (batch_size, seq_len, num_k_heads, key_dim))
+        k_4d = g.reshape(k_proj, (batch_size, seq_len, num_k_heads, key_dim))
+        v_4d = g.reshape(v_proj, (batch_size, seq_len, num_v_heads, value_dim))
+
+        q_norm = g.sum(g.multiply(q_4d, q_4d), axis=3)
+        q_norm = g.scalar_sqrt(g.scalar_add(q_norm, eps))
+        q_norm = g.reshape(q_norm, (batch_size, seq_len, num_k_heads, 1))
+        q_4d = g.divide(q_4d, q_norm)
+
+        k_norm = g.sum(g.multiply(k_4d, k_4d), axis=3)
+        k_norm = g.scalar_sqrt(g.scalar_add(k_norm, eps))
+        k_norm = g.reshape(k_norm, (batch_size, seq_len, num_k_heads, 1))
+        k_4d = g.divide(k_4d, k_norm)
+
+        a_logits = _matmul_with_quantized_rhs_legalization(
+            g,
+            _flatten_to_2d_for_linear(g, x),
+            a_weight,
+            pretransposed_rhs=True,
+        )
+        a_logits = g.reshape(a_logits, (batch_size, seq_len, int(a_weight.shape[0])))
+        b_logits = _matmul_with_quantized_rhs_legalization(
+            g,
+            _flatten_to_2d_for_linear(g, x),
+            b_weight,
+            pretransposed_rhs=True,
+        )
+        b_logits = g.reshape(b_logits, (batch_size, seq_len, int(b_weight.shape[0])))
+
+        if dt_bias is not None:
+            dt_bias_2d = g.reshape(dt_bias, (1, int(dt_bias.shape[0])))
+            a_logits, dt_bias_2d = _legalize_elementwise_binary_inputs(g, a_logits, dt_bias_2d)
+            a_logits = g.add(a_logits, dt_bias_2d)
+        a_softplus = _lower_softplus(g, a_logits)
+
+        if a_log is not None:
+            a_log_2d = g.reshape(a_log, (1, int(a_log.shape[0])))
+            neg_exp_a = g.scalar_multiply(g.scalar_exp(a_log_2d), -1.0)
+            neg_exp_a, a_softplus = _legalize_elementwise_binary_inputs(g, neg_exp_a, a_softplus)
+            gate_log = g.multiply(neg_exp_a, a_softplus)
+        else:
+            gate_log = g.scalar_multiply(a_softplus, -1.0)
+        beta = g.sigmoid(b_logits)
+
+        initial_state = _materialize_constant_tensor(
+            g,
+            torch.zeros((batch_size, key_dim, num_v_heads, value_dim), dtype=torch.float16),
+        )
+
+        if op == "gated_deltanet_decode":
+            deltanet_out = g.gated_deltanet_decode(q_4d, k_4d, v_4d, gate_log, beta, initial_state, 0.0)
+        else:
+            deltanet_out = g.gated_deltanet_prefill(q_4d, k_4d, v_4d, gate_log, beta, initial_state, chunk_size, 0.0)
+
+        y_4d = g.slice(deltanet_out, axis=1, start=0, length=seq_len)
+        y_2d = g.reshape(y_4d, (seq_len * num_v_heads, value_dim))
+
+        if z_weight is not None:
+            z_proj = _matmul_with_quantized_rhs_legalization(
+                g,
+                _flatten_to_2d_for_linear(g, x),
+                z_weight,
+                pretransposed_rhs=True,
+            )
+            z_proj = g.reshape(z_proj, (seq_len * num_v_heads, value_dim))
+            y_2d = g.multiply(g.rms_norm(y_2d, norm_weight, eps=eps), g.silu(z_proj))
+
+        return [g.reshape(y_2d, (batch_size, seq_len, num_v_heads * value_dim))]
 
     if op == "group_norm":
         return [
@@ -510,6 +914,30 @@ def _attention_tensor(env: dict[str, Any], value_id: str) -> Tensor:
     if not isinstance(value, Tensor):
         raise TypeError(f"expected lowered tensor for {value_id}, got {type(value).__name__}")
     return value
+
+
+def _rope_input_is_bhsd(ir: IRGraph, value_id: str) -> bool:
+    value = ir.values.get(value_id)
+    if value is None or value.producer is None:
+        return False
+    node = ir.nodes.get(value.producer)
+    if node is None:
+        return False
+    if node.op == "permute":
+        permutation = tuple(int(dim) for dim in node.attrs.get("permutation", ()))
+        return permutation == (0, 2, 1, 3)
+    if node.op == "transpose":
+        return int(node.attrs.get("dim0", -1)) == 1 and int(node.attrs.get("dim1", -1)) == 2
+    return False
+
+
+def _lower_softplus(g: Graph, x: Tensor) -> Tensor:
+    # Stable fp16 softplus: relu(x) + log(1 + exp(-abs(x))).
+    abs_x = g.abs(x)
+    neg_abs_x = g.scalar_multiply(abs_x, -1.0)
+    exp_term = g.scalar_exp(neg_abs_x)
+    log_term = g.scalar_log(g.scalar_add(exp_term, 1.0))
+    return g.add(g.relu(x), log_term)
 
 
 def _normalize_dim(dim: int, rank: int) -> int:
@@ -727,7 +1155,7 @@ def _match_gqa_expand_alias(ir: IRGraph, expand_node: IRNode) -> str | None:
         return None
 
     current_value_id = expand_node.inputs[0]
-    unsqueeze_node: IRNode | None = None
+    base_value_id: str | None = None
 
     while True:
         producer_id = ir.values[current_value_id].producer
@@ -747,17 +1175,37 @@ def _match_gqa_expand_alias(ir: IRGraph, expand_node: IRNode) -> str | None:
             current_value_id = producer.inputs[0]
             continue
         if producer.op == "unsqueeze":
-            unsqueeze_node = producer
+            base_value_id = producer.inputs[0]
+            base_shape = ir.values[base_value_id].shape
+            if base_shape is None:
+                return None
+            unsqueezed_dim = _normalize_dim(int(producer.attrs.get("dim", 0)), len(base_shape) + 1)
+            if unsqueezed_dim != 2:
+                return None
+            break
+        if producer.op in {"reshape", "view"}:
+            base_value_id = producer.inputs[0]
+            base_shape = ir.values[base_value_id].shape
+            view_shape = ir.values[current_value_id].shape
+            if base_shape is None or view_shape is None:
+                return None
+            if len(base_shape) != 4 or len(view_shape) != 5:
+                return None
+            if tuple(int(v) for v in view_shape) != (
+                int(base_shape[0]),
+                int(base_shape[1]),
+                1,
+                int(base_shape[2]),
+                int(base_shape[3]),
+            ):
+                return None
             break
         return None
 
-    base_value_id = unsqueeze_node.inputs[0]
+    if base_value_id is None:
+        return None
     base_shape = ir.values[base_value_id].shape
     if base_shape is None or len(base_shape) != 4:
-        return None
-
-    unsqueezed_dim = _normalize_dim(int(unsqueeze_node.attrs.get("dim", 0)), len(base_shape) + 1)
-    if unsqueezed_dim != 2:
         return None
 
     expected_target = (
