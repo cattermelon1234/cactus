@@ -1,0 +1,11 @@
+{
+  "family": "gemma",
+  "hf_next_token_id": 7127,
+  "logits_max_abs_diff": 211.0625,
+  "logits_mean_abs_diff": 10.602618217468262,
+  "model_id": "google/gemma-2b-it",
+  "prompt": "The capital of France is",
+  "prompt_len": 6,
+  "snapshot": "/Users/bling/.cache/huggingface/hub/models--google--gemma-2b-it/snapshots/96988410cbdaeb8d5093d1ebdc5a8fb563e02bad",
+  "transpiled_next_token_id": 7127
+}

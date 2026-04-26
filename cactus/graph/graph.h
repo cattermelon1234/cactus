@@ -35,6 +35,7 @@ public:
     void set_level(LogLevel level) { min_level_ = level; }
     LogLevel get_level() const { return min_level_; }
 
+
     void set_callback(std::function<void(LogLevel, const std::string&, const std::string&)> cb) {
         std::lock_guard<std::mutex> lock(mutex_);
         callback_ = cb;

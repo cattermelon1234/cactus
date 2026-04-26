@@ -1,0 +1,11 @@
+{
+  "family": "qwen3_5",
+  "hf_next_token_id": 11751,
+  "logits_max_abs_diff": 10.85546875,
+  "logits_mean_abs_diff": 0.9970574378967285,
+  "model_id": "Qwen/Qwen3.5-2B",
+  "prompt": "The capital of France is",
+  "prompt_len": 5,
+  "snapshot": "/Users/bling/.cache/huggingface/hub/models--Qwen--Qwen3.5-2B/snapshots/15852e8c16360a2fea060d615a32b45270f8a8fc",
+  "transpiled_next_token_id": 11751
+}

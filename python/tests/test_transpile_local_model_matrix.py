@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import copy
+import json
 import os
+import re
 import sys
 import unittest
-from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,6 @@ from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.lower import transpile_captured
 from src.transpile.model_adapters import canonicalize_model_interface
 from src.transpile.optimize_graph import optimize_graph
-from src.transpile.optimize_graph import summarize_detected_gold_patterns
 
 
 SUPPORTED_MODEL_IDS = (
@@ -74,6 +74,77 @@ def _discover_local_models() -> list[str]:
     return model_ids
 
 
+def _load_test_prompt() -> str:
+    prompt_file = os.environ.get("CACTUS_LOCAL_MODEL_MATRIX_PROMPT_FILE")
+    if prompt_file:
+        return Path(prompt_file).read_text().strip()
+    return os.environ.get("CACTUS_LOCAL_MODEL_MATRIX_PROMPT", "The capital of France is")
+
+
+def _artifacts_root() -> Path:
+    raw_root = os.environ.get("CACTUS_LOCAL_MODEL_MATRIX_ARTIFACTS_DIR")
+    if raw_root:
+        return Path(raw_root)
+    return Path(__file__).resolve().parent / "artifacts" / "local_model_matrix"
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-") or "model"
+
+
+def _serialize_json_compatible(value):
+    if isinstance(value, dict):
+        return {str(key): _serialize_json_compatible(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_json_compatible(inner) for inner in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, torch.dtype):
+        return str(value)
+    if isinstance(value, torch.Tensor):
+        return {
+            "type": "torch.Tensor",
+            "dtype": str(value.dtype),
+            "shape": list(value.shape),
+        }
+    if isinstance(value, np.ndarray):
+        return {
+            "type": "numpy.ndarray",
+            "dtype": str(value.dtype),
+            "shape": list(value.shape),
+        }
+    if hasattr(value, "__dataclass_fields__"):
+        return _serialize_json_compatible(asdict(value))
+    return repr(value)
+
+
+def _graph_to_dict(graph) -> dict[str, object]:
+    return {
+        "meta": _serialize_json_compatible(graph.meta),
+        "inputs": list(graph.inputs),
+        "outputs": list(graph.outputs),
+        "constants": {
+            value_id: _serialize_json_compatible(constant)
+            for value_id, constant in graph.constants.items()
+        },
+        "values": {
+            value_id: _serialize_json_compatible(asdict(value))
+            for value_id, value in graph.values.items()
+        },
+        "nodes": [
+            _serialize_json_compatible(asdict(graph.nodes[node_id]))
+            for node_id in graph.order
+        ],
+    }
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
 class FullModelWrapper(torch.nn.Module):
     def __init__(self, model: torch.nn.Module):
         super().__init__()
@@ -89,29 +160,6 @@ class FullModelWrapper(torch.nn.Module):
         return {}
 
 
-def _print_graph_summary(graph, label: str, *, max_nodes: int = 10) -> None:
-    op_counts = Counter(graph.nodes[node_id].op for node_id in graph.order)
-    semantic_counts = Counter(
-        graph.nodes[node_id].op
-        for node_id in graph.order
-        if graph.nodes[node_id].kind == "semantic"
-    )
-    print(f"\n=== {label} ===")
-    print(f"node_count={len(graph.order)}")
-    print("top_ops=" + ", ".join(f"{op}={count}" for op, count in op_counts.most_common(12)))
-    if semantic_counts:
-        print("semantic_ops=" + ", ".join(f"{op}={count}" for op, count in semantic_counts.most_common()))
-    patterns = graph.meta.get("detected_gold_patterns", ())
-    if patterns:
-        pattern_counts = Counter(pattern.name for pattern in patterns)
-        print("patterns=" + ", ".join(f"{name}={count}" for name, count in pattern_counts.most_common()))
-    for node_id in graph.order[:max_nodes]:
-        node = graph.nodes[node_id]
-        print(f"  {node_id}: op={node.op} kind={node.kind} attrs={node.attrs}")
-    if len(graph.order) > max_nodes:
-        print(f"  ... ({len(graph.order) - max_nodes} more nodes omitted)")
-
-
 class TestLocalModelTranspilerMatrix(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -124,7 +172,8 @@ class TestLocalModelTranspilerMatrix(unittest.TestCase):
             raise unittest.SkipTest("no supported local Hugging Face snapshots found for the model matrix test")
 
     def test_local_model_matrix_next_token_matches_hf(self) -> None:
-        prompt = os.environ.get("CACTUS_LOCAL_MODEL_MATRIX_PROMPT", "The capital of France is")
+        prompt = _load_test_prompt()
+        self.assertTrue(prompt, "prompt must not be empty")
 
         for model_id in self.available_model_ids:
             with self.subTest(model_id=model_id):
@@ -141,18 +190,35 @@ class TestLocalModelTranspilerMatrix(unittest.TestCase):
                 ).eval()
                 adapter = canonicalize_model_interface(model, task="causal_lm_logits")
                 input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
+                artifact_dir = _artifacts_root() / _slugify(model_id)
 
                 print(f"\n\n### Model: {model_id}")
-                print(f"family={adapter.family} prompt_len={int(input_ids.shape[1])}")
+                print(f"family={adapter.family} prompt_len={int(input_ids.shape[1])} artifacts={artifact_dir}")
 
                 captured = capture_model(FullModelWrapper(model).eval(), (input_ids,))
-                raw_graph = copy.deepcopy(captured.ir_graph)
-                _print_graph_summary(raw_graph, f"{model_id} Raw IR")
+                _write_json(
+                    artifact_dir / "raw_ir.json",
+                    {
+                        "model_id": model_id,
+                        "family": adapter.family,
+                        "prompt": prompt,
+                        "snapshot": snapshot,
+                        "graph": _graph_to_dict(captured.ir_graph),
+                    },
+                )
 
                 canonicalize_exported_graph(captured.ir_graph)
                 optimize_graph(captured.ir_graph)
-                _print_graph_summary(captured.ir_graph, f"{model_id} After Canonicalize+Optimize")
-                print("pattern_summary=" + str(summarize_detected_gold_patterns(captured.ir_graph)))
+                _write_json(
+                    artifact_dir / "optimized_ir.json",
+                    {
+                        "model_id": model_id,
+                        "family": adapter.family,
+                        "prompt": prompt,
+                        "snapshot": snapshot,
+                        "graph": _graph_to_dict(captured.ir_graph),
+                    },
+                )
 
                 tg = transpile_captured(captured)
                 tg.set_inputs([input_ids.cpu().numpy()])
@@ -165,6 +231,20 @@ class TestLocalModelTranspilerMatrix(unittest.TestCase):
                 transpiled_next = int(np.argmax(transpiled_logits[0, -1]))
                 max_abs_diff = float(np.max(np.abs(hf_logits - transpiled_logits)))
                 mean_abs_diff = float(np.mean(np.abs(hf_logits - transpiled_logits)))
+                _write_json(
+                    artifact_dir / "result.json",
+                    {
+                        "model_id": model_id,
+                        "family": adapter.family,
+                        "prompt": prompt,
+                        "snapshot": snapshot,
+                        "prompt_len": int(input_ids.shape[1]),
+                        "hf_next_token_id": hf_next,
+                        "transpiled_next_token_id": transpiled_next,
+                        "logits_max_abs_diff": max_abs_diff,
+                        "logits_mean_abs_diff": mean_abs_diff,
+                    },
+                )
 
                 print(
                     f"next_token: hf={hf_next} transpiled={transpiled_next} "
