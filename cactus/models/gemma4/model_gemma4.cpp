@@ -200,13 +200,9 @@ void Gemma4Model::load_weights_to_graph(CactusGraph* gb) {
         std::string npu_prefill_path = model_folder_path_ + "/model.mlpackage";
         if (std::filesystem::exists(npu_prefill_path)) {
             if (!load_npu_prefill(npu_prefill_path) || !has_npu_prefill()) {
-                CACTUS_LOG_WARN("npu", "[gemma4] found model.mlpackage but failed to enable NPU prefill; using CPU prefill");
+                CACTUS_LOG_DEBUG("npu", "[gemma4] found model.mlpackage but failed to enable NPU prefill; using CPU prefill");
             }
-        } else {
-            CACTUS_LOG_WARN("npu", "[gemma4] model.mlpackage not found; using CPU prefill");
         }
-    } else {
-        CACTUS_LOG_WARN("npu", "[gemma4] NPU backend unavailable on this device; using CPU prefill");
     }
 }
 

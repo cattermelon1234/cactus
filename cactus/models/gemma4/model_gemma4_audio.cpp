@@ -355,13 +355,9 @@ void Gemma4AudioModel::load_weights_to_graph(CactusGraph* gb) {
             } else {
                 use_npu_encoder_ = false;
                 npu_encoder_.reset();
-                CACTUS_LOG_WARN("npu", "[gemma4-audio] found audio_encoder.mlpackage but failed to enable NPU audio encoder; using CPU");
+                CACTUS_LOG_DEBUG("npu", "[gemma4-audio] found audio_encoder.mlpackage but failed to enable NPU audio encoder; using CPU");
             }
-        } else {
-            CACTUS_LOG_WARN("npu", "[gemma4-audio] audio_encoder.mlpackage not found; using CPU audio encoder");
         }
-    } else if (!disable_npu_) {
-        CACTUS_LOG_WARN("npu", "[gemma4-audio] NPU backend unavailable on this device; using CPU audio encoder");
     }
 
     // Keep CPU audio weights available even when the NPU encoder is enabled.

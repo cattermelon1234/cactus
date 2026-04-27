@@ -17,7 +17,7 @@ static const char* g_options = R"({
 bool test_vlm_multiturn() {
     std::string model_path_str(g_model_path ? g_model_path : "");
 
-    std::string vision_file = model_path_str + "/vision_patch_embedding.weights";
+    std::string vision_file = model_path_str + "/vision_patch_embedder_input_proj.weights";
     std::ifstream vf(vision_file);
     if (!vf.good()) {
         std::cout << "Skipping VLM multi-turn test: vision weights not found." << std::endl;
@@ -108,7 +108,7 @@ bool test_prefill_invalidated_on_message_change_vlm() {
               << "╚══════════════════════════════════════════╝\n";
 
     std::string model_path_str(g_model_path ? g_model_path : "");
-    std::string vision_file = model_path_str + "/vision_patch_embedding.weights";
+    std::string vision_file = model_path_str + "/vision_patch_embedder_input_proj.weights";
     std::ifstream vf(vision_file);
     if (!vf.good()) {
         std::cout << "⊘ SKIP │ Vision weights not found\n";
@@ -198,7 +198,7 @@ bool test_prefill_with_images() {
               << "╚══════════════════════════════════════════╝\n";
 
     std::string model_path_str(g_model_path ? g_model_path : "");
-    std::string vision_file = model_path_str + "/vision_patch_embedding.weights";
+    std::string vision_file = model_path_str + "/vision_patch_embedder_input_proj.weights";
     std::ifstream vf(vision_file);
     if (!vf.good()) {
         std::cout << "⊘ SKIP │ Vision weights not found\n";
@@ -303,7 +303,7 @@ bool test_prefill_prefix_extension_reuse_vlm() {
               << "╚══════════════════════════════════════════╝\n";
 
     std::string model_path_str(g_model_path ? g_model_path : "");
-    std::string vision_file = model_path_str + "/vision_patch_embedding.weights";
+    std::string vision_file = model_path_str + "/vision_patch_embedder_input_proj.weights";
     std::ifstream vf(vision_file);
     if (!vf.good()) {
         std::cout << "⊘ SKIP │ Vision weights not found\n";

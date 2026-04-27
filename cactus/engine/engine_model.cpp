@@ -72,7 +72,7 @@ bool Model::init(CactusGraph* external_graph, const std::string& model_folder, s
 
 bool Model::init_internal(CactusGraph* gb, const std::string& model_folder, size_t context_size,
                           const std::string& system_prompt, bool do_warmup) {
-
+    (void)system_prompt;
     CACTUS_LOG_DEBUG("model", "Initializing model from: " << model_folder);
     model_folder_path_ = model_folder;
     std::string config_path = model_folder + "/config.txt";
