@@ -45,10 +45,7 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT = _resolve_project_root()
 DEFAULT_MODEL_ID = "google/gemma-4-E2B-it"
-DEFAULT_TEST_TRANSCRIBE_MODEL_ID = "nvidia/parakeet-tdt-0.6b-v3"
-DEFAULT_TEST_WHISPER_MODEL_ID = "openai/whisper-small"
-DEFAULT_TEST_DIARIZE_MODEL_ID = "pyannote/segmentation-3.0"
-DEFAULT_TEST_EMBED_SPEAKER_MODEL_ID = "pyannote/wespeaker-voxceleb-resnet34-LM"
+DEFAULT_TEST_MODEL_ID = "google/gemma-4-E2B-it"
 WEIGHTS_VARIANT_CHOICES = ["auto", "apple", "standard"]
 
 with open(PROJECT_ROOT / "models.json") as _f:
@@ -1094,7 +1091,7 @@ def cmd_run(args):
     os.execv(str(chat_binary), cmd_args)
 
 
-DEFAULT_ASR_MODEL_ID = "nvidia/parakeet-tdt-0.6b-v3"
+DEFAULT_ASR_MODEL_ID = DEFAULT_TEST_MODEL_ID
 
 def _pick_android_device_id(preferred_device=None):
     if preferred_device:
@@ -1487,37 +1484,19 @@ def cmd_test(args):
             "If tests fail unexpectedly, rerun with --reconvert."
         )
 
-    if getattr(args, 'benchmark', False):
-        args.model = 'LiquidAI/LFM2.5-VL-1.6B'
-        args.transcribe_model = 'nvidia/parakeet-ctc-1.1b'
-        print_color(BLUE, f"Using large models: {args.model}, {args.transcribe_model}, {args.vad_model}")
-
     if getattr(args, 'reconvert', False):
-        reconvert_models = [
-            getattr(args, 'model', 'LiquidAI/LFM2-VL-450M'),
-            getattr(args, 'transcribe_model', DEFAULT_TEST_TRANSCRIBE_MODEL_ID),
-            getattr(args, 'whisper_model', DEFAULT_TEST_WHISPER_MODEL_ID),
-            getattr(args, 'vad_model', 'snakers4/silero-vad'),
-            getattr(args, 'diarize_model', DEFAULT_TEST_DIARIZE_MODEL_ID),
-            getattr(args, 'embed_speaker_model', DEFAULT_TEST_EMBED_SPEAKER_MODEL_ID),
-        ]
-        for model_id in reconvert_models:
-            class DownloadArgs:
-                pass
-            dl_args = DownloadArgs()
-            dl_args.model_id = model_id
-            dl_args.reconvert = True
-            dl_args.cache_dir = None
-            if args.precision:
-                dl_args.precision = args.precision
-            else:
-                is_asr = 'whisper' in model_id.lower() or 'moonshine' in model_id.lower() or 'silero-vad' in model_id.lower()
-                is_fp16_only = 'segmentation-3.0' in model_id.lower() or 'wespeaker' in model_id.lower()
-                dl_args.precision = 'FP16' if is_fp16_only else ('INT8' if is_asr else 'INT4')
-            if args.token:
-                dl_args.token = args.token
-            if cmd_download(dl_args) != 0:
-                return 1
+        model_id = getattr(args, 'model', DEFAULT_TEST_MODEL_ID)
+        class DownloadArgs:
+            pass
+        dl_args = DownloadArgs()
+        dl_args.model_id = model_id
+        dl_args.reconvert = True
+        dl_args.cache_dir = None
+        dl_args.precision = args.precision if args.precision else 'INT4'
+        if args.token:
+            dl_args.token = args.token
+        if cmd_download(dl_args) != 0:
+            return 1
 
     test_script = PROJECT_ROOT / "tests" / "run.sh"
 
@@ -1529,16 +1508,6 @@ def cmd_test(args):
 
     if args.model:
         cmd.extend(["--model", args.model])
-    if args.transcribe_model:
-        cmd.extend(["--transcribe_model", args.transcribe_model])
-    if getattr(args, 'whisper_model', None):
-        cmd.extend(["--whisper_model", args.whisper_model])
-    if getattr(args, 'vad_model', None):
-        cmd.extend(["--vad_model", args.vad_model])
-    if getattr(args, 'diarize_model', None):
-        cmd.extend(["--diarize_model", args.diarize_model])
-    if getattr(args, 'embed_speaker_model', None):
-        cmd.extend(["--embed_speaker_model", args.embed_speaker_model])
     if args.precision:
         cmd.extend(["--precision", args.precision])
     if getattr(args, 'no_rebuild', False):
@@ -1547,8 +1516,6 @@ def cmd_test(args):
         cmd.append("--android")
     if args.ios:
         cmd.append("--ios")
-    if getattr(args, 'exhaustive', False):
-        cmd.append("--exhaustive")
     test_filter = args.only
     for _test_name in ['llm', 'vlm', 'stt', 'embed', 'rag', 'graph', 'index', 'kernel', 'kv_cache', 'performance']:
         if getattr(args, _test_name, False):
@@ -2148,20 +2115,8 @@ def create_parser():
                              help='Download original model and convert (instead of using pre-converted from Cactus-Compute)')
 
     test_parser = subparsers.add_parser('test', help='Run the test suite')
-    test_parser.add_argument('--model', default='LiquidAI/LFM2-VL-450M',
-                             help='Model to use for tests')
-    test_parser.add_argument('--transcribe_model', default=DEFAULT_TEST_TRANSCRIBE_MODEL_ID,
-                             help='Transcribe model to use')
-    test_parser.add_argument('--whisper_model', default=DEFAULT_TEST_WHISPER_MODEL_ID,
-                             help='Whisper model to use for language detection tests')
-    test_parser.add_argument('--vad_model', default='snakers4/silero-vad',
-                             help='VAD model to use')
-    test_parser.add_argument('--diarize_model', default=DEFAULT_TEST_DIARIZE_MODEL_ID,
-                             help='Diarization model to use')
-    test_parser.add_argument('--embed_speaker_model', default=DEFAULT_TEST_EMBED_SPEAKER_MODEL_ID,
-                             help='Speaker embedding model to use')
-    test_parser.add_argument('--benchmark', action='store_true',
-                             help='Use larger models (LFM2.5-VL-1.6B + nvidia/parakeet-ctc-1.1b)')
+    test_parser.add_argument('--model', default=DEFAULT_TEST_MODEL_ID,
+                             help='Model to use for tests (default: Gemma4)')
     test_parser.add_argument('--precision', choices=['INT4', 'INT8', 'FP16'],
                              help='Regenerate weights with this precision (deletes existing weights)')
     test_parser.add_argument('--no-rebuild', action='store_true',
@@ -2171,8 +2126,6 @@ def create_parser():
                              help='Run tests on Android')
     test_parser.add_argument('--ios', action='store_true',
                              help='Run tests on iOS')
-    test_parser.add_argument('--exhaustive', action='store_true',
-                             help='Run exhaustive golden tests for all model families and precisions')
     test_parser.add_argument('--only', help='(deprecated, use --<test_name> instead) Only run the specified test')
     for _test_name in ['llm', 'vlm', 'stt', 'embed', 'rag', 'graph', 'index', 'kernel', 'kv_cache', 'performance']:
         test_parser.add_argument(f'--{_test_name}', action='store_true',

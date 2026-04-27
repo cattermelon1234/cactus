@@ -312,20 +312,7 @@ void ToolCallConstrainer::tokenize_grammar_elements() {
 
     init_common_tokens();
 
-    if (model_type_ == Config::ModelType::LFM2) {
-        add_tokens_for_string("<|tool_call_start|>", tool_start_tokens_);
-        add_tokens_for_string("<|tool_call_end|>", tool_end_tokens_);
-        add_tokens_for_string("[", bracket_open_tokens_);
-        add_tokens_for_string("]", bracket_close_tokens_);
-        add_tokens_for_string("(", paren_open_tokens_);
-        add_tokens_for_string(")", paren_close_tokens_);
-        add_tokens_for_string("=", equals_tokens_);
-        add_tokens_for_string(",", comma_tokens_);
-        add_tokens_for_string("\"", quote_tokens_);
-
-        tokenize_function_names(false);
-        add_tokens_for_prefix_string("(", paren_open_tokens_);
-    } else if (is_gemma_family()) {
+    if (is_gemma_family()) {
         gemma_call_start_tokens_.clear();
         gemma_call_end_tokens_.clear();
         gemma_call_prefix_tokens_.clear();
@@ -387,18 +374,7 @@ void ToolCallConstrainer::init(Config::ModelType model_type,
     brace_depth_ = 0;
     active_ = !function_names_.empty() && tokenizer != nullptr;
 
-    if (model_type_ == Config::ModelType::LFM2) {
-        state_ = State::LFM_START;
-        lfm_current_function_.clear();
-        lfm_args_buffer_.clear();
-        lfm_seen_arg_keys_.clear();
-        lfm_required_params_.clear();
-        lfm_all_params_.clear();
-        for (const auto& tool : tool_specs_) {
-            lfm_required_params_[tool.name] = tool.required_parameter_names;
-            lfm_all_params_[tool.name] = tool.parameter_names;
-        }
-    } else if (is_gemma_family()) {
+    if (is_gemma_family()) {
         state_ = State::GEMMA_START;
         if (model_type_ == Config::ModelType::GEMMA4) {
             call_start_tag_ = "<|tool_call>";
@@ -429,85 +405,7 @@ void ToolCallConstrainer::update(uint32_t /*token_id*/, const std::string& decod
 
     generated_text_ += decoded_text;
 
-    if (model_type_ == Config::ModelType::LFM2) {
-        switch (state_) {
-            case State::LFM_START:
-                if (generated_text_.find("<|tool_call_start|>") != std::string::npos) {
-                    state_ = State::LFM_EXPECT_BRACKET;
-                    generated_text_.clear();
-                }
-                break;
-
-            case State::LFM_EXPECT_BRACKET:
-                if (generated_text_.find("[") != std::string::npos) {
-                    state_ = State::LFM_IN_FUNC_NAME;
-                    generated_text_.clear();
-                }
-                break;
-
-            case State::LFM_IN_FUNC_NAME:
-                for (const auto& name : function_names_) {
-                    if (generated_text_.find(name) != std::string::npos) {
-                        lfm_current_function_ = name;
-                        state_ = State::LFM_EXPECT_PAREN;
-                        generated_text_.clear();
-                        break;
-                    }
-                }
-                break;
-
-            case State::LFM_EXPECT_PAREN:
-                if (generated_text_.find("(") != std::string::npos) {
-                    state_ = State::LFM_IN_ARGUMENTS;
-                    lfm_args_buffer_.clear();
-                    lfm_seen_arg_keys_.clear();
-                    generated_text_.clear();
-                }
-                break;
-
-            case State::LFM_IN_ARGUMENTS: {
-                lfm_args_buffer_ += decoded_text;
-                size_t eq_pos = 0;
-                while ((eq_pos = lfm_args_buffer_.find('=', eq_pos)) != std::string::npos) {
-                    size_t key_end = eq_pos;
-                    size_t key_start = key_end;
-                    while (key_start > 0 && !std::isspace(static_cast<unsigned char>(lfm_args_buffer_[key_start - 1])) &&
-                           lfm_args_buffer_[key_start - 1] != ',' && lfm_args_buffer_[key_start - 1] != '(') {
-                        key_start--;
-                    }
-                    if (key_start < key_end) {
-                        std::string key = lfm_args_buffer_.substr(key_start, key_end - key_start);
-                        lfm_seen_arg_keys_.insert(key);
-                    }
-                    eq_pos++;
-                }
-                if (decoded_text.find(")") != std::string::npos) {
-                    state_ = State::LFM_EXPECT_BRACKET_CLOSE;
-                    generated_text_.clear();
-                } else {
-                    generated_text_.clear();
-                }
-                break;
-            }
-
-            case State::LFM_EXPECT_BRACKET_CLOSE:
-                if (generated_text_.find("]") != std::string::npos) {
-                    state_ = State::LFM_EXPECT_END;
-                    generated_text_.clear();
-                }
-                break;
-
-            case State::LFM_EXPECT_END:
-                if (generated_text_.find("<|tool_call_end|>") != std::string::npos) {
-                    state_ = State::DONE;
-                    generated_text_.clear();
-                }
-                break;
-
-            default:
-                break;
-        }
-    } else if (is_gemma_family()) {
+    if (is_gemma_family()) {
         switch (state_) {
             case State::GEMMA_START:
                 if (generated_text_.find(call_start_tag_) != std::string::npos) {
@@ -703,127 +601,7 @@ void ToolCallConstrainer::compute_bias() {
         current_bias_[t] = BLOCK_BIAS;
     }
 
-    if (model_type_ == Config::ModelType::LFM2) {
-        switch (state_) {
-            case State::LFM_START:
-                for (uint32_t t : tool_start_tokens_) {
-                    current_bias_[t] = FORCE_BIAS;
-                }
-                for (uint32_t t : bracket_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : paren_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                break;
-
-            case State::LFM_EXPECT_BRACKET:
-                for (uint32_t t : bracket_open_tokens_) {
-                    current_bias_[t] = FORCE_BIAS;
-                }
-                for (uint32_t t : paren_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : bracket_close_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                break;
-
-            case State::LFM_IN_FUNC_NAME:
-                for (uint32_t t : all_func_name_tokens_) {
-                    current_bias_[t] = FORCE_BIAS;
-                }
-                for (uint32_t t : bracket_close_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : paren_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : paren_close_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : equals_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                break;
-
-            case State::LFM_EXPECT_PAREN:
-                for (uint32_t t : paren_open_tokens_) {
-                    current_bias_[t] = FORCE_BIAS;
-                }
-                for (uint32_t t : bracket_close_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : equals_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                break;
-
-            case State::LFM_IN_ARGUMENTS: {
-                for (uint32_t t : equals_tokens_) {
-                    current_bias_[t] = 10.0f;
-                }
-                for (uint32_t t : comma_tokens_) {
-                    current_bias_[t] = 8.0f;
-                }
-                for (uint32_t t : quote_tokens_) {
-                    current_bias_[t] = 5.0f;
-                }
-                for (uint32_t t : paren_close_tokens_) {
-                    current_bias_[t] = 3.0f;
-                }
-                for (uint32_t t : bracket_close_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : tool_end_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                auto req_it = lfm_required_params_.find(lfm_current_function_);
-                if (req_it != lfm_required_params_.end()) {
-                    bool has_all_required = true;
-                    for (const auto& req : req_it->second) {
-                        if (!lfm_seen_arg_keys_.count(req)) {
-                            has_all_required = false;
-                            break;
-                        }
-                    }
-                    if (!has_all_required) {
-                        for (uint32_t t : paren_close_tokens_) {
-                            current_bias_[t] = BLOCK_BIAS;
-                        }
-                    }
-                }
-                break;
-            }
-
-            case State::LFM_EXPECT_BRACKET_CLOSE:
-                for (uint32_t t : bracket_close_tokens_) {
-                    current_bias_[t] = FORCE_BIAS;
-                }
-                for (uint32_t t : paren_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : equals_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                break;
-
-            case State::LFM_EXPECT_END:
-                for (uint32_t t : tool_end_tokens_) {
-                    current_bias_[t] = FORCE_BIAS;
-                }
-                for (uint32_t t : bracket_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                for (uint32_t t : paren_open_tokens_) {
-                    current_bias_[t] = BLOCK_BIAS;
-                }
-                break;
-
-            default:
-                break;
-        }
-    } else if (is_gemma_family()) {
+    if (is_gemma_family()) {
         for (uint32_t t : gemma_response_start_tokens_) {
             current_bias_[t] = BLOCK_BIAS;
         }
@@ -1159,12 +937,7 @@ void ToolCallConstrainer::reset() {
     brace_depth_ = 0;
     reset_needle_constraints();
 
-    if (model_type_ == Config::ModelType::LFM2) {
-        state_ = State::LFM_START;
-        lfm_current_function_.clear();
-        lfm_args_buffer_.clear();
-        lfm_seen_arg_keys_.clear();
-    } else if (is_gemma_family()) {
+    if (is_gemma_family()) {
         state_ = State::GEMMA_START;
     } else if (is_needle()) {
         state_ = State::NEEDLE_START;

@@ -235,9 +235,6 @@ std::string SPTokenizer::preprocess_text(const std::string& text) const {
     }
 
     std::string processed = "";
-    if (model_type_ == ModelType::BERT) {
-        processed = "▁";
-    }
 
     for (size_t i = text.find_first_not_of(" "); i < text.length(); i++) {
         char c = text[i];

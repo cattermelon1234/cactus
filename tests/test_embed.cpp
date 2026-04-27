@@ -97,7 +97,7 @@ static bool test_audio_embeddings() {
 
     cactus_model_t model = cactus_init(g_transcribe_model_path, nullptr, false);
     if (!model) {
-        std::cout << "⊘ SKIP │ Failed to init Whisper model\n";
+        std::cout << "⊘ SKIP │ Failed to init audio model\n";
         return true;
     }
 

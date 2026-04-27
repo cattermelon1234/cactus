@@ -1,7 +1,7 @@
 #include "cactus_ffi.h"
 #include "cactus_cloud.h"
 #include "cactus_utils.h"
-#include "telemetry/telemetry.h"
+#include "../telemetry/telemetry.h"
 #include "../../libs/audio/wav.h"
 #include <chrono>
 #include <cstdint>
@@ -27,17 +27,6 @@ std::string extract_last_user_query(const std::vector<ChatMessage>& messages) {
         }
     }
     return {};
-}
-
-std::vector<uint32_t> encode_needle_tools_suffix(Tokenizer* tokenizer, const std::string& formatted_tools) {
-    auto prefix = tokenizer->encode("<tools>");
-    auto body = tokenizer->encode(formatted_tools);
-    std::vector<uint32_t> tokens;
-    tokens.reserve(prefix.size() + body.size() + 1);
-    tokens.insert(tokens.end(), prefix.begin(), prefix.end());
-    tokens.insert(tokens.end(), body.begin(), body.end());
-    tokens.push_back(tokenizer->get_eos_token());
-    return tokens;
 }
 
 void inject_rag_context(CactusModelHandle* handle, std::vector<ChatMessage>& messages) {
@@ -237,50 +226,6 @@ std::vector<std::string> extract_schema_required(const std::string& schema) {
     return required;
 }
 
-std::string serialize_needle_tools_json(const std::vector<ToolFunction>& tools, const char* raw_tools_json) {
-    if (tools.empty()) {
-        return (raw_tools_json && std::strlen(raw_tools_json) > 0) ? raw_tools_json : "[]";
-    }
-
-    std::ostringstream oss;
-    oss << "[";
-    for (size_t i = 0; i < tools.size(); ++i) {
-        if (i > 0) {
-            oss << ",";
-        }
-
-        oss << "{\"name\":\"" << escape_json_string(tools[i].name) << "\"";
-        if (!tools[i].description.empty()) {
-            oss << ",\"description\":\"" << escape_json_string(tools[i].description) << "\"";
-        }
-
-        oss << ",\"parameters\":";
-        auto schema_it = tools[i].parameters.find("schema");
-        if (schema_it == tools[i].parameters.end()) {
-            oss << "{}";
-        } else {
-            auto properties = extract_schema_property_types(schema_it->second);
-            if (properties.empty()) {
-                oss << schema_it->second;
-            } else {
-                oss << "{";
-                for (size_t p = 0; p < properties.size(); ++p) {
-                    if (p > 0) {
-                        oss << ",";
-                    }
-                    oss << "\"" << escape_json_string(properties[p].first) << "\":"
-                        << "\"" << escape_json_string(properties[p].second) << "\"";
-                }
-                oss << "}";
-            }
-        }
-
-        oss << "}";
-    }
-    oss << "]";
-    return oss.str();
-}
-
 std::vector<std::vector<uint32_t>> build_stop_sequences(
     Tokenizer* tokenizer,
     const std::vector<std::string>& stop_sequences,
@@ -299,11 +244,6 @@ std::vector<std::vector<uint32_t>> build_stop_sequences(
     }
     for (const auto& stop_seq : sequences) {
         stop_token_sequences.push_back(tokenizer->encode(stop_seq));
-    }
-
-    if ((model_type == Config::ModelType::GEMMA || model_type == Config::ModelType::GEMMA3N) && has_tools) {
-        stop_token_sequences.push_back(tokenizer->encode("<end_function_call>"));
-        stop_token_sequences.push_back(tokenizer->encode("<start_function_response>"));
     }
 
     if (model_type == Config::ModelType::GEMMA4) {
@@ -376,7 +316,7 @@ struct EntropyState {
 
 struct PreparedPrompt {
     InferenceOptions options;
-    Config::ModelType model_type = Config::ModelType::QWEN;
+    Config::ModelType model_type = Config::ModelType::GEMMA4;
     std::vector<std::string> image_paths;
     std::vector<std::string> audio_paths;
     std::vector<ChatMessage> messages;
@@ -454,11 +394,6 @@ bool prompt_context_matches(
     if (handle->processed_tokens.empty()) {
         return false;
     }
-    if (handle->model &&
-        handle->model->get_config().model_type == Config::ModelType::NEEDLE &&
-        prompt.tokens.size() != handle->processed_tokens.size() + 1) {
-        return false;
-    }
     if (prompt.context_token_count < handle->processed_tokens.size()) {
         return false;
     }
@@ -503,10 +438,6 @@ PreparedPrompt prepare_prompt(
         if (!query.empty()) {
             prompt.tools = select_relevant_tools(handle, query, prompt.tools, prompt.options.tool_rag_top_k);
         }
-    }
-
-    if (prompt.model_type == Config::ModelType::NEEDLE && !prompt.tools.empty()) {
-        prompt.options.force_tools = true;
     }
 
     if (apply_tool_constraints) {
@@ -561,23 +492,9 @@ PreparedPrompt prepare_prompt(
         }
     }
 
-    std::string formatted_tools;
-    if (Config::is_gemma_family(prompt.model_type)) {
-        formatted_tools = gemma::format_tools(prompt.tools, prompt.model_type == Config::ModelType::GEMMA4);
-    } else if (prompt.model_type == Config::ModelType::NEEDLE) {
-        formatted_tools = serialize_needle_tools_json(prompt.tools, tools_json);
-    } else if (prompt.model_type == Config::ModelType::QWEN || prompt.model_type == Config::ModelType::QWEN3P5) {
-        formatted_tools = serialize_tools_for_template(prompt.tools);
-    } else {
-        formatted_tools = serialize_tools_json(prompt.tools);
-    }
+    std::string formatted_tools = gemma::format_tools(prompt.tools, true);
 
-    if (prompt.model_type == Config::ModelType::NEEDLE) {
-        std::string query_text = cactus::engine::format_needle_query_text(prompt.messages);
-        prompt.tokens = tokenizer->encode(query_text);
-        auto suffix_tokens = encode_needle_tools_suffix(tokenizer, formatted_tools);
-        prompt.tokens.insert(prompt.tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
-    } else {
+    {
         std::string full_prompt = tokenizer->format_chat_prompt(
             prompt.messages,
             add_generation_prompt,

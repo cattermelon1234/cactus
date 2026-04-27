@@ -127,7 +127,7 @@ struct Config {
     float rope_scaling_factor = 1.0f;
     float rope_mscale_all_dim = 0.0f;
 
-    enum class ModelType {QWEN = 0, GEMMA = 1, NOMIC = 3, LFM2 = 5, SIGLIP2 = 6, WHISPER = 7, MOONSHINE = 8, SILERO_VAD = 9, PARAKEET = 10, QWEN3P5 = 11, PARAKEET_TDT = 12, GEMMA3N = 13, YOUTU = 14, GEMMA4 = 15, PYANNOTE = 16, WESPEAKER = 17, NEEDLE = 18};
+    enum class ModelType {GEMMA4 = 15};
     uint32_t predictor_hidden_dim = 0;
     uint32_t predictor_num_layers = 0;
     uint32_t tdt_joint_dim = 0;
@@ -135,7 +135,7 @@ struct Config {
     uint32_t tdt_blank_id = 0;
     std::vector<uint32_t> tdt_durations;
 
-    ModelType model_type = ModelType::QWEN;
+    ModelType model_type = ModelType::GEMMA4;
 
     enum class ModelVariant {DEFAULT = 0, VLM = 1, EXTRACT = 2, RAG = 3};
     ModelVariant model_variant = ModelVariant::DEFAULT;
@@ -208,7 +208,7 @@ struct Config {
     uint32_t channel_close_token_id = 101;
 
     static bool is_gemma_family(ModelType t) {
-        return t == ModelType::GEMMA || t == ModelType::GEMMA3N || t == ModelType::GEMMA4;
+        return t == ModelType::GEMMA4;
     }
 
     bool from_json(const std::string& json_path);
@@ -338,7 +338,7 @@ public:
     uint32_t get_global_img_token_id() const { return global_img_token_id_; }
 
 protected:
-    enum class ModelType { UNKNOWN, QWEN, QWEN3P5, GEMMA, GEMMA4, LFM2, BERT, WHISPER, PARAKEET, YOUTU, NEEDLE};
+    enum class ModelType { UNKNOWN, GEMMA4 };
     ModelType model_type_ = ModelType::UNKNOWN;
     enum class ModelVariant { DEFAULT, VLM, EXTRACT, RAG};
     ModelVariant model_variant_ = ModelVariant::DEFAULT;
@@ -620,11 +620,11 @@ public:
 private:
     bool active_ = false;
     State state_ = State::QWEN_START;
-    Config::ModelType model_type_ = Config::ModelType::QWEN;
+    Config::ModelType model_type_ = Config::ModelType::GEMMA4;
     Tokenizer* tokenizer_ = nullptr;
 
     bool is_gemma_family() const { return Config::is_gemma_family(model_type_); }
-    bool is_needle() const { return model_type_ == Config::ModelType::NEEDLE; }
+    bool is_needle() const { return false; }
 
     enum class NeedleJsonState {
         FREE,

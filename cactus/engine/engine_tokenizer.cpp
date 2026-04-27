@@ -336,34 +336,12 @@ void Tokenizer::detect_model_type(const std::string& config_path) {
         if (pos != std::string::npos) {
             std::transform(line.begin(), line.end(), line.begin(), ::tolower);
 
-            if (line.find("qwen3_5") != std::string::npos) {
-                model_type_ = ModelType::QWEN3P5;
-                break;
-            } else if (line.find("qwen") != std::string::npos) {
-                model_type_ = ModelType::QWEN;
-                break;
-            } else if (line.find("gemma4") != std::string::npos || line.find("tinyllama") != std::string::npos) {
+            if (line.find("gemma4") != std::string::npos || line.find("tinyllama") != std::string::npos ||
+                line.find("qwen") != std::string::npos || line.find("gemma") != std::string::npos ||
+                line.find("lfm2") != std::string::npos || line.find("bert") != std::string::npos ||
+                line.find("whisper") != std::string::npos || line.find("parakeet") != std::string::npos ||
+                line.find("needle") != std::string::npos || line.find("youtu") != std::string::npos) {
                 model_type_ = ModelType::GEMMA4;
-                break;
-            } else if (line.find("gemma") != std::string::npos) {
-                model_type_ = ModelType::GEMMA;
-                break;
-            } else if(line.find("lfm2") != std::string::npos) {
-                model_type_ = ModelType::LFM2;
-            } else if (line.find("bert") != std::string::npos) {
-                model_type_ = ModelType::BERT;
-                break;
-            } else if (line.find("whisper") != std::string::npos) {
-                model_type_ = ModelType::WHISPER;
-                break;
-            } else if (line.find("parakeet") != std::string::npos) {
-                model_type_ = ModelType::PARAKEET;
-                break;
-            } else if (line.find("needle") != std::string::npos) {
-                model_type_ = ModelType::NEEDLE;
-                break;
-            } else if (line.find("youtu") != std::string::npos) {
-                model_type_ = ModelType::YOUTU;
                 break;
             } else {
                 model_type_ = ModelType::UNKNOWN;
@@ -413,18 +391,11 @@ void Tokenizer::detect_model_type(const std::string& config_path) {
 
 std::string Tokenizer::get_default_stop_sequence() const {
     switch (model_type_) {
-        case ModelType::GEMMA:
-            return "<end_of_turn>";
         case ModelType::GEMMA4:
             return "<turn|>";
-        case ModelType::QWEN:
-        case ModelType::QWEN3P5:
-        case ModelType::LFM2:
-            return "<|im_end|>";
-        case ModelType::NEEDLE:
-            return "";
+        case ModelType::UNKNOWN:
         default:
-            return "<|im_end|>";
+            return "<turn|>";
     }
 }
 
@@ -435,33 +406,12 @@ std::vector<uint32_t> Tokenizer::apply_chat_template(const std::vector<ChatMessa
 
 std::string Tokenizer::format_chat_prompt(const std::vector<ChatMessage>& messages, bool add_generation_prompt,
                                           const std::string& tools_json, bool enable_thinking_if_supported) const {
-    bool has_images = false;
-    for (const auto& msg : messages) {
-        if (!msg.images.empty()) {
-            has_images = true;
-            break;
-        }
-    }
-    if (model_type_ == ModelType::LFM2 && has_images) {
-        return format_lfm2_vl_style(messages, add_generation_prompt, tools_json);
-    }
-    
     switch (model_type_) {
-        case ModelType::QWEN:
-        case ModelType::QWEN3P5:
-            return format_qwen_style(messages, add_generation_prompt, tools_json, enable_thinking_if_supported);
-        case ModelType::GEMMA:
-            return format_gemma_style(messages, add_generation_prompt, tools_json);
         case ModelType::GEMMA4:
             return format_gemma4_style(messages, add_generation_prompt, tools_json, enable_thinking_if_supported);
-        case ModelType::LFM2:
-            return format_lfm2_style(messages, add_generation_prompt, tools_json);
-        case ModelType::NEEDLE:
-            return format_needle_style(messages, add_generation_prompt, tools_json);
-        case ModelType::YOUTU:
-            return format_youtu_style(messages, add_generation_prompt, tools_json);
+        case ModelType::UNKNOWN:
         default:
-            return format_qwen_style(messages, add_generation_prompt, tools_json);
+            return format_gemma4_style(messages, add_generation_prompt, tools_json, enable_thinking_if_supported);
     }
 }
 

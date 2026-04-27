@@ -115,30 +115,13 @@ bool Model::init_internal(CactusGraph* gb, const std::string& model_folder, size
 
     graph_handle_ = gb;
 
-    if(config_.model_type == Config::ModelType::WHISPER){
-        embedding_file_path_ = model_folder+"/decoder_token_embeddings.weights";
-    }
-    else{
-        embedding_file_path_ = model_folder + "/token_embeddings.weights";
-    }
+    embedding_file_path_ = model_folder + "/token_embeddings.weights";
 
     load_weights_to_graph(gb);
 
-    if (config_.model_type == Config::ModelType::GEMMA3N || config_.model_type == Config::ModelType::GEMMA4) {
-        attention_scale_ = 1.0f;
-    } else if (config_.model_type == Config::ModelType::GEMMA) {
-        attention_scale_ = 1.0f / std::sqrt(256.0f);
-    } else {
-        attention_scale_ = 1.0f / std::sqrt(static_cast<float>(config_.attention_head_dim));
-    }
+    attention_scale_ = 1.0f;
 
-    Precision cache_precision = (config_.model_type == Config::ModelType::WHISPER ||
-                                 config_.model_type == Config::ModelType::MOONSHINE ||
-                                 config_.model_type == Config::ModelType::PARAKEET ||
-                                 config_.model_type == Config::ModelType::PARAKEET_TDT ||
-                                 config_.model_type == Config::ModelType::NEEDLE)
-                               ? Precision::FP16
-                               : Precision::INT8;
+    Precision cache_precision = Precision::INT8;
     kv_cache_.init(config_.num_layers, context_size, get_kv_layer_dims(), get_kv_layer_heads(), cache_precision);
 
     size_t window_size = std::min(context_size, size_t(512));
@@ -159,17 +142,8 @@ bool Model::init_internal(CactusGraph* gb, const std::string& model_folder, size
 
     initialized_ = true;
 
-    if (do_warmup &&
-        config_.model_type != Config::ModelType::WHISPER &&
-        config_.model_type != Config::ModelType::MOONSHINE &&
-        config_.model_type != Config::ModelType::PARAKEET &&
-        config_.model_type != Config::ModelType::PARAKEET_TDT &&
-        config_.model_type != Config::ModelType::NEEDLE) {
-        std::string warmup_text = system_prompt.empty() ? "Hello" : system_prompt;
-        auto warmup_tokens = tokenizer_->encode(warmup_text);
-        if (config_.model_type == Config::ModelType::GEMMA4) {
-            warmup_tokens = {2};
-        }
+    if (do_warmup) {
+        std::vector<uint32_t> warmup_tokens = {2};
         forward(warmup_tokens);
         auto* gb = static_cast<CactusGraph*>(graph_handle_);
         gb->execute();
@@ -532,24 +506,7 @@ bool Config::from_json(const std::string& config_path) {
             else precision = Precision::FP32;
         }
         else if (key == "model_type") {
-            std::string model_type_value = value;
-            std::transform(model_type_value.begin(), model_type_value.end(), model_type_value.begin(), ::tolower);
-            if (value == "gemma" || value == "GEMMA") model_type = ModelType::GEMMA;
-            else if (value == "lfm2" || value == "LFM2" || value == "lfm2_moe" || value == "LFM2_MOE") model_type = ModelType::LFM2;
-            else if (value == "bert" || value == "BERT") model_type = ModelType::NOMIC;
-            else if (value == "whisper" || value == "WHISPER") model_type = ModelType::WHISPER;
-            else if (value == "moonshine" || value == "MOONSHINE") model_type = ModelType::MOONSHINE;
-            else if (value == "silero_vad" || value == "SILERO_VAD") model_type = ModelType::SILERO_VAD;
-            else if (value == "parakeet" || value == "PARAKEET") model_type = ModelType::PARAKEET;
-            else if (model_type_value.rfind("qwen3_5", 0) == 0) model_type = ModelType::QWEN3P5;
-            else if (value == "parakeet_tdt" || value == "PARAKEET_TDT") model_type = ModelType::PARAKEET_TDT;
-            else if (value == "gemma3n" || value == "GEMMA3N") model_type = ModelType::GEMMA3N;
-            else if (value == "needle" || value == "NEEDLE") model_type = ModelType::NEEDLE;
-            else if (value == "gemma4" || value == "GEMMA4" || value == "tinyllama" || value == "TINYLLAMA") model_type = ModelType::GEMMA4;
-            else if (value == "youtu" || value == "YOUTU") model_type = ModelType::YOUTU;
-            else if (value == "pyannote" || value == "PYANNOTE") model_type = ModelType::PYANNOTE;
-            else if (value == "wespeaker" || value == "WESPEAKER") model_type = ModelType::WESPEAKER;
-            else model_type = ModelType::QWEN;
+            model_type = ModelType::GEMMA4;
         }
         else if (key == "model_variant") {
             std::string v = value;
@@ -688,58 +645,11 @@ bool Config::from_json(const std::string& config_path) {
         }
     }
 
-    if (is_gemma_family(model_type)) {
-        default_temperature = 1.0f;
-        default_top_p = 0.95f;
-        default_top_k = 64;
-        if (model_type == ModelType::GEMMA4) {
-            default_cloud_handoff_threshold = 0.92f;
-            default_rolling_entropy_window = 16;
-        }
-    } else if (model_type == ModelType::LFM2) {
-        default_temperature = 0.3f;
-        default_top_p = 0.95f;
-        default_top_k = 20;
-    } else if (model_type == ModelType::QWEN) {
-        default_temperature = 0.6f;
-        default_top_p = 0.95f;
-        default_top_k = 20;
-    } else if (model_type == ModelType::QWEN3P5) {
-        default_temperature = 0.7f;
-        default_top_p = 0.8f;
-        default_top_k = 20;
-    } else if (model_type == ModelType::WHISPER) {
-        default_temperature = 0.0f;
-        default_top_p = 0.0f;
-        default_top_k = 0;
-        default_cloud_handoff_threshold = 0.4f;
-    } else if (model_type == ModelType::MOONSHINE) {
-        default_temperature = 0.0f;
-        default_top_p = 0.0f;
-        default_top_k = 0;
-        default_max_tps = 6.5f;
-        default_cloud_handoff_threshold = 0.35f;
-    } else if (model_type == ModelType::PARAKEET) {
-        default_temperature = 0.0f;
-        default_top_p = 0.0f;
-        default_top_k = 0;
-        default_max_tps = 8.0f;
-        default_cloud_handoff_threshold = 0.35f;
-    } else if (model_type == ModelType::PARAKEET_TDT) {
-        default_temperature = 0.0f;
-        default_top_p = 0.0f;
-        default_top_k = 0;
-        default_max_tps = 8.0f;
-        default_cloud_handoff_threshold = 0.35f;
-    } else if (model_type == ModelType::NEEDLE) {
-        default_temperature = 0.0f;
-        default_top_p = 0.0f;
-        default_top_k = 0;
-    } else if (model_type == ModelType::YOUTU) {
-        default_temperature = 1.0f;
-        default_top_p = 0.95f;
-        default_top_k = 20;
-    }
+    default_temperature = 1.0f;
+    default_top_p = 0.95f;
+    default_top_k = 64;
+    default_cloud_handoff_threshold = 0.92f;
+    default_rolling_entropy_window = 16;
 
     return true;
 }
@@ -759,63 +669,21 @@ std::unique_ptr<Model> create_model(const std::string& model_folder) {
     }
 
     const bool has_vision_support =
-    config.use_image_tokens ||
-    config.vision_num_layers > 0 ||
-    config.vision_embed_dim > 0 ||
-    config.vision_hidden_dim > 0 ||
-    config.visual_tokens_per_img > 0;
-
-    if (config.model_type == Config::ModelType::LFM2 && has_vision_support) {
-        return std::make_unique<Lfm2VlModel>(config);
-    }
+        config.use_image_tokens ||
+        config.vision_num_layers > 0 ||
+        config.vision_embed_dim > 0 ||
+        config.vision_hidden_dim > 0 ||
+        config.visual_tokens_per_img > 0;
 
     const bool has_audio_support =
         config.audio_num_layers > 0 ||
         config.audio_hidden_dim > 0;
 
-    if (config.model_type == Config::ModelType::GEMMA4 && (has_vision_support || has_audio_support)) {
+    if (has_vision_support || has_audio_support) {
         return std::make_unique<Gemma4MmModel>(config);
     }
 
-    switch (config.model_type) {
-        case Config::ModelType::QWEN:
-            return std::make_unique<QwenModel>(config);
-        case Config::ModelType::QWEN3P5:
-            return std::make_unique<Qwen3p5Model>(config);
-        case Config::ModelType::GEMMA:
-            return std::make_unique<GemmaModel>(config);
-        case Config::ModelType::GEMMA3N:
-            return std::make_unique<GemmaModel3n>(config);
-        case Config::ModelType::LFM2:
-            if (config.num_experts > 0 && config.moe_intermediate_dim > 0 && config.num_experts_per_tok > 0) {
-                return std::make_unique<LFM2MoEModel>(config);
-            }
-            return std::make_unique<LFM2Model>(config);
-        case Config::ModelType::NOMIC:
-            return std::make_unique<NomicModel>(config);
-        case Config::ModelType::WHISPER:
-            return std::make_unique<WhisperModel>(config);
-        case Config::ModelType::MOONSHINE:
-            return std::make_unique<MoonshineModel>(config);
-        case Config::ModelType::SILERO_VAD:
-            return std::make_unique<SileroVADModel>(config);
-        case Config::ModelType::PARAKEET:
-            return std::make_unique<ParakeetModel>(config);
-        case Config::ModelType::PARAKEET_TDT:
-            return std::make_unique<ParakeetTDTModel>(config);
-        case Config::ModelType::NEEDLE:
-            return std::make_unique<NeedleModel>(config);
-        case Config::ModelType::GEMMA4:
-            return std::make_unique<Gemma4Model>(config);
-        case Config::ModelType::YOUTU:
-            return std::make_unique<YoutuModel>(config);
-        case Config::ModelType::PYANNOTE:
-            return std::make_unique<PyAnnoteModel>(config);
-        case Config::ModelType::WESPEAKER:
-            return std::make_unique<WeSpeakerModel>(config);
-        default:
-            return std::make_unique<QwenModel>(config);
-    }
+    return std::make_unique<Gemma4Model>(config);
 }
 
 void Model::capture_debug_node(uint32_t layer_idx, const std::string& name, size_t node_id) const {
