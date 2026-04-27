@@ -4,8 +4,8 @@
 #error "kernel_i8mm.cpp must be compiled with I8MM enabled (e.g. -march=armv8.2-a+fp16+simd+dotprod+i8mm)"
 #endif
 
-#include "kernel.h"
-#include "kernel_utils.h"
+#include "../cactus_kernels.h"
+#include "utils.h"
 #include <algorithm>
 #include <cstdint>
 

@@ -1,5 +1,5 @@
-#include "kernel.h"
-#include "kernel_utils.h"
+#include "../cactus_kernels.h"
+#include "utils.h"
 #include <arm_neon.h>
 #include <algorithm>
 

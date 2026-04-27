@@ -73,36 +73,48 @@ inline bool cpu_has_i8mm() {
 #endif
 }
 
+// Cephes-style 6th-order polynomial exp(x) approximation.
+// Decomposes x = n*ln2 + r where n is integer and r ∈ [0, ln2).
+// Then exp(x) = 2^n * exp(r) with exp(r) via minimax polynomial.
+// Relative error < 3e-7 across [-87, 87].
 inline float32x4_t fast_exp_f32x4(float32x4_t x) {
-    const float32x4_t log2e = vdupq_n_f32(1.4426950408889634f);
-    const float32x4_t ln2 = vdupq_n_f32(0.6931471805599453f);
+    const float32x4_t log2e = vdupq_n_f32(1.44269504088896341f);
+    const float32x4_t ln2_hi = vdupq_n_f32(6.93145751953125e-1f);
+    const float32x4_t ln2_lo = vdupq_n_f32(1.42860682030941723212e-6f);
 
-    const float32x4_t c0 = vdupq_n_f32(1.0f);
-    const float32x4_t c1 = vdupq_n_f32(0.6931471805599453f); 
-    const float32x4_t c2 = vdupq_n_f32(0.2402265069591007f);  
-    const float32x4_t c3 = vdupq_n_f32(0.05550410866482158f);
-    const float32x4_t c4 = vdupq_n_f32(0.009618129842071803f); 
+    const float32x4_t p0 = vdupq_n_f32(1.9875691500e-4f);
+    const float32x4_t p1 = vdupq_n_f32(1.3981999507e-3f);
+    const float32x4_t p2 = vdupq_n_f32(8.3334519073e-3f);
+    const float32x4_t p3 = vdupq_n_f32(4.1665795894e-2f);
+    const float32x4_t p4 = vdupq_n_f32(1.6666665459e-1f);
+    const float32x4_t p5 = vdupq_n_f32(5.0000001201e-1f);
+    const float32x4_t one = vdupq_n_f32(1.0f);
 
     x = vmaxq_f32(x, vdupq_n_f32(-87.0f));
     x = vminq_f32(x, vdupq_n_f32(87.0f));
 
+    // n = round(x / ln2)
     float32x4_t z = vmulq_f32(x, log2e);
+    float32x4_t n = vrndnq_f32(z);
 
-    int32x4_t zi = vcvtq_s32_f32(z);
-    float32x4_t zf = vsubq_f32(z, vcvtq_f32_s32(zi));
+    // r = x - n * ln2 (Cody-Waite reduction for precision)
+    float32x4_t r = vfmsq_f32(x, n, ln2_hi);
+    r = vfmsq_f32(r, n, ln2_lo);
 
-    uint32x4_t neg_mask = vcltq_f32(zf, vdupq_n_f32(0.0f));
-    zi = vsubq_s32(zi, vandq_s32(vreinterpretq_s32_u32(neg_mask), vdupq_n_s32(1)));
-    zf = vaddq_f32(zf, vreinterpretq_f32_u32(vandq_u32(neg_mask, vreinterpretq_u32_f32(vdupq_n_f32(1.0f)))));
+    // exp(r) ≈ 1 + r + r²/2 + ... via Horner
+    float32x4_t r2 = vmulq_f32(r, r);
+    float32x4_t p = p0;
+    p = vfmaq_f32(p1, p, r);
+    p = vfmaq_f32(p2, p, r);
+    p = vfmaq_f32(p3, p, r);
+    p = vfmaq_f32(p4, p, r);
+    p = vfmaq_f32(p5, p, r);
+    p = vfmaq_f32(r, p, r2);
+    p = vaddq_f32(p, one);
 
-    float32x4_t zf_ln2 = vmulq_f32(zf, ln2);
-    float32x4_t p = c4;
-    p = vfmaq_f32(c3, p, zf_ln2);
-    p = vfmaq_f32(c2, p, zf_ln2);
-    p = vfmaq_f32(c1, p, zf_ln2);
-    p = vfmaq_f32(c0, p, zf_ln2);
-
-    int32x4_t exp_bits = vshlq_n_s32(vaddq_s32(zi, vdupq_n_s32(127)), 23);
+    // 2^n via integer bit manipulation
+    int32x4_t ni = vcvtq_s32_f32(n);
+    int32x4_t exp_bits = vshlq_n_s32(vaddq_s32(ni, vdupq_n_s32(127)), 23);
     float32x4_t scale = vreinterpretq_f32_s32(exp_bits);
 
     return vmulq_f32(p, scale);

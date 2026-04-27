@@ -1,6 +1,5 @@
-#include "kernel.h"
-#include "kernel_utils.h"
-#include "../graph/graph.h"
+#include "../cactus_kernels.h"
+#include "utils.h"
 #include <arm_neon.h>
 #include <cstdint>
 #include <cstring>
