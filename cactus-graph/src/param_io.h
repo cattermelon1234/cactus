@@ -1,6 +1,6 @@
 #pragma once
 
-#include "graph.h"
+#include "../cactus_graph.h"
 #include <iosfwd>
 
 namespace GraphParamIO {

@@ -1,6 +1,6 @@
-#include "graph.h"
-#include "../kernel/kernel.h"
-#include "../kernel/kernel_utils.h"
+#include "../cactus_graph.h"
+#include "cactus_kernels.h"
+#include "cactus_kernels.h"
 #include <cstring>
 #include <vector>
 #include <stdexcept>

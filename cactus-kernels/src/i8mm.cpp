@@ -5,7 +5,7 @@
 #endif
 
 #include "../cactus_kernels.h"
-#include "utils.h"
+#include "threading.h"
 #include <algorithm>
 #include <cstdint>
 

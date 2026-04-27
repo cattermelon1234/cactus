@@ -1,5 +1,5 @@
-#include "graph.h"
-#include "../kernel/kernel_utils.h"
+#include "../cactus_graph.h"
+#include "cactus_kernels.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -56,6 +56,7 @@ DECLARE_COMPUTE(compute_maxpool1d_node);
 DECLARE_COMPUTE(compute_bilstm_sequence_node);
 DECLARE_COMPUTE(compute_conv2d_k3s1p1_node);
 DECLARE_COMPUTE(compute_stats_pool_node);
+DECLARE_COMPUTE(compute_weighted_stats_pool_node);
 DECLARE_COMPUTE(compute_transpose_node);
 DECLARE_COMPUTE(compute_gather_node);
 DECLARE_COMPUTE(compute_slice_node);
@@ -73,87 +74,103 @@ DECLARE_COMPUTE(compute_quantize_activations_node);
 extern void shrink_thread_local_buffers();
 #undef DECLARE_COMPUTE
 
-static const std::unordered_map<OpType, ComputeFn> dispatch_table = {
-    {OpType::ADD, compute_binary_op_node},
-    {OpType::ADD_CLIPPED, compute_binary_op_node},
-    {OpType::SUBTRACT, compute_binary_op_node},
-    {OpType::MULTIPLY, compute_binary_op_node},
-    {OpType::DIVIDE, compute_binary_op_node},
-    {OpType::SCALAR_ADD, compute_unary_op_node},
-    {OpType::SCALAR_SUBTRACT, compute_unary_op_node},
-    {OpType::SCALAR_MULTIPLY, compute_unary_op_node},
-    {OpType::SCALAR_DIVIDE, compute_unary_op_node},
-    {OpType::SCALAR_EXP, compute_unary_op_node},
-    {OpType::SCALAR_SQRT, compute_unary_op_node},
-    {OpType::SCALAR_COS, compute_unary_op_node},
-    {OpType::SCALAR_SIN, compute_unary_op_node},
-    {OpType::SCALAR_LOG, compute_unary_op_node},
-    {OpType::ABS, compute_unary_op_node},
-    {OpType::POW, compute_unary_op_node},
-    {OpType::RELU, compute_activation_node},
-    {OpType::SILU, compute_activation_node},
-    {OpType::GELU, compute_activation_node},
-    {OpType::GELU_ERF, compute_activation_node},
-    {OpType::SIGMOID, compute_activation_node},
-    {OpType::TANH, compute_activation_node},
-    {OpType::LEAKY_RELU, compute_activation_node},
-    {OpType::SUM, compute_reduce_node},
-    {OpType::MEAN, compute_reduce_node},
-    {OpType::VARIANCE, compute_reduce_node},
-    {OpType::MIN, compute_reduce_node},
-    {OpType::MAX, compute_reduce_node},
-    {OpType::FLATTEN, compute_reshape_node},
-    {OpType::VIEW, compute_reshape_node},
-    {OpType::RESHAPE, compute_reshape_node},
-    {OpType::PRECISION_CAST, compute_precision_cast_node},
-    {OpType::MATMUL, compute_matmul_node},
-    {OpType::RMS_NORM, compute_rms_norm_node},
-    {OpType::LAYERNORM, compute_layernorm_node},
-    {OpType::GROUPNORM, compute_groupnorm_node},
-    {OpType::BATCHNORM, compute_batchnorm_node},
-    {OpType::ROPE, compute_rope_node},
-    {OpType::ROPE_GPTJ, compute_rope_gptj_node},
-    {OpType::SOFTMAX, compute_softmax_node},
-    {OpType::ATTENTION, compute_attention_node},
-    {OpType::ATTENTION_INT8_HYBRID, compute_attention_int8_hybrid_node},
-    {OpType::REL_POS_BIAS, compute_rel_pos_bias_node},
-    {OpType::CONV1D_CAUSAL, compute_conv1d_causal_node},
-    {OpType::CONV1D_K3, compute_conv1d_k3_node},
-    {OpType::CONV1D_K7S3, compute_conv1d_k7s3_node},
-    {OpType::CONV1D, compute_conv1d_node},
-    {OpType::CONV1D_SAME_DEPTHWISE_K9, compute_conv1d_same_depthwise_k9_node},
-    {OpType::CONV1D_POINTWISE, compute_conv1d_pointwise_node},
-    {OpType::CONV2D_K3S2P1, compute_conv2d_k3s2p1_node},
-    {OpType::CONV2D_DEPTHWISE_K3S2P1, compute_conv2d_depthwise_k3s2p1_node},
-    {OpType::CONV2D_POINTWISE_1X1, compute_conv2d_pointwise_1x1_node},
-    {OpType::CONV2D_K3S1P1, compute_conv2d_k3s1p1_node},
-    {OpType::GLU, compute_glu_node},
-    {OpType::TRANSPOSE, compute_transpose_node},
-    {OpType::GATHER, compute_gather_node},
-    {OpType::SLICE, compute_slice_node},
-    {OpType::EMBEDDING, compute_embedding_node},
-    {OpType::CONCAT, compute_concat_node},
-    {OpType::CAT, compute_cat_node},
-    {OpType::INDEX, compute_index_node},
-    {OpType::BILINEAR_INTERPOLATION, compute_bilinear_interpolation_node},
-    {OpType::SAMPLE, compute_sample_node},
-    {OpType::TOPK, compute_topk_node},
-    {OpType::SCATTER_TOPK, compute_scatter_topk_node},
-    {OpType::MOE_LAYER, compute_moe_layer_node},
-    {OpType::PERSISTENT, compute_persistent_node},
-    {OpType::QUANTIZE_ACTIVATIONS, compute_quantize_activations_node},
-    {OpType::LSTM_CELL, compute_lstm_cell_node},
-    {OpType::GATED_DELTANET_DECODE, compute_gated_deltanet_decode_node},
-    {OpType::GATED_DELTANET_PREFILL, compute_gated_deltanet_prefill_node},
-    {OpType::STFT, compute_stft_node},
-    {OpType::ALTUP_PREDICT, compute_altup_predict_node},
-    {OpType::ALTUP_CORRECT, compute_altup_correct_node},
-    {OpType::GAUSSIAN_TOPK, compute_gaussian_topk_node},
-    {OpType::MAXPOOL1D, compute_maxpool1d_node},
-    {OpType::BILSTM_SEQUENCE, compute_bilstm_sequence_node},
-    {OpType::STATS_POOL, compute_stats_pool_node},
-    {OpType::WEIGHTED_STATS_POOL, compute_weighted_stats_pool_node},
-};
+static constexpr int OP_TYPE_COUNT = static_cast<int>(OpType::WEIGHTED_STATS_POOL) + 1;
+static ComputeFn dispatch_flat[OP_TYPE_COUNT] = {};
+
+static bool init_dispatch() {
+    dispatch_flat[static_cast<int>(OpType::ADD)] = compute_binary_op_node;
+    dispatch_flat[static_cast<int>(OpType::ADD_CLIPPED)] = compute_binary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SUBTRACT)] = compute_binary_op_node;
+    dispatch_flat[static_cast<int>(OpType::MULTIPLY)] = compute_binary_op_node;
+    dispatch_flat[static_cast<int>(OpType::DIVIDE)] = compute_binary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_ADD)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_SUBTRACT)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_MULTIPLY)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_DIVIDE)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_EXP)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_SQRT)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_COS)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_SIN)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::SCALAR_LOG)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::ABS)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::POW)] = compute_unary_op_node;
+    dispatch_flat[static_cast<int>(OpType::RELU)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::SILU)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::GELU)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::GELU_ERF)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::SIGMOID)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::TANH)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::LEAKY_RELU)] = compute_activation_node;
+    dispatch_flat[static_cast<int>(OpType::SUM)] = compute_reduce_node;
+    dispatch_flat[static_cast<int>(OpType::MEAN)] = compute_reduce_node;
+    dispatch_flat[static_cast<int>(OpType::VARIANCE)] = compute_reduce_node;
+    dispatch_flat[static_cast<int>(OpType::MIN)] = compute_reduce_node;
+    dispatch_flat[static_cast<int>(OpType::MAX)] = compute_reduce_node;
+    dispatch_flat[static_cast<int>(OpType::FLATTEN)] = compute_reshape_node;
+    dispatch_flat[static_cast<int>(OpType::VIEW)] = compute_reshape_node;
+    dispatch_flat[static_cast<int>(OpType::RESHAPE)] = compute_reshape_node;
+    dispatch_flat[static_cast<int>(OpType::PRECISION_CAST)] = compute_precision_cast_node;
+    dispatch_flat[static_cast<int>(OpType::MATMUL)] = compute_matmul_node;
+    dispatch_flat[static_cast<int>(OpType::RMS_NORM)] = compute_rms_norm_node;
+    dispatch_flat[static_cast<int>(OpType::LAYERNORM)] = compute_layernorm_node;
+    dispatch_flat[static_cast<int>(OpType::GROUPNORM)] = compute_groupnorm_node;
+    dispatch_flat[static_cast<int>(OpType::BATCHNORM)] = compute_batchnorm_node;
+    dispatch_flat[static_cast<int>(OpType::ROPE)] = compute_rope_node;
+    dispatch_flat[static_cast<int>(OpType::ROPE_GPTJ)] = compute_rope_gptj_node;
+    dispatch_flat[static_cast<int>(OpType::SOFTMAX)] = compute_softmax_node;
+    dispatch_flat[static_cast<int>(OpType::ATTENTION)] = compute_attention_node;
+    dispatch_flat[static_cast<int>(OpType::ATTENTION_INT8_HYBRID)] = compute_attention_int8_hybrid_node;
+    dispatch_flat[static_cast<int>(OpType::REL_POS_BIAS)] = compute_rel_pos_bias_node;
+    dispatch_flat[static_cast<int>(OpType::CONV1D_CAUSAL)] = compute_conv1d_causal_node;
+    dispatch_flat[static_cast<int>(OpType::CONV1D_K3)] = compute_conv1d_k3_node;
+    dispatch_flat[static_cast<int>(OpType::CONV1D_K7S3)] = compute_conv1d_k7s3_node;
+    dispatch_flat[static_cast<int>(OpType::CONV1D)] = compute_conv1d_node;
+    dispatch_flat[static_cast<int>(OpType::CONV1D_SAME_DEPTHWISE_K9)] = compute_conv1d_same_depthwise_k9_node;
+    dispatch_flat[static_cast<int>(OpType::CONV1D_POINTWISE)] = compute_conv1d_pointwise_node;
+    dispatch_flat[static_cast<int>(OpType::CONV2D_K3S2P1)] = compute_conv2d_k3s2p1_node;
+    dispatch_flat[static_cast<int>(OpType::CONV2D_DEPTHWISE_K3S2P1)] = compute_conv2d_depthwise_k3s2p1_node;
+    dispatch_flat[static_cast<int>(OpType::CONV2D_POINTWISE_1X1)] = compute_conv2d_pointwise_1x1_node;
+    dispatch_flat[static_cast<int>(OpType::CONV2D_K3S1P1)] = compute_conv2d_k3s1p1_node;
+    dispatch_flat[static_cast<int>(OpType::GLU)] = compute_glu_node;
+    dispatch_flat[static_cast<int>(OpType::TRANSPOSE)] = compute_transpose_node;
+    dispatch_flat[static_cast<int>(OpType::GATHER)] = compute_gather_node;
+    dispatch_flat[static_cast<int>(OpType::SLICE)] = compute_slice_node;
+    dispatch_flat[static_cast<int>(OpType::EMBEDDING)] = compute_embedding_node;
+    dispatch_flat[static_cast<int>(OpType::CONCAT)] = compute_concat_node;
+    dispatch_flat[static_cast<int>(OpType::CAT)] = compute_cat_node;
+    dispatch_flat[static_cast<int>(OpType::INDEX)] = compute_index_node;
+    dispatch_flat[static_cast<int>(OpType::BILINEAR_INTERPOLATION)] = compute_bilinear_interpolation_node;
+    dispatch_flat[static_cast<int>(OpType::SAMPLE)] = compute_sample_node;
+    dispatch_flat[static_cast<int>(OpType::TOPK)] = compute_topk_node;
+    dispatch_flat[static_cast<int>(OpType::SCATTER_TOPK)] = compute_scatter_topk_node;
+    dispatch_flat[static_cast<int>(OpType::MOE_LAYER)] = compute_moe_layer_node;
+    dispatch_flat[static_cast<int>(OpType::PERSISTENT)] = compute_persistent_node;
+    dispatch_flat[static_cast<int>(OpType::QUANTIZE_ACTIVATIONS)] = compute_quantize_activations_node;
+    dispatch_flat[static_cast<int>(OpType::LSTM_CELL)] = compute_lstm_cell_node;
+    dispatch_flat[static_cast<int>(OpType::GATED_DELTANET_DECODE)] = compute_gated_deltanet_decode_node;
+    dispatch_flat[static_cast<int>(OpType::GATED_DELTANET_PREFILL)] = compute_gated_deltanet_prefill_node;
+    dispatch_flat[static_cast<int>(OpType::STFT)] = compute_stft_node;
+    dispatch_flat[static_cast<int>(OpType::ALTUP_PREDICT)] = compute_altup_predict_node;
+    dispatch_flat[static_cast<int>(OpType::ALTUP_CORRECT)] = compute_altup_correct_node;
+    dispatch_flat[static_cast<int>(OpType::GAUSSIAN_TOPK)] = compute_gaussian_topk_node;
+    dispatch_flat[static_cast<int>(OpType::MAXPOOL1D)] = compute_maxpool1d_node;
+    dispatch_flat[static_cast<int>(OpType::BILSTM_SEQUENCE)] = compute_bilstm_sequence_node;
+    dispatch_flat[static_cast<int>(OpType::STATS_POOL)] = compute_stats_pool_node;
+    dispatch_flat[static_cast<int>(OpType::WEIGHTED_STATS_POOL)] = compute_weighted_stats_pool_node;
+    return true;
+}
+
+static const bool dispatch_initialized = init_dispatch();
+
+static inline void dispatch_node(GraphNode& node, const nodes_vector& nodes, const node_index_map_t& node_index_map) {
+    int op = static_cast<int>(node.op_type);
+    ComputeFn fn = dispatch_flat[op];
+    if (fn) {
+        fn(node, nodes, node_index_map);
+    } else {
+        throw std::runtime_error("Unknown operation type: " + std::to_string(op));
+    }
+}
 
 static const char* op_type_names[] = {
     "INPUT", "PRECISION_CAST",
@@ -194,13 +211,7 @@ static const char* get_op_name(OpType op) {
 
 void compute_node_optimized(GraphNode& node, const nodes_vector& nodes, const node_index_map_t& node_index_map) {
     if (node.op_type == OpType::INPUT) return;
-
-    auto it = dispatch_table.find(node.op_type);
-    if (it != dispatch_table.end()) {
-        it->second(node, nodes, node_index_map);
-    } else {
-        throw std::runtime_error("Unknown operation type: " + std::to_string(static_cast<int>(node.op_type)));
-    }
+    dispatch_node(node, nodes, node_index_map);
 }
 
 void CactusGraph::set_input(size_t node_id, const void* data, Precision) {
@@ -248,9 +259,42 @@ void* CactusGraph::get_output(size_t node_id) {
     return buffer.get_data();
 }
 
+static bool check_debug_env() {
+    const char* v1 = std::getenv("CACTUS_CAPTURE_ENABLE");
+    const char* v2 = std::getenv("CACTUS_CAPTURE_STDOUT");
+    const char* v3 = std::getenv("CACTUS_CAPTURE_FILE");
+    const char* v4 = std::getenv("CACTUS_CAPTURE_DIR");
+    const char* v5 = std::getenv("CACTUS_PROFILE_FILE");
+    const char* v6 = std::getenv("CACTUS_PROFILE");
+    return (v1 && v1[0] != '0') || (v2 && v2[0] != '0') ||
+           (v3 && v3[0]) || (v4 && v4[0]) || (v5 && v5[0]) || (v6 && v6[0]);
+}
+
 void CactusGraph::execute(const std::string& profile_file) {
-    std::vector<size_t> last_use(nodes_.size(), 0);
-    for (size_t i = 0; i < nodes_.size(); ++i) {
+    BufferPool& pool = buffer_pool_;
+    const size_t n = nodes_.size();
+
+    bool need_debug = !profile_file.empty();
+    if (!need_debug) {
+        static const bool env_debug = check_debug_env();
+        need_debug = env_debug;
+    }
+
+    if (!need_debug) {
+        for (size_t i = 0; i < n; ++i) {
+            auto& node = nodes_[i];
+            if (node->op_type == OpType::INPUT) continue;
+            node->output_buffer.allocate_from_pool(pool);
+            dispatch_node(*node, nodes_, node_index_map_);
+            if (node->op_type == OpType::PERSISTENT) {
+                populated_node_ids_.insert(node->id);
+            }
+        }
+        return;
+    }
+
+    std::vector<size_t> last_use(n, 0);
+    for (size_t i = 0; i < n; ++i) {
         for (size_t input_id : nodes_[i]->input_ids) {
             auto it = node_index_map_.find(input_id);
             if (it != node_index_map_.end()) {
@@ -258,8 +302,6 @@ void CactusGraph::execute(const std::string& profile_file) {
             }
         }
     }
-
-    BufferPool& pool = buffer_pool_;
 
     auto get_env_int = [](const char* name, int fallback) -> int {
         const char* val = std::getenv(name);
@@ -317,7 +359,7 @@ void CactusGraph::execute(const std::string& profile_file) {
         *out << std::string(72, '-') << std::endl;
     }
 
-    for (size_t node_idx = 0; node_idx < nodes_.size(); ++node_idx) {
+    for (size_t node_idx = 0; node_idx < n; ++node_idx) {
         auto& node = nodes_[node_idx];
 
         if (node->op_type != OpType::INPUT) {
@@ -326,16 +368,12 @@ void CactusGraph::execute(const std::string& profile_file) {
 
         if (enable_profiling && node->op_type != OpType::INPUT) {
             auto start = std::chrono::high_resolution_clock::now();
-
-            compute_node_optimized(*node, nodes_, node_index_map_);
-            
+            dispatch_node(*node, nodes_, node_index_map_);
             if (node->op_type == OpType::PERSISTENT) {
                 populated_node_ids_.insert(node->id);
             }
-
             auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-            double ms = duration.count() / 1000.0;
+            double ms = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
 
             std::string shape_str = "[";
             for (size_t i = 0; i < node->output_buffer.shape.size(); ++i) {
@@ -344,102 +382,11 @@ void CactusGraph::execute(const std::string& profile_file) {
             }
             shape_str += "]";
 
-            std::string values_str = "";
-            if (node->output_buffer.get_data()) {
-                size_t num_values = std::min(size_t(5), node->output_buffer.total_size);
-                values_str = " values=[";
-
-                if (node->output_buffer.precision == Precision::FP32) {
-                    if (node->op_type == OpType::SAMPLE) {
-                        uint32_t* uint32_data = reinterpret_cast<uint32_t*>(node->output_buffer.get_data());
-                        for (size_t i = 0; i < num_values; ++i) {
-                            if (i > 0) values_str += ",";
-                            values_str += std::to_string(uint32_data[i]);
-                        }
-                    } else {
-                        float* float_data = reinterpret_cast<float*>(node->output_buffer.get_data());
-                        for (size_t i = 0; i < num_values; ++i) {
-                            if (i > 0) values_str += ",";
-                            values_str += std::to_string(float_data[i]).substr(0, 6);
-                        }
-                    }
-                } else if (node->output_buffer.precision == Precision::FP16) {
-                    __fp16* fp16_data = reinterpret_cast<__fp16*>(node->output_buffer.get_data());
-                    for (size_t i = 0; i < num_values; ++i) {
-                        if (i > 0) values_str += ",";
-                        values_str += std::to_string(static_cast<float>(fp16_data[i])).substr(0, 6);
-                    }
-                } else if (node->output_buffer.precision == Precision::INT8) {
-                    int8_t* int8_data = reinterpret_cast<int8_t*>(node->output_buffer.get_data());
-                    for (size_t i = 0; i < num_values; ++i) {
-                        if (i > 0) values_str += ",";
-                        values_str += std::to_string(static_cast<int>(int8_data[i]));
-                    }
-                }
-
-                if (node->output_buffer.total_size > 5) {
-                    values_str += ",...";
-                }
-                values_str += "]";
-            }
-
-            std::string weights_str = "";
-            if ((node->op_type == OpType::RMS_NORM || node->op_type == OpType::MATMUL ||
-                 node->op_type == OpType::GATHER || node->op_type == OpType::EMBEDDING ||
-                 node->op_type == OpType::ATTENTION || node->op_type == OpType::CONCAT) &&
-                node->input_ids.size() >= 2) {
-                const auto& weight_node = nodes_[node_index_map_.at(node->input_ids[1])];
-                if (weight_node->output_buffer.get_data()) {
-                    size_t num_values = std::min(size_t(5), weight_node->output_buffer.total_size);
-                    weights_str = " weights=[";
-
-                    if (weight_node->output_buffer.precision == Precision::FP32) {
-                        const float* float_data = weight_node->output_buffer.data_as<float>();
-                        for (size_t i = 0; i < num_values; ++i) {
-                            if (i > 0) weights_str += ",";
-                            weights_str += std::to_string(float_data[i]).substr(0, 6);
-                        }
-                    } else if (weight_node->output_buffer.precision == Precision::FP16) {
-                        const __fp16* fp16_data = weight_node->output_buffer.data_as<__fp16>();
-                        for (size_t i = 0; i < num_values; ++i) {
-                            if (i > 0) weights_str += ",";
-                            weights_str += std::to_string(static_cast<float>(fp16_data[i])).substr(0, 6);
-                        }
-                    } else if (weight_node->output_buffer.precision == Precision::INT8) {
-                        const int8_t* int8_data = weight_node->output_buffer.data_as<int8_t>();
-                        for (size_t i = 0; i < num_values; ++i) {
-                            if (i > 0) weights_str += ",";
-                            weights_str += std::to_string(static_cast<int>(int8_data[i]));
-                        }
-                    } else if (weight_node->output_buffer.precision == Precision::INT4) {
-                        const uint8_t* packed = weight_node->output_buffer.data_as<uint8_t>();
-                        int8x16_t high, low;
-                        unpack_int4_as_int8x16x2(packed, high, low);
-                        int8_t low_lanes[16], high_lanes[16];
-                        vst1q_s8(low_lanes, low);
-                        vst1q_s8(high_lanes, high);
-
-                        for (size_t i = 0; i < num_values; ++i) {
-                            if (i > 0) weights_str += ",";
-                            int8_t val = (i < 16) ? low_lanes[i] : high_lanes[i - 16];
-                            weights_str += std::to_string(static_cast<int>(val));
-                        }
-                    }
-
-                    if (weight_node->output_buffer.total_size > 5) {
-                        weights_str += ",...";
-                    }
-                    weights_str += "]";
-                }
-            }
-
             *out << std::left << std::setw(24) << get_op_name(node->op_type)
                  << std::setw(12) << std::fixed << std::setprecision(3) << ms
-                 << std::setw(20) << shape_str
-                 << values_str << weights_str << std::endl;
+                 << std::setw(20) << shape_str << std::endl;
         } else {
-            compute_node_optimized(*node, nodes_, node_index_map_);
-            
+            dispatch_node(*node, nodes_, node_index_map_);
             if (node->op_type == OpType::PERSISTENT) {
                 populated_node_ids_.insert(node->id);
             }

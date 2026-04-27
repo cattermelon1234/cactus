@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../cactus_kernels.h"
-#include "../src/utils.h"
+#include "../src/threading.h"
 #include <string>
 #include <iostream>
 #include <iomanip>

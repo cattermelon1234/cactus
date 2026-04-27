@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
-#include "../graph/graph.h"
+#include "../cactus_graph.h"
 
 namespace {
 

@@ -1,5 +1,5 @@
 #include "../cactus_kernels.h"
-#include "utils.h"
+#include "threading.h"
 #include <arm_neon.h>
 #include <algorithm>
 #include <vector>

@@ -73,10 +73,6 @@ inline bool cpu_has_i8mm() {
 #endif
 }
 
-// Cephes-style 6th-order polynomial exp(x) approximation.
-// Decomposes x = n*ln2 + r where n is integer and r ∈ [0, ln2).
-// Then exp(x) = 2^n * exp(r) with exp(r) via minimax polynomial.
-// Relative error < 3e-7 across [-87, 87].
 inline float32x4_t fast_exp_f32x4(float32x4_t x) {
     const float32x4_t log2e = vdupq_n_f32(1.44269504088896341f);
     const float32x4_t ln2_hi = vdupq_n_f32(6.93145751953125e-1f);
@@ -93,15 +89,12 @@ inline float32x4_t fast_exp_f32x4(float32x4_t x) {
     x = vmaxq_f32(x, vdupq_n_f32(-87.0f));
     x = vminq_f32(x, vdupq_n_f32(87.0f));
 
-    // n = round(x / ln2)
     float32x4_t z = vmulq_f32(x, log2e);
     float32x4_t n = vrndnq_f32(z);
 
-    // r = x - n * ln2 (Cody-Waite reduction for precision)
     float32x4_t r = vfmsq_f32(x, n, ln2_hi);
     r = vfmsq_f32(r, n, ln2_lo);
 
-    // exp(r) ≈ 1 + r + r²/2 + ... via Horner
     float32x4_t r2 = vmulq_f32(r, r);
     float32x4_t p = p0;
     p = vfmaq_f32(p1, p, r);
@@ -112,7 +105,6 @@ inline float32x4_t fast_exp_f32x4(float32x4_t x) {
     p = vfmaq_f32(r, p, r2);
     p = vaddq_f32(p, one);
 
-    // 2^n via integer bit manipulation
     int32x4_t ni = vcvtq_s32_f32(n);
     int32x4_t exp_bits = vshlq_n_s32(vaddq_s32(ni, vdupq_n_s32(127)), 23);
     float32x4_t scale = vreinterpretq_f32_s32(exp_bits);
@@ -120,9 +112,6 @@ inline float32x4_t fast_exp_f32x4(float32x4_t x) {
     return vmulq_f32(p, scale);
 }
 
-// Cephes-style 13/6 rational tanh approximation (same coefficients as Eigen).
-// Constants are stored as static splatted arrays so the compiler emits a single
-// pc-relative `ldr q` per load.
 alignas(16) inline constexpr float kFastTanhAlpha[7][4] = {
     { 4.89352455891786e-03f, 4.89352455891786e-03f, 4.89352455891786e-03f, 4.89352455891786e-03f },
     { 6.37261928875436e-04f, 6.37261928875436e-04f, 6.37261928875436e-04f, 6.37261928875436e-04f },

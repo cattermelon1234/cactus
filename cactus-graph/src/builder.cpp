@@ -1,4 +1,4 @@
-#include "graph.h"
+#include "../cactus_graph.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>

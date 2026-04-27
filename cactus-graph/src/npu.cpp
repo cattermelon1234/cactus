@@ -1,7 +1,7 @@
 // NPU stub implementation for non-Apple platforms
 // On Apple platforms, npu_ane.mm provides the real implementation
 
-#include "npu.h"
+#include "../cactus_graph.h"
 
 namespace cactus {
 namespace npu {

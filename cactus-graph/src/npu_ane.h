@@ -1,7 +1,7 @@
 #ifndef CACTUS_NPU_ANE_H
 #define CACTUS_NPU_ANE_H
 
-#include "npu.h"
+#include "../cactus_graph.h"
 
 #if defined(__APPLE__)
 #define CACTUS_HAS_ANE 1

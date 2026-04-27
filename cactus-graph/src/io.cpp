@@ -1,5 +1,5 @@
-#include "graph.h"
-#include "graph_param_io.h"
+#include "../cactus_graph.h"
+#include "param_io.h"
 #include <fstream>
 #include <stdexcept>
 #include <sys/mman.h>

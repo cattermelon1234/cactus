@@ -1,6 +1,7 @@
-#ifndef GRAPH_H
-#define GRAPH_H
+#ifndef CACTUS_GRAPH_H
+#define CACTUS_GRAPH_H
 
+#include "cactus_kernels.h"
 #include <vector>
 #include <memory>
 #include <unordered_map>
@@ -17,13 +18,7 @@
 
 namespace cactus {
 
-enum class LogLevel {
-    DEBUG = 0,
-    INFO = 1,
-    WARN = 2,
-    ERROR = 3,
-    NONE = 4
-};
+enum class LogLevel { DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3, NONE = 4 };
 
 class Logger {
 public:
@@ -42,18 +37,14 @@ public:
 
     void log(LogLevel level, const std::string& component, const std::string& message) {
         if (level < min_level_) return;
-
         std::lock_guard<std::mutex> lock(mutex_);
-
         if (callback_) {
             callback_(level, component, message);
         } else {
-            std::cerr << "[" << level_string(level) << "] [" << component << "] " << message << std::endl;
+            const char* names[] = {"DEBUG", "INFO", "WARN", "ERROR"};
+            std::cerr << "[" << names[static_cast<int>(level)] << "] [" << component << "] " << message << std::endl;
         }
-
-        if (level == LogLevel::ERROR) {
-            last_error_ = "[" + component + "] " + message;
-        }
+        if (level == LogLevel::ERROR) last_error_ = "[" + component + "] " + message;
     }
 
     const std::string& last_error() const { return last_error_; }
@@ -61,17 +52,6 @@ public:
 
 private:
     Logger() : min_level_(LogLevel::WARN) {}
-
-    static const char* level_string(LogLevel level) {
-        switch (level) {
-            case LogLevel::DEBUG: return "DEBUG";
-            case LogLevel::INFO:  return "INFO";
-            case LogLevel::WARN:  return "WARN";
-            case LogLevel::ERROR: return "ERROR";
-            default: return "?";
-        }
-    }
-
     LogLevel min_level_;
     std::mutex mutex_;
     std::string last_error_;
@@ -94,31 +74,9 @@ private:
 #define CACTUS_LOG_WARN(component, msg)  CACTUS_LOG(cactus::LogLevel::WARN, component, msg)
 #define CACTUS_LOG_ERROR(component, msg) CACTUS_LOG(cactus::LogLevel::ERROR, component, msg)
 
-namespace GraphFile {
-    class MappedFile;
-    struct SerializedGraph;
-}
+enum class ComputeBackend { CPU, NPU };
 
-enum class Precision {
-    INT8,
-    FP16,
-    FP32,
-    INT4 
-};
-
-enum class ComputeBackend {
-    CPU,
-    NPU
-};
-
-enum class Activation {
-    SILU,
-    GELU,
-    GELU_ERF,
-    RELU,
-    SIGMOID,
-    TANH
-};
+enum class Activation { SILU, GELU, GELU_ERF, RELU, SIGMOID, TANH };
 
 enum class OpType {
     INPUT, PRECISION_CAST,
@@ -127,29 +85,22 @@ enum class OpType {
     MATMUL, TRANSPOSE, RESHAPE, SLICE, GATHER, EMBEDDING,
     BILINEAR_INTERPOLATION,
     SUM, MEAN, VARIANCE, MIN, MAX,
-    RMS_NORM, ROPE, ROPE_GPTJ, SOFTMAX, ATTENTION, ATTENTION_INT8_HYBRID, REL_POS_BIAS, CONV1D_CAUSAL, CONV1D_K3, CONV1D_K7S3, CONV1D, CONV1D_SAME_DEPTHWISE_K9, CONV1D_POINTWISE, CONV2D_K3S2P1, CONV2D_DEPTHWISE_K3S2P1, CONV2D_POINTWISE_1X1, GLU, BATCHNORM,
-    SCALAR_ADD, SCALAR_SUBTRACT, SCALAR_MULTIPLY, SCALAR_DIVIDE, SCALAR_EXP, SCALAR_SQRT, SCALAR_COS, SCALAR_SIN, SCALAR_LOG,
+    RMS_NORM, ROPE, ROPE_GPTJ, SOFTMAX,
+    ATTENTION, ATTENTION_INT8_HYBRID, REL_POS_BIAS,
+    CONV1D_CAUSAL, CONV1D_K3, CONV1D_K7S3, CONV1D,
+    CONV1D_SAME_DEPTHWISE_K9, CONV1D_POINTWISE,
+    CONV2D_K3S2P1, CONV2D_DEPTHWISE_K3S2P1, CONV2D_POINTWISE_1X1,
+    GLU, BATCHNORM,
+    SCALAR_ADD, SCALAR_SUBTRACT, SCALAR_MULTIPLY, SCALAR_DIVIDE,
+    SCALAR_EXP, SCALAR_SQRT, SCALAR_COS, SCALAR_SIN, SCALAR_LOG,
     RELU, SILU, GELU, GELU_ERF, SIGMOID, TANH,
     SAMPLE, CONCAT, CAT,
-    SCATTER_TOPK,
-    TOPK, LAYERNORM, GROUPNORM,
-    MOE_LAYER,
-    INDEX,
-    PERSISTENT,
-    QUANTIZE_ACTIVATIONS,
-    LSTM_CELL,
-    GATED_DELTANET_DECODE,
-    GATED_DELTANET_PREFILL,
-    STFT,
-    ALTUP_PREDICT,
-    ALTUP_CORRECT,
-    GAUSSIAN_TOPK,
-    MAXPOOL1D,
-    BILSTM_SEQUENCE,
-    LEAKY_RELU,
-    CONV2D_K3S1P1,
-    STATS_POOL,
-    WEIGHTED_STATS_POOL
+    SCATTER_TOPK, TOPK, LAYERNORM, GROUPNORM,
+    MOE_LAYER, INDEX, PERSISTENT, QUANTIZE_ACTIVATIONS,
+    LSTM_CELL, GATED_DELTANET_DECODE, GATED_DELTANET_PREFILL,
+    STFT, ALTUP_PREDICT, ALTUP_CORRECT, GAUSSIAN_TOPK,
+    MAXPOOL1D, BILSTM_SEQUENCE, LEAKY_RELU,
+    CONV2D_K3S1P1, STATS_POOL, WEIGHTED_STATS_POOL
 };
 
 struct PrecisionTraits {
@@ -158,7 +109,7 @@ struct PrecisionTraits {
             case Precision::INT8: return 1;
             case Precision::FP16: return 2;
             case Precision::FP32: return 4;
-            case Precision::INT4: return 1; 
+            case Precision::INT4: return 1;
         }
         return 1;
     }
@@ -173,30 +124,18 @@ struct PrecisionTraits {
     static size_t byte_offset_of(Precision prec, size_t element_offset) {
         switch (prec) {
             case Precision::INT4:
-                assert(element_offset % 32 == 0 && "INT4 byte offset must be group-aligned (multiple of 32)");
+                assert(element_offset % 32 == 0);
                 return element_offset / 2;
             default: return element_offset * size_of(prec);
         }
     }
 
     static constexpr bool is_integer(Precision prec) {
-        switch (prec) {
-            case Precision::INT8: return true;
-            case Precision::INT4: return true;
-            case Precision::FP16: return false;
-            case Precision::FP32: return false;
-        }
-        return true;
+        return prec == Precision::INT8 || prec == Precision::INT4;
     }
 
     static constexpr bool is_floating_point(Precision prec) {
-        switch (prec) {
-            case Precision::INT8: return false;
-            case Precision::INT4: return false;
-            case Precision::FP16: return true;
-            case Precision::FP32: return true;
-        }
-        return false;
+        return prec == Precision::FP16 || prec == Precision::FP32;
     }
 };
 
@@ -209,23 +148,44 @@ namespace Quantization {
     void fp16_to_int8(const __fp16* src, int8_t* dst, size_t count, float scale = 1.0f);
 }
 
+struct BroadcastInfo {
+    std::vector<size_t> output_shape;
+    bool needs_broadcasting;
+    static BroadcastInfo compute(const std::vector<size_t>& lhs, const std::vector<size_t>& rhs);
+};
+
 struct TensorConfig {
     Precision default_precision = Precision::INT8;
     Precision compute_precision = Precision::INT8;
     Precision output_precision = Precision::INT8;
     bool auto_mixed_precision = false;
-    
     static TensorConfig& global();
 };
 
-struct BroadcastInfo {
-    std::vector<size_t> output_shape;
-    bool needs_broadcasting;
+class BufferPool {
+public:
+    BufferPool() = default;
+    ~BufferPool() = default;
+    BufferPool(const BufferPool&) = delete;
+    BufferPool& operator=(const BufferPool&) = delete;
+    BufferPool(BufferPool&&) noexcept = default;
+    BufferPool& operator=(BufferPool&&) noexcept = default;
 
-    static BroadcastInfo compute(const std::vector<size_t>& lhs, const std::vector<size_t>& rhs);
+    char* acquire(size_t byte_size);
+    void release(char* ptr, size_t byte_size);
+    void clear();
+
+    size_t active_bytes() const { return active_bytes_; }
+    size_t pool_bytes() const { return pool_bytes_; }
+    size_t peak_bytes() const { return peak_bytes_; }
+
+private:
+    std::unordered_map<size_t, std::vector<std::unique_ptr<char[]>>> free_buffers_;
+    size_t active_bytes_ = 0;
+    size_t pool_bytes_ = 0;
+    size_t peak_bytes_ = 0;
+    size_t round_up_size(size_t size) const;
 };
-
-class BufferPool;
 
 struct BufferDesc {
     std::vector<size_t> shape;
@@ -242,7 +202,7 @@ struct BufferDesc {
     std::unique_ptr<char[]> owned_scales;
 
     bool is_interleaved = false;
-    size_t original_N = 0;  
+    size_t original_N = 0;
 
     void* activation_scales_data = nullptr;
     std::unique_ptr<char[]> owned_activation_scales;
@@ -251,62 +211,38 @@ struct BufferDesc {
     BufferDesc();
     BufferDesc(const std::vector<size_t>& s, Precision prec = Precision::INT8);
     ~BufferDesc();
-
     BufferDesc(BufferDesc&& other) noexcept;
     BufferDesc& operator=(BufferDesc&& other) noexcept;
-
     BufferDesc(const BufferDesc&) = delete;
     BufferDesc& operator=(const BufferDesc&) = delete;
 
     void* get_data();
     const void* get_data() const;
 
-    template<typename T>
-    T* data_as() { return static_cast<T*>(get_data()); }
+    template<typename T> T* data_as() { return static_cast<T*>(get_data()); }
+    template<typename T> const T* data_as() const { return static_cast<const T*>(get_data()); }
 
-    template<typename T>
-    const T* data_as() const { return static_cast<const T*>(get_data()); }
-
-    const __fp16* scales_as_fp16() const {
-        return reinterpret_cast<const __fp16*>(scales_data);
-    }
-
-    bool is_grouped_int8() const {
-        return precision == Precision::INT8 && group_size > 0;
-    }
-
-    bool is_grouped_int4() const {
-        return precision == Precision::INT4 && group_size > 0;
-    }
+    const __fp16* scales_as_fp16() const { return reinterpret_cast<const __fp16*>(scales_data); }
+    bool is_grouped_int8() const { return precision == Precision::INT8 && group_size > 0; }
+    bool is_grouped_int4() const { return precision == Precision::INT4 && group_size > 0; }
 
     void set_grouped_scales(size_t gs, size_t ng, void* scales_ptr) {
-        group_size = gs;
-        num_groups = ng;
-        scales_data = scales_ptr;
+        group_size = gs; num_groups = ng; scales_data = scales_ptr;
     }
-
     void set_interleaved(bool interleaved, size_t orig_n) {
-        is_interleaved = interleaved;
-        original_N = orig_n;
+        is_interleaved = interleaved; original_N = orig_n;
     }
 
-    bool has_activation_scales() const {
-        return activation_scales_data != nullptr && num_rows_for_activation_scales > 0;
-    }
-    const float* activation_scales_as_float() const {
-        return reinterpret_cast<const float*>(activation_scales_data);
-    }
-    float* activation_scales_as_float() {
-        return reinterpret_cast<float*>(activation_scales_data);
-    }
+    bool has_activation_scales() const { return activation_scales_data != nullptr && num_rows_for_activation_scales > 0; }
+    const float* activation_scales_as_float() const { return reinterpret_cast<const float*>(activation_scales_data); }
+    float* activation_scales_as_float() { return reinterpret_cast<float*>(activation_scales_data); }
     void allocate_activation_scales(size_t num_rows) {
         num_rows_for_activation_scales = num_rows;
         owned_activation_scales = std::make_unique<char[]>(num_rows * sizeof(float));
         activation_scales_data = owned_activation_scales.get();
     }
     void set_activation_scales(void* scales_ptr, size_t num_rows) {
-        activation_scales_data = scales_ptr;
-        num_rows_for_activation_scales = num_rows;
+        activation_scales_data = scales_ptr; num_rows_for_activation_scales = num_rows;
     }
 
     void allocate();
@@ -326,7 +262,7 @@ struct OpParams {
     size_t slice_start = 0;
     size_t slice_length = 0;
     size_t window_size = 0;
-    bool is_causal = true;  
+    bool is_causal = true;
     bool attention_mask_is_additive = false;
     float logit_cap = 0.0f;
     std::vector<size_t> new_shape;
@@ -343,9 +279,9 @@ struct OpParams {
     float repetition_penalty = 1.1f;
     size_t top_k = 0;
     size_t random_seed = 0;
-    
-    size_t index_value = 0;  
-    size_t num_classes = 0; 
+
+    size_t index_value = 0;
+    size_t num_classes = 0;
     size_t num_groups = 0;
     size_t dst_height = 0;
     size_t dst_width = 0;
@@ -353,7 +289,7 @@ struct OpParams {
     bool normalize_routing = false;
     size_t num_experts = 0;
     size_t num_experts_per_tok = 0;
-    bool moe_gated = true; 
+    bool moe_gated = true;
     Activation activation = Activation::SILU;
 
     std::vector<float> bias_values;
@@ -379,16 +315,17 @@ struct GraphNode {
     std::vector<size_t> input_ids;
     BufferDesc output_buffer;
     OpParams params;
-    
     GraphNode(size_t node_id, OpType type);
 };
 
 using nodes_vector = std::vector<std::unique_ptr<GraphNode>>;
 using node_index_map_t = std::unordered_map<size_t, size_t>;
 
-inline const BufferDesc& get_input(const GraphNode& node, size_t idx,
-                                   const nodes_vector& nodes,
-                                   const node_index_map_t& node_index_map) {
+inline const BufferDesc& get_input(
+    const GraphNode& node,
+    size_t idx,
+    const nodes_vector& nodes,
+    const node_index_map_t& node_index_map) {
     return nodes[node_index_map.at(node.input_ids[idx])]->output_buffer;
 }
 
@@ -411,58 +348,8 @@ void dispatch_binary_op(OpType op, const T* lhs, const T* rhs, T* output, size_t
 template<typename T>
 void dispatch_unary_op(OpType op, const T* input, T* output, size_t count, float param = 0.0f);
 
-void compute_node_optimized(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_matmul_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_transpose_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_reduce_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_fused_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_reshape_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_precision_cast_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_sample_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_scatter_topk_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_topk_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_layernorm_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_groupnorm_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_persistent_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_index_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_lstm_cell_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_gated_deltanet_decode_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_gated_deltanet_prefill_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_altup_predict_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_altup_correct_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_maxpool1d_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_bilstm_sequence_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_conv2d_k3s1p1_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_stats_pool_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-void compute_weighted_stats_pool_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map);
-
+void compute_node_optimized(GraphNode& node, const nodes_vector& nodes, const node_index_map_t& node_index_map);
 void shrink_thread_local_buffers();
-class BufferPool {
-public:
-    BufferPool() = default;
-    ~BufferPool() = default;
-
-    BufferPool(const BufferPool&) = delete;
-    BufferPool& operator=(const BufferPool&) = delete;
-    BufferPool(BufferPool&&) noexcept = default;
-    BufferPool& operator=(BufferPool&&) noexcept = default;
-
-    char* acquire(size_t byte_size);
-    void release(char* ptr, size_t byte_size);
-    void clear();
-
-    size_t active_bytes() const { return active_bytes_; }
-    size_t pool_bytes() const { return pool_bytes_; }
-    size_t peak_bytes() const { return peak_bytes_; }
-
-private:
-    std::unordered_map<size_t, std::vector<std::unique_ptr<char[]>>> free_buffers_;
-    size_t active_bytes_ = 0;
-    size_t pool_bytes_ = 0;
-    size_t peak_bytes_ = 0;
-
-    size_t round_up_size(size_t size) const;
-};
 
 namespace ValidationUtils {
     void validate_tensor_dims(const std::vector<size_t>& shape, size_t required_dims, const std::string& op_name);
@@ -470,12 +357,15 @@ namespace ValidationUtils {
     void validate_input_count(size_t actual, size_t required, const std::string& op_name);
 }
 
+namespace GraphFile {
+    class MappedFile;
+    struct SerializedGraph;
+}
 
 class CactusGraph {
 public:
     CactusGraph();
     ~CactusGraph() = default;
-
     CactusGraph(const CactusGraph&) = delete;
     CactusGraph& operator=(const CactusGraph&) = delete;
     CactusGraph(CactusGraph&&) noexcept = default;
@@ -489,17 +379,19 @@ public:
 
     void save(const std::string& path);
     static CactusGraph load(const std::string& path);
-    
+
     size_t input(const std::vector<size_t>& shape, Precision precision = Precision::INT8);
-    size_t precision_cast(size_t input, Precision target_precision);
-    size_t quantize_activations(size_t input);  
-    
+    void set_input(size_t node_id, const void* data, Precision precision);
+    void set_external_input(size_t node_id, void* data, Precision precision);
+    void* get_output(size_t node_id);
+
     size_t add(size_t input1, size_t input2);
     size_t add_clipped(size_t input1, size_t input2);
     size_t subtract(size_t input1, size_t input2);
     size_t multiply(size_t input1, size_t input2);
     size_t divide(size_t input1, size_t input2);
-    
+
+
     size_t scalar_add(size_t input, float value);
     size_t scalar_subtract(size_t input, float value);
     size_t scalar_multiply(size_t input, float value);
@@ -509,8 +401,14 @@ public:
     size_t scalar_cos(size_t input);
     size_t scalar_sin(size_t input);
     size_t scalar_log(size_t input);
-    
+
+    size_t abs(size_t input);
+    size_t pow(size_t input, float exponent);
+    size_t precision_cast(size_t input, Precision target_precision);
+    size_t quantize_activations(size_t input);
+
     size_t relu(size_t input);
+    size_t leaky_relu(size_t input, float negative_slope = 0.01f);
     size_t silu(size_t input);
     size_t gelu(size_t input);
     size_t gelu_erf(size_t input);
@@ -518,84 +416,60 @@ public:
     size_t tanh(size_t input);
     size_t glu(size_t input, int axis = -1);
 
-    size_t abs(size_t input);
-    size_t pow(size_t input, float exponent);
-    size_t view(size_t input, const std::vector<size_t>& new_shape);
-    size_t flatten(size_t input, int start_dim = 0, int end_dim = -1);
-    
-    size_t matmul(size_t input1, size_t input2, bool pretransposed_rhs = false, ComputeBackend backend = ComputeBackend::CPU);
-    size_t transpose(size_t input, ComputeBackend backend = ComputeBackend::CPU);
-    size_t transposeN(size_t input, const std::vector<size_t>& permutation, ComputeBackend backend = ComputeBackend::CPU);
-    size_t reshape(size_t input, const std::vector<size_t>& new_shape);
-    size_t slice(size_t input, int axis, size_t start, size_t length);
-    size_t index(size_t input, size_t index_value, int dim);
-    
+
     size_t sum(size_t input, int axis);
     size_t mean(size_t input, int axis);
     size_t variance(size_t input, int axis);
     size_t min(size_t input, int axis);
     size_t max(size_t input, int axis);
-    
-    size_t gather(size_t embeddings, size_t indices);
-    size_t mmap_embeddings(const std::string& filename);
-    size_t mmap_weights(const std::string& filename);
-    void set_grouped_scales(size_t node_id, size_t group_size, size_t num_groups, void* scales_ptr);
-    void set_interleaved(size_t node_id, bool interleaved, size_t original_N);
+    size_t softmax(size_t input, int axis = -1);
+    size_t topk(size_t input, size_t k);
 
-    void release_weight_pages(size_t node_id);
-    void prefetch_weight_pages(size_t node_id);
-    void release_all_weight_pages();
-    size_t embedding(const std::string& filename, size_t indices);
-    size_t embedding(size_t embedding_tensor, size_t indices);
-    size_t bilinear_interpolation(size_t pos_embeds, size_t dst_height, size_t dst_width, bool align_corners = true);
+    size_t reshape(size_t input, const std::vector<size_t>& new_shape);
+    size_t view(size_t input, const std::vector<size_t>& new_shape);
+    size_t flatten(size_t input, int start_dim = 0, int end_dim = -1);
+    size_t transpose(size_t input, ComputeBackend backend = ComputeBackend::CPU);
+    size_t transposeN(size_t input, const std::vector<size_t>& permutation, ComputeBackend backend = ComputeBackend::CPU);
+    size_t slice(size_t input, int axis, size_t start, size_t length);
+    size_t index(size_t input, size_t index_value, int dim);
+    size_t concat(size_t input1, size_t input2, int axis = 0);
+    size_t cat(const std::vector<size_t>& inputs, int axis);
 
+    size_t matmul(
+        size_t input1,
+        size_t input2,
+        bool pretransposed_rhs = false,
+        ComputeBackend backend = ComputeBackend::CPU);
+
+    size_t rms_norm(size_t input, size_t weight, float epsilon = 1e-5f);
     size_t layernorm(size_t input, size_t weight, size_t bias, float epsilon = 1e-5f);
-    size_t layernorm(size_t input, size_t weight, float epsilon = 1e-5f);  // No bias version
+    size_t layernorm(size_t input, size_t weight, float epsilon = 1e-5f);
     size_t groupnorm(size_t input, size_t weight, size_t bias, size_t num_groups = 32, float epsilon = 1e-5f);
     size_t batchnorm(size_t input, size_t weight, size_t bias, size_t running_mean, size_t running_var, int axis = 1, float epsilon = 1e-5f);
-    size_t topk(size_t input, size_t k);
-    size_t moe_layer(size_t hidden,
-                     size_t routing_probs,
-                     size_t topk_indices,
-                     const std::vector<size_t>& w1_weights,
-                     const std::vector<size_t>& w3_weights,
-                     const std::vector<size_t>& w2_weights,
-                     size_t num_experts,
-                     size_t num_experts_per_tok,
-                     bool normalize_routing,
-                     float epsilon,
-                     float routed_scaling_factor,
-                     Activation activation = Activation::SILU,
-                     size_t per_expert_scale = 0);
-    size_t moe_layer(size_t hidden,
-                     size_t routing_probs,
-                     size_t topk_indices,
-                     const std::vector<size_t>& w1_weights,
-                     const std::vector<size_t>& w2_weights,
-                     size_t num_experts,
-                     size_t num_experts_per_tok,
-                     bool normalize_routing,
-                     float epsilon,
-                     float routed_scaling_factor,
-                     Activation activation);
-    size_t rms_norm(size_t input, size_t weight, float epsilon = 1e-5f);
+
+
     size_t rope(size_t input, float theta, size_t position_offset = 0, ComputeBackend backend = ComputeBackend::CPU);
     size_t rope_gptj(size_t input, float theta, size_t position_offset = 0, size_t rot_dim = 0, ComputeBackend backend = ComputeBackend::CPU);
-    size_t softmax(size_t input, int axis = -1);
-    size_t attention(size_t query, size_t key, size_t value, float scale, bool is_causal = true, ComputeBackend backend = ComputeBackend::CPU);
-    size_t attention(size_t query, size_t key, size_t value, float scale, size_t position_offset, ComputeBackend backend = ComputeBackend::CPU);
-    size_t attention(size_t query, size_t key, size_t value, float scale, size_t position_offset, size_t window_size, ComputeBackend backend = ComputeBackend::CPU);
-    size_t attention_masked(size_t query, size_t key, size_t value, size_t mask, float scale,
-                            bool is_causal = true, ComputeBackend backend = ComputeBackend::CPU,
-                            bool additive_mask = false, size_t position_offset = 0, size_t window_size = 0,
-                            float logit_cap = 0.0f);
-    size_t rel_pos_bias(size_t query, size_t relative_key, float scale);
 
-    size_t attention_int8_hybrid(size_t query, size_t key_new, size_t value_new, float scale, size_t position_offset,
-                                 const int8_t* cached_keys, const int8_t* cached_values,
-                                 const float* k_scales, const float* v_scales,
-                                 size_t cache_len, size_t num_kv_heads, size_t head_dim,
-                                 size_t window_size = 0, size_t v_head_dim = 0);
+
+    size_t attention(size_t query, size_t key, size_t value, float scale,
+                     bool is_causal = true, ComputeBackend backend = ComputeBackend::CPU);
+    size_t attention(size_t query, size_t key, size_t value, float scale,
+                     size_t position_offset, ComputeBackend backend = ComputeBackend::CPU);
+    size_t attention(size_t query, size_t key, size_t value, float scale,
+                     size_t position_offset, size_t window_size, ComputeBackend backend = ComputeBackend::CPU);
+    size_t attention_masked(
+        size_t query, size_t key, size_t value, size_t mask, float scale,
+        bool is_causal = true, ComputeBackend backend = ComputeBackend::CPU,
+        bool additive_mask = false, size_t position_offset = 0, size_t window_size = 0,
+        float logit_cap = 0.0f);
+    size_t rel_pos_bias(size_t query, size_t relative_key, float scale);
+    size_t attention_int8_hybrid(
+        size_t query, size_t key_new, size_t value_new, float scale, size_t position_offset,
+        const int8_t* cached_keys, const int8_t* cached_values,
+        const float* k_scales, const float* v_scales,
+        size_t cache_len, size_t num_kv_heads, size_t head_dim,
+        size_t window_size = 0, size_t v_head_dim = 0);
 
     size_t conv1d_causal(size_t input, size_t weight, size_t kernel_size, size_t dilation = 1);
     size_t conv1d_k3(size_t input, size_t weight, size_t stride);
@@ -612,41 +486,71 @@ public:
     size_t conv2d_depthwise_k3s2p1(size_t input, size_t weight, size_t bias);
     size_t conv2d_pointwise_1x1(size_t input, size_t weight);
     size_t conv2d_pointwise_1x1(size_t input, size_t weight, size_t bias);
-
-    size_t lstm_cell(size_t input, size_t h_prev, size_t c_prev, size_t weight_ih, size_t weight_hh, size_t bias_ih, size_t bias_hh);
-    size_t gated_deltanet_decode(size_t query, size_t key, size_t value, size_t gate_log, size_t beta,
-                                 size_t initial_state, float scale = 0.0f);
-    size_t gated_deltanet_prefill(size_t query, size_t key, size_t value, size_t gate_log, size_t beta,
-                                  size_t initial_state, size_t chunk_size = 64, float scale = 0.0f);
+    size_t conv2d_k3s1p1(size_t input, size_t weight);
+    size_t conv2d_k3s1p1(size_t input, size_t weight, size_t bias);
     size_t stft(size_t input, size_t weight, size_t stride, size_t num_fft_bins);
+    size_t bilinear_interpolation(size_t pos_embeds, size_t dst_height, size_t dst_width, bool align_corners = true);
+    size_t maxpool1d(size_t input, size_t kernel_size, size_t stride);
+
+    // --- Recurrent ---
+
+    size_t lstm_cell(
+        size_t input, size_t h_prev, size_t c_prev,
+        size_t weight_ih, size_t weight_hh, size_t bias_ih, size_t bias_hh);
+    size_t bilstm_sequence(
+        size_t input,
+        size_t w_ih_fwd, size_t w_hh_fwd, size_t b_ih_fwd, size_t b_hh_fwd,
+        size_t w_ih_bwd, size_t w_hh_bwd, size_t b_ih_bwd, size_t b_hh_bwd);
+    size_t gated_deltanet_decode(
+        size_t query, size_t key, size_t value,
+        size_t gate_log, size_t beta, size_t initial_state, float scale = 0.0f);
+    size_t gated_deltanet_prefill(
+        size_t query, size_t key, size_t value,
+        size_t gate_log, size_t beta, size_t initial_state,
+        size_t chunk_size = 64, float scale = 0.0f);
 
     size_t altup_predict(size_t coefs, const size_t* streams, size_t num_streams);
     size_t altup_correct(size_t coefs, size_t innovation, const size_t* predictions, size_t num_predictions);
-
     size_t gaussian_topk(size_t input, float ppf);
-
-    size_t maxpool1d(size_t input, size_t kernel_size, size_t stride);
-    size_t leaky_relu(size_t input, float negative_slope = 0.01f);
-    size_t bilstm_sequence(size_t input, size_t w_ih_fwd, size_t w_hh_fwd, size_t b_ih_fwd, size_t b_hh_fwd,
-                           size_t w_ih_bwd, size_t w_hh_bwd, size_t b_ih_bwd, size_t b_hh_bwd);
-    size_t conv2d_k3s1p1(size_t input, size_t weight);
-    size_t conv2d_k3s1p1(size_t input, size_t weight, size_t bias);
+    size_t moe_layer(
+        size_t hidden, size_t routing_probs, size_t topk_indices,
+        const std::vector<size_t>& w1_weights, const std::vector<size_t>& w3_weights,
+        const std::vector<size_t>& w2_weights,
+        size_t num_experts, size_t num_experts_per_tok,
+        bool normalize_routing, float epsilon, float routed_scaling_factor,
+        Activation activation = Activation::SILU, size_t per_expert_scale = 0);
+    size_t moe_layer(
+        size_t hidden, size_t routing_probs, size_t topk_indices,
+        const std::vector<size_t>& w1_weights, const std::vector<size_t>& w2_weights,
+        size_t num_experts, size_t num_experts_per_tok,
+        bool normalize_routing, float epsilon, float routed_scaling_factor,
+        Activation activation);
     size_t stats_pool(size_t input);
     size_t weighted_stats_pool(size_t input, size_t weights);
 
-    size_t sample(size_t logits, float temperature = 0.6f, float top_p = 0.95f, size_t top_k = 20,
-                  const std::unordered_map<uint32_t, float>& logit_bias = {});
-    size_t sample_with_options(size_t logits, float temperature, float top_p, float min_p, float repetition_penalty,
-                               size_t top_k, const std::unordered_map<uint32_t, float>& logit_bias = {});
-    
-    size_t concat(size_t input1, size_t input2, int axis = 0);
-    size_t cat(const std::vector<size_t>& inputs, int axis);
+    size_t sample(
+        size_t logits, float temperature = 0.6f, float top_p = 0.95f, size_t top_k = 20,
+        const std::unordered_map<uint32_t, float>& logit_bias = {});
+    size_t sample_with_options(
+        size_t logits, float temperature, float top_p, float min_p, float repetition_penalty,
+        size_t top_k, const std::unordered_map<uint32_t, float>& logit_bias = {});
     size_t scatter_topk(size_t indices, size_t values, size_t num_classes);
-    
-    void set_input(size_t node_id, const void* data, Precision precision);
-    void set_external_input(size_t node_id, void* data, Precision precision);
-    void* get_output(size_t node_id);
-    
+
+    size_t gather(size_t embeddings, size_t indices);
+    size_t embedding(const std::string& filename, size_t indices);
+    size_t embedding(size_t embedding_tensor, size_t indices);
+    size_t mmap_embeddings(const std::string& filename);
+    size_t mmap_weights(const std::string& filename);
+    void set_grouped_scales(size_t node_id, size_t group_size, size_t num_groups, void* scales_ptr);
+    void set_interleaved(size_t node_id, bool interleaved, size_t original_N);
+    void release_weight_pages(size_t node_id);
+    void prefetch_weight_pages(size_t node_id);
+    void release_all_weight_pages();
+
+    size_t persistent(size_t source_node);
+    bool is_populated(size_t persistent_node_id) const;
+    void invalidate_persistent(size_t persistent_node_id);
+
     void execute(const std::string& profile_file = "");
     void hard_reset();
     void soft_reset();
@@ -657,15 +561,12 @@ public:
     void capture_debug_node(uint32_t layer_idx, const std::string& name, size_t node_id);
     const std::vector<DebugNodeEntry>& get_debug_nodes() const;
     void clear_debug_nodes();
-    
-    size_t add_node(OpType op_type, const std::vector<size_t>& inputs, const std::vector<size_t>& output_shape, const OpParams& params = {});
+
+    size_t add_node(OpType op_type, const std::vector<size_t>& inputs,
+                    const std::vector<size_t>& output_shape, const OpParams& params = {});
     const BufferDesc& get_output_buffer(size_t node_id) const;
     void allocate_buffers();
     size_t get_node_count() const;
-
-    size_t persistent(size_t source_node);
-    bool is_populated(size_t persistent_node_id) const;
-    void invalidate_persistent(size_t persistent_node_id);
 
     std::vector<std::unique_ptr<GraphNode>> nodes_;
     std::unordered_map<size_t, size_t> node_index_map_;
@@ -679,20 +580,11 @@ private:
     std::vector<DebugNodeEntry> debug_nodes_;
     BufferPool buffer_pool_;
     bool prefill_mode_ = false;
-    
     std::unordered_set<size_t> persistent_node_ids_;
     std::unordered_set<size_t> populated_node_ids_;
 };
 
-
 namespace GraphFile {
-    struct LoadedNode {
-        size_t node_id;
-        std::vector<size_t> shape;
-        Precision precision;
-        size_t byte_size;
-    };
-
     struct GraphHeader {
         uint32_t magic;
         uint32_t version;
@@ -701,7 +593,7 @@ namespace GraphFile {
     };
 
     struct NodeEntry {
-        uint32_t index; // serialized node index 0..n-1
+        uint32_t index;
         OpType op_type;
         std::vector<uint32_t> inputs;
         std::vector<size_t> output_shape;
@@ -712,20 +604,18 @@ namespace GraphFile {
     struct SerializedGraph {
         GraphHeader header;
         std::vector<NodeEntry> nodes;
-        std::vector <uint32_t> graph_inputs; // IDs of serialized inputs
-        std::vector<uint32_t> graph_outputs; // IDs of serialized outputs
+        std::vector<uint32_t> graph_inputs;
+        std::vector<uint32_t> graph_outputs;
     };
 
     SerializedGraph load_graph(const std::string& filename);
     void save_graph(const CactusGraph& graph, const std::string& filename);
-    
     void save_node(CactusGraph& graph, size_t node_id, const std::string& filename);
-    
+
     class MappedFile {
     public:
         MappedFile(const std::string& filename);
         ~MappedFile();
-
         MappedFile(const MappedFile&) = delete;
         MappedFile& operator=(const MappedFile&) = delete;
         MappedFile(MappedFile&& other) noexcept;
@@ -734,20 +624,14 @@ namespace GraphFile {
         const std::vector<size_t>& shape() const;
         Precision precision() const;
         size_t byte_size() const;
-
         size_t group_size() const { return group_size_; }
         size_t num_groups() const { return num_groups_; }
         const void* scales_data() const;
-
         bool is_interleaved() const { return is_interleaved_; }
         size_t original_N() const { return original_N_; }
-
         void* data();
         const void* data() const;
-
-        template<typename T>
-        const T* typed_data() const;
-
+        template<typename T> const T* typed_data() const;
         void release_pages();
         void prefetch_pages();
 
@@ -763,7 +647,6 @@ namespace GraphFile {
         size_t scales_offset_ = 0;
         size_t scales_bytes_ = 0;
         uint32_t alignment_ = 32;
-
         bool is_interleaved_ = false;
         size_t original_N_ = 0;
 
@@ -771,5 +654,74 @@ namespace GraphFile {
         void apply_madvise_hints();
     };
 }
+
+namespace cactus {
+namespace npu {
+
+struct NPUNamedInput {
+    std::string name;
+    const __fp16* data;
+    std::vector<int> shape;
+};
+
+class NPUEncoder {
+public:
+    virtual ~NPUEncoder() = default;
+    virtual bool load(const std::string& model_path) = 0;
+    virtual bool preallocate(
+        const std::vector<int>& input_shape,
+        const std::string& input_name = "x",
+        const std::string& output_name = "") = 0;
+    virtual size_t encode(
+        const __fp16* input, __fp16* output,
+        const std::vector<int>& shape,
+        const std::string& input_name = "x",
+        const std::string& output_name = "") = 0;
+    virtual bool is_available() const = 0;
+    virtual std::vector<int> get_input_shape() const = 0;
+    virtual std::vector<int> get_output_shape() const = 0;
+    virtual __fp16* get_output_buffer() = 0;
+    virtual size_t get_output_buffer_size() const = 0;
+    virtual size_t encode_multimodal_input(
+        const std::vector<NPUNamedInput>& inputs,
+        __fp16* output,
+        const std::string& output_name = "") = 0;
+};
+
+std::unique_ptr<NPUEncoder> create_encoder();
+bool is_npu_available();
+
+struct NPUBufferRef {
+    const __fp16* data;
+    size_t count;
+};
+
+struct NPUPrefillDirectResult {
+    NPUBufferRef hidden;
+    std::vector<NPUBufferRef> k_caches;
+    std::vector<NPUBufferRef> v_caches;
+    bool valid;
+};
+
+class NPUPrefill {
+public:
+    virtual ~NPUPrefill() = default;
+    virtual bool load(const std::string& model_path) = 0;
+    virtual bool is_available() const = 0;
+    virtual int get_chunk_size() const = 0;
+    virtual int get_hidden_dim() const = 0;
+    virtual int get_num_layers() const = 0;
+    virtual int get_num_kv_heads() const = 0;
+    virtual int get_head_dim() const = 0;
+    virtual NPUPrefillDirectResult prefill_chunk_direct(
+        const std::vector<__fp16>& embeddings,
+        int position_offset = 0,
+        const std::string& input_name = "x") = 0;
+};
+
+std::unique_ptr<NPUPrefill> create_prefill();
+
+} // namespace npu
+} // namespace cactus
 
 #endif
