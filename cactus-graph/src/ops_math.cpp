@@ -201,6 +201,12 @@ void compute_activation_node(GraphNode& node, const std::vector<std::unique_ptr<
                                   node.output_buffer.data_as<__fp16>(),
                                   node.output_buffer.total_size, node.params.scalar);
             break;
+        case OpType::CLAMP:
+            cactus_clamp_f16(input.data_as<__fp16>(),
+                             node.output_buffer.data_as<__fp16>(),
+                             node.output_buffer.total_size,
+                             node.params.scalar, node.params.scale);
+            break;
         default:
             break;
     }

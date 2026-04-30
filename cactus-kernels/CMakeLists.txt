@@ -32,7 +32,9 @@ set(KERNEL_SOURCES
     src/attention.cpp
     src/blas.cpp
     src/conv.cpp
+    src/dsp.cpp
     src/fused.cpp
+    src/image.cpp
     src/lstm.cpp
     src/matmul.cpp
     src/nn.cpp
@@ -52,9 +54,17 @@ set_target_properties(cactus_i8mm_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_definitions(cactus_i8mm_obj PRIVATE CACTUS_COMPILE_I8MM __ARM_FEATURE_MATMUL_INT8=1)
 
 add_library(cactus_kernels STATIC ${KERNEL_SOURCES} $<TARGET_OBJECTS:cactus_i8mm_obj>)
-target_include_directories(cactus_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(cactus_kernels
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/libs
+)
 target_compile_definitions(cactus_kernels PRIVATE CACTUS_COMPILE_I8MM)
 set_target_properties(cactus_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(APPLE)
+    find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
+    target_link_libraries(cactus_kernels PUBLIC ${ACCELERATE_FRAMEWORK})
+endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(cactus_kernels PRIVATE -Wno-c99-extensions)
@@ -75,6 +85,7 @@ if(BUILD_TESTING OR CACTUS_BUILD_TESTS)
         tests/test_reduce.cpp
         tests/test_conv.cpp
         tests/test_quant.cpp
+        tests/test_dsp.cpp
     )
 
     foreach(TEST_SRC ${TEST_SOURCES})

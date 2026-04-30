@@ -18,7 +18,13 @@
 
 namespace cactus {
 
-enum class LogLevel { DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3, NONE = 4 };
+enum class LogLevel { 
+    DEBUG = 0, 
+    INFO = 1, 
+    WARN = 2, 
+    ERROR = 3, 
+    NONE = 4 
+};
 
 class Logger {
 public:
@@ -100,7 +106,12 @@ enum class OpType {
     LSTM_CELL, GATED_DELTANET_DECODE, GATED_DELTANET_PREFILL,
     STFT, ALTUP_PREDICT, ALTUP_CORRECT, GAUSSIAN_TOPK,
     MAXPOOL1D, BILSTM_SEQUENCE, LEAKY_RELU,
-    CONV2D_K3S1P1, STATS_POOL, WEIGHTED_STATS_POOL
+    CONV2D_K3S1P1, STATS_POOL, WEIGHTED_STATS_POOL,
+    KV_CACHE_STATE, KV_CACHE_APPEND, ATTENTION_CACHED,
+    CONV_CACHE_STATE, CONV_CACHE_APPEND,
+    RFFT, IRFFT, MEL_FILTER_BANK, SPECTROGRAM,
+    IMAGE_PREPROCESS,
+    CLAMP
 };
 
 struct PrecisionTraits {
@@ -307,6 +318,32 @@ struct OpParams {
     size_t num_altup_inputs = 0;
     size_t v_head_dim = 0;
     size_t kernel_size = 0;
+    size_t max_cache_seq_len = 0;
+    size_t cache_sink_size = 0;
+
+    size_t hop_length = 0;
+    float power = 2.0f;
+    bool center = true;
+    float mel_floor = 1e-10f;
+    float dither = 0.0f;
+    float preemphasis_coef = 0.0f;
+    bool remove_dc_offset = false;
+    int log_mel_mode = 0;
+    int pad_mode_type = 0;
+    size_t num_mel_filters = 0;
+    size_t sampling_rate = 16000;
+    float min_frequency = 0.0f;
+    float max_frequency = 8000.0f;
+    int mel_norm_type = 0;
+    int mel_scale_type = 0;
+
+    int patch_size = 16;
+    float rescale_factor = 1.0f / 255.0f;
+    float image_mean[3] = {0.5f, 0.5f, 0.5f};
+    float image_std[3] = {0.5f, 0.5f, 0.5f};
+    int target_width = 0;
+    int target_height = 0;
+    int image_channels = 3;
 };
 
 struct GraphNode {
@@ -409,6 +446,7 @@ public:
 
     size_t relu(size_t input);
     size_t leaky_relu(size_t input, float negative_slope = 0.01f);
+    size_t clamp(size_t input, float lo, float hi);
     size_t silu(size_t input);
     size_t gelu(size_t input);
     size_t gelu_erf(size_t input);
@@ -471,6 +509,33 @@ public:
         size_t cache_len, size_t num_kv_heads, size_t head_dim,
         size_t window_size = 0, size_t v_head_dim = 0);
 
+    size_t kv_cache_state(
+        size_t max_seq_len,
+        size_t num_kv_heads,
+        size_t head_dim,
+        size_t window_size = 0,
+        size_t sink_size = 4);
+
+    size_t kv_cache_append(
+        size_t new_kv,
+        size_t cache_state_node,
+        size_t window_size = 0,
+        size_t sink_size = 4);
+
+    size_t attention_cached(
+        size_t query,
+        size_t key_new,
+        size_t value_new,
+        size_t k_cache_state,
+        size_t v_cache_state,
+        float scale,
+        size_t position_offset = 0,
+        size_t window_size = 0,
+        size_t v_head_dim = 0);
+
+    size_t conv_cache_state(size_t window_size, size_t hidden_dim);
+    size_t conv_cache_append(size_t new_data, size_t cache_state_node);
+
     size_t conv1d_causal(size_t input, size_t weight, size_t kernel_size, size_t dilation = 1);
     size_t conv1d_k3(size_t input, size_t weight, size_t stride);
     size_t conv1d_k7s3(size_t input, size_t weight, size_t bias);
@@ -489,10 +554,31 @@ public:
     size_t conv2d_k3s1p1(size_t input, size_t weight);
     size_t conv2d_k3s1p1(size_t input, size_t weight, size_t bias);
     size_t stft(size_t input, size_t weight, size_t stride, size_t num_fft_bins);
+
+    size_t rfft(size_t input);
+    size_t irfft(size_t input, size_t output_length);
+    size_t mel_filter_bank(
+        size_t num_frequency_bins, size_t num_mel_filters,
+        float min_frequency, float max_frequency, size_t sampling_rate,
+        int norm_type = 1, int scale_type = 2);
+    size_t spectrogram(
+        size_t waveform, size_t mel_filters_node,
+        size_t frame_length, size_t hop_length, size_t fft_length,
+        float power = 2.0f, bool center = true, int pad_mode = 0,
+        float mel_floor = 1e-10f, int log_mel_mode = 0,
+        float dither = 0.0f, float preemphasis = 0.0f,
+        bool remove_dc_offset = false);
+
+    size_t image_preprocess(
+        size_t pixel_input,
+        int src_width, int src_height,
+        int target_width, int target_height,
+        int patch_size, int channels = 3,
+        float rescale_factor = 1.0f / 255.0f,
+        const float* mean = nullptr, const float* std_dev = nullptr);
+
     size_t bilinear_interpolation(size_t pos_embeds, size_t dst_height, size_t dst_width, bool align_corners = true);
     size_t maxpool1d(size_t input, size_t kernel_size, size_t stride);
-
-    // --- Recurrent ---
 
     size_t lstm_cell(
         size_t input, size_t h_prev, size_t c_prev,
@@ -654,74 +740,5 @@ namespace GraphFile {
         void apply_madvise_hints();
     };
 }
-
-namespace cactus {
-namespace npu {
-
-struct NPUNamedInput {
-    std::string name;
-    const __fp16* data;
-    std::vector<int> shape;
-};
-
-class NPUEncoder {
-public:
-    virtual ~NPUEncoder() = default;
-    virtual bool load(const std::string& model_path) = 0;
-    virtual bool preallocate(
-        const std::vector<int>& input_shape,
-        const std::string& input_name = "x",
-        const std::string& output_name = "") = 0;
-    virtual size_t encode(
-        const __fp16* input, __fp16* output,
-        const std::vector<int>& shape,
-        const std::string& input_name = "x",
-        const std::string& output_name = "") = 0;
-    virtual bool is_available() const = 0;
-    virtual std::vector<int> get_input_shape() const = 0;
-    virtual std::vector<int> get_output_shape() const = 0;
-    virtual __fp16* get_output_buffer() = 0;
-    virtual size_t get_output_buffer_size() const = 0;
-    virtual size_t encode_multimodal_input(
-        const std::vector<NPUNamedInput>& inputs,
-        __fp16* output,
-        const std::string& output_name = "") = 0;
-};
-
-std::unique_ptr<NPUEncoder> create_encoder();
-bool is_npu_available();
-
-struct NPUBufferRef {
-    const __fp16* data;
-    size_t count;
-};
-
-struct NPUPrefillDirectResult {
-    NPUBufferRef hidden;
-    std::vector<NPUBufferRef> k_caches;
-    std::vector<NPUBufferRef> v_caches;
-    bool valid;
-};
-
-class NPUPrefill {
-public:
-    virtual ~NPUPrefill() = default;
-    virtual bool load(const std::string& model_path) = 0;
-    virtual bool is_available() const = 0;
-    virtual int get_chunk_size() const = 0;
-    virtual int get_hidden_dim() const = 0;
-    virtual int get_num_layers() const = 0;
-    virtual int get_num_kv_heads() const = 0;
-    virtual int get_head_dim() const = 0;
-    virtual NPUPrefillDirectResult prefill_chunk_direct(
-        const std::vector<__fp16>& embeddings,
-        int position_offset = 0,
-        const std::string& input_name = "x") = 0;
-};
-
-std::unique_ptr<NPUPrefill> create_prefill();
-
-} // namespace npu
-} // namespace cactus
 
 #endif

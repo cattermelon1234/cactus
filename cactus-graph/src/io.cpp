@@ -187,7 +187,7 @@ namespace {
         GraphFile::NodeEntry node;
         node.index = read_u32(in);
         uint32_t op_type_val = read_u32(in);
-        if (op_type_val > static_cast<uint32_t>(OpType::STATS_POOL)) {
+        if (op_type_val > static_cast<uint32_t>(OpType::IMAGE_PREPROCESS)) {
             throw std::runtime_error("Graph file corrupted: invalid op type");
         }
         node.op_type = static_cast<OpType>(op_type_val);

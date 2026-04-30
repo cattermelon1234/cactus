@@ -364,6 +364,7 @@ void cactus_gpt_j_rope_f16(
 
 void cactus_relu_f16(const __fp16* input, __fp16* output, size_t num_elements);
 void cactus_leaky_relu_f16(const __fp16* input, __fp16* output, size_t num_elements, float negative_slope);
+void cactus_clamp_f16(const __fp16* input, __fp16* output, size_t num_elements, float lo, float hi);
 void cactus_silu_f16(const __fp16* input, __fp16* output, size_t num_elements);
 void cactus_gelu_f16(const __fp16* input, __fp16* output, size_t num_elements);
 void cactus_gelu_f16_erf(const __fp16* input, __fp16* output, size_t num_elements);
@@ -727,6 +728,57 @@ void cactus_quantize_kv_fp16_to_int8(
     size_t kv_heads,
     size_t head_dim,
     size_t group_size = KV_QUANT_GROUP_SIZE);
+
+void cactus_rfft_f32_1d(const float* input, float* output, size_t n, const char* norm);
+void cactus_irfft_f32_1d(const float* input, float* output, size_t n, const char* norm);
+float cactus_hertz_to_mel(float freq, const char* mel_scale);
+float cactus_mel_to_hertz(float mels, const char* mel_scale);
+
+void cactus_generate_mel_filter_bank(
+    float* mel_filters, int num_frequency_bins, int num_mel_filters,
+    float min_frequency, float max_frequency, int sampling_rate,
+    const char* norm, const char* mel_scale, bool triangularize_in_mel_space);
+
+void cactus_spectrogram_to_db(
+    float* spectrogram, size_t size, float reference, float min_value,
+    const float* db_range, float multiplier);
+
+void cactus_compute_spectrogram_f32(
+    const float* waveform, size_t waveform_length,
+    const float* window, size_t window_length,
+    size_t frame_length, size_t hop_length, const size_t* fft_length,
+    float* spectrogram, float power,
+    bool center, const char* pad_mode, bool onesided,
+    float dither, const float* preemphasis,
+    const float* mel_filters, size_t mel_filters_size,
+    float mel_floor, const char* log_mel,
+    float reference, float min_value, const float* db_range,
+    bool remove_dc_offset);
+
+unsigned char* cactus_image_load(const char* path, int* width, int* height, int* channels, int desired_channels);
+void cactus_image_free(unsigned char* data);
+const char* cactus_image_failure_reason();
+
+void cactus_image_resize_uint8(
+    const unsigned char* input, int src_w, int src_h,
+    unsigned char* output, int dst_w, int dst_h, int channels);
+
+void cactus_image_resize_float(
+    const float* input, int src_w, int src_h,
+    float* output, int dst_w, int dst_h, int channels);
+
+void cactus_image_normalize(
+    const float* input, float* output,
+    int width, int height, int channels,
+    float rescale_factor, const float* mean, const float* std_dev);
+
+void cactus_image_to_patches(
+    const float* image, float* patches,
+    int width, int height, int channels, int patch_size);
+
+void cactus_image_convert_to_rgb(
+    const unsigned char* input, unsigned char* output,
+    int width, int height, int channels);
 
 inline size_t kv_scales_count(
     size_t seq_len,
