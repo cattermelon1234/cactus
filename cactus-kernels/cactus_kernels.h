@@ -8,10 +8,13 @@
 #include "src/threading.h"
 
 enum class Precision {
-    INT8,
+    INT8,   // KV cache quantization only (not for weights)
     FP16,
     FP32,
-    INT4
+    TQ1,    // 1-bit ternary quantization (2 codebook entries)
+    TQ2,    // 2-bit ternary quantization (4 codebook entries)
+    TQ3,    // 3-bit ternary quantization (8 codebook entries)
+    TQ4     // 4-bit ternary quantization (16 codebook entries)
 };
 
 enum class ScalarOpType {
@@ -241,102 +244,33 @@ void cactus_tq2_gemm(
     uint32_t M,
     __fp16* C);
 
-void cactus_gemv_int8(
-    const int8_t* A,
-    float A_scale,
-    const int8_t* B,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t K,
-    size_t N,
-    size_t group_size);
+void cactus_tq1_gemv(
+    const CactusTQMatrix* W,
+    const __fp16* x,
+    __fp16* y);
 
-void cactus_gemm_int8(
-    const int8_t* A,
-    const float* A_scales,
-    const int8_t* B,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t M,
-    size_t K,
-    size_t N,
-    size_t group_size);
+void cactus_tq1_gemm(
+    const CactusTQMatrix* W,
+    const __fp16* A,
+    uint32_t M,
+    __fp16* C);
 
-void cactus_matmul_int8(
-    const int8_t* A,
-    const float* A_scales,
-    const int8_t* B,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t M,
-    size_t K,
-    size_t N,
-    size_t group_size);
+void cactus_tq3_gemv(
+    const CactusTQMatrix* W,
+    const __fp16* x,
+    __fp16* y);
 
-void cactus_gemv_int8_i8mm(
-    const int8_t* A,
-    float A_scale,
-    const int8_t* B,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t K,
-    size_t N,
-    size_t group_size);
+void cactus_tq3_gemm(
+    const CactusTQMatrix* W,
+    const __fp16* A,
+    uint32_t M,
+    __fp16* C);
 
-void cactus_gemm_int8_i8mm(
-    const int8_t* A,
-    const float* A_scales,
-    const int8_t* B,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t M,
-    size_t K,
-    size_t N,
-    size_t group_size);
-
-void cactus_gemv_int4(
-    const int8_t* A,
-    float A_scale,
-    const int8_t* B_packed,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t K,
-    size_t N,
-    size_t group_size);
-
-void cactus_gemm_int4(
-    const int8_t* A,
-    const float* A_scales,
-    const int8_t* B_packed,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t M,
-    size_t K,
-    size_t N,
-    size_t group_size);
-
-void cactus_matmul_int4(
-    const int8_t* A,
-    const float* A_scales,
-    const int8_t* B_packed,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t M,
-    size_t K,
-    size_t N,
-    size_t group_size);
-
-void cactus_matmul_integer(
-    Precision precision,
-    const int8_t* A,
-    const float* A_scales,
-    const int8_t* B,
-    const __fp16* B_scales,
-    __fp16* C,
-    size_t M,
-    size_t K,
-    size_t N,
-    size_t group_size);
+void cactus_tq_matmul(
+    const CactusTQMatrix* W,
+    const __fp16* A,
+    uint32_t M,
+    __fp16* C);
 
 void cactus_rms_norm_f16(
     const __fp16* input,
@@ -760,11 +694,6 @@ void cactus_fp32_to_fp16(const float* src, __fp16* dst, size_t count);
 void cactus_int8_to_fp16(const int8_t* src, __fp16* dst, size_t count, float scale = 1.0f);
 void cactus_fp16_to_int8(const __fp16* src, int8_t* dst, size_t count, float scale = 1.0f);
 float cactus_fp16_max_abs(const __fp16* src, size_t count);
-
-void cactus_unpack_int4_to_int8(
-    const uint8_t* packed,
-    int8_t* unpacked,
-    size_t unpacked_count);
 
 void cactus_quantize_kv_fp16_to_int8(
     const __fp16* src,

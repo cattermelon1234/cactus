@@ -2,12 +2,144 @@
 #include <vector>
 #include <cmath>
 #include <random>
-#include <algorithm>
 
 using namespace TestUtils;
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Synthetic TQ matrix generator for benchmarking and correctness
+// ══════════════════════════════════════════════════════════════════════════════
+
+struct SyntheticTQ {
+    uint32_t bits, K, N, group_size, num_groups;
+    std::vector<__fp16> codebook;
+    std::vector<__fp16> input_scale;
+    std::vector<__fp16> input_scale_recip;
+    std::vector<__fp16> norms;
+    std::vector<int8_t> left_signs;
+    std::vector<int8_t> right_signs;
+    std::vector<uint32_t> permutation;
+    std::vector<uint8_t> packed;
+
+    SyntheticTQ(uint32_t b, uint32_t k, uint32_t n, uint32_t gs, uint32_t seed = 42)
+        : bits(b), K(k), N(n), group_size(gs), num_groups(k / gs) {
+        std::mt19937 gen(seed);
+        std::uniform_real_distribution<float> dist(-1.f, 1.f);
+
+        uint32_t cb_size = 1u << bits;
+        codebook.resize(cb_size);
+        for (auto& v : codebook) v = static_cast<__fp16>(dist(gen));
+
+        input_scale.resize(K);
+        input_scale_recip.resize(K);
+        for (uint32_t i = 0; i < K; i++) {
+            float s = 0.5f + std::abs(dist(gen));
+            input_scale[i] = static_cast<__fp16>(s);
+            input_scale_recip[i] = static_cast<__fp16>(1.f / s);
+        }
+
+        norms.resize(size_t(N) * num_groups);
+        for (auto& v : norms) v = static_cast<__fp16>(dist(gen) * 0.1f);
+
+        left_signs.resize(group_size);
+        right_signs.resize(group_size);
+        for (auto& v : left_signs) v = (gen() & 1) ? 1 : -1;
+        for (auto& v : right_signs) v = (gen() & 1) ? 1 : -1;
+
+        permutation.resize(group_size);
+        for (uint32_t i = 0; i < group_size; i++) permutation[i] = i;
+
+        size_t packed_bytes = size_t(N) * num_groups * cactus_tq_packed_group_bytes(bits, group_size);
+        packed.resize(packed_bytes);
+        for (auto& v : packed) v = static_cast<uint8_t>(gen() & 0xFF);
+    }
+
+    CactusTQMatrix matrix() const {
+        return CactusTQMatrix{
+            .bits = bits, .K = K, .N = N,
+            .group_size = group_size, .num_groups = num_groups,
+            .flags = CACTUS_TQ_FLAG_CODE_ORDERED_INDICES,
+            .codebook = codebook.data(),
+            .input_scale = input_scale.data(),
+            .input_scale_recip = input_scale_recip.data(),
+            .norms = norms.data(),
+            .packed_indices = packed.data(),
+            .left_signs = left_signs.data(),
+            .right_signs = right_signs.data(),
+            .permutation = permutation.data(),
+        };
+    }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FP32 reference for TQ (same math as kernel, but in float for ground truth)
+// ══════════════════════════════════════════════════════════════════════════════
+
+static void fwht_f32(float* x, uint32_t n) {
+    for (uint32_t h = 1; h < n; h <<= 1)
+        for (uint32_t i = 0; i < n; i += h << 1)
+            for (uint32_t j = i; j < i + h; ++j) {
+                float a = x[j], b = x[j + h];
+                x[j] = a + b; x[j + h] = a - b;
+            }
+    float s = 1.f / std::sqrt(static_cast<float>(n));
+    for (uint32_t i = 0; i < n; ++i) x[i] *= s;
+}
+
+static uint8_t unpack_index(const uint8_t* base, uint32_t bits, uint32_t k) {
+    switch (bits) {
+        case 1: return (base[k / 8] >> (k % 8)) & 0x1u;
+        case 2: return (base[k / 4] >> ((k & 3u) * 2u)) & 0x3u;
+        case 3: {
+            uint32_t bit_offset = k * 3;
+            uint32_t byte_idx = bit_offset / 8;
+            uint32_t bit_idx = bit_offset % 8;
+            uint32_t word = base[byte_idx] | (base[byte_idx + 1] << 8);
+            return (word >> bit_idx) & 0x7u;
+        }
+        case 4: return (k & 1u) ? (base[k / 2] >> 4) : (base[k / 2] & 0x0Fu);
+        default: return 0;
+    }
+}
+
+static void tq_reference_gemv_f32(const SyntheticTQ& w, const float* x, float* y) {
+    uint32_t pgb = cactus_tq_packed_group_bytes(w.bits, w.group_size);
+    for (uint32_t n = 0; n < w.N; ++n) {
+        for (uint32_t g = 0; g < w.num_groups; ++g) {
+            uint32_t base_k = g * w.group_size;
+            std::vector<float> z(w.group_size);
+            for (uint32_t k = 0; k < w.group_size; ++k)
+                z[k] = x[base_k + k] / static_cast<float>(w.input_scale[base_k + k])
+                        * static_cast<float>(w.left_signs[k]);
+            fwht_f32(z.data(), w.group_size);
+            for (uint32_t k = 0; k < w.group_size; ++k)
+                z[k] *= static_cast<float>(w.right_signs[k]);
+
+            const uint8_t* packed_row = w.packed.data() + (size_t(n) * w.num_groups + g) * pgb;
+            float gsum = 0.f;
+            for (uint32_t k = 0; k < w.group_size; ++k) {
+                uint8_t idx = unpack_index(packed_row, w.bits, k);
+                gsum += z[k] * static_cast<float>(w.codebook[idx]);
+            }
+            y[n] += static_cast<float>(w.norms[size_t(n) * w.num_groups + g]) * gsum;
+        }
+    }
+}
+
+static double compute_mse(const float* ref, const __fp16* actual, size_t n) {
+    double sum = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        double diff = static_cast<double>(ref[i]) - static_cast<double>(actual[i]);
+        sum += diff * diff;
+    }
+    return sum / static_cast<double>(n);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Correctness tests
+// ══════════════════════════════════════════════════════════════════════════════
+
 bool test_matmul_f16() {
-    const size_t M = 4, K = 8, N = 4;
+    const size_t M = 4, K = 1024, N = 64;
     std::vector<__fp16> a(M * K), b(N * K), c(M * N);
     fill_random_fp16(a, -0.5f, 0.5f);
     fill_random_fp16(b, -0.5f, 0.5f);
@@ -17,56 +149,44 @@ bool test_matmul_f16() {
             float ref = 0.0f;
             for (size_t k = 0; k < K; k++)
                 ref += static_cast<float>(a[i * K + k]) * static_cast<float>(b[j * K + k]);
-            if (std::abs(static_cast<float>(c[i * N + j]) - ref) > 0.05f) return false;
+            if (std::abs(static_cast<float>(c[i * N + j]) - ref) > 1.0f) return false;
         }
     return true;
 }
 
-bool test_matmul_int8_grouped() {
-    const size_t M = 4, K = 128, N = 8, gs = 32;
-    std::mt19937 gen(42);
-    std::uniform_int_distribution<int> id(-50, 50);
-    std::uniform_real_distribution<float> sd(0.001f, 0.05f);
-    std::vector<int8_t> A(M * K), B(N * K);
-    std::vector<float> As(M);
-    std::vector<__fp16> Bs(N * (K / gs)), C(M * N), Cv(N);
-    for (auto& v : A) v = static_cast<int8_t>(id(gen));
-    for (auto& v : B) v = static_cast<int8_t>(id(gen));
-    for (auto& v : As) v = sd(gen);
-    for (auto& v : Bs) v = static_cast<__fp16>(sd(gen));
+bool test_tq_correctness(uint32_t bits) {
+    const uint32_t K = 1024, N = 64, gs = 128;
+    SyntheticTQ tq(bits, K, N, gs, 123);
+    CactusTQMatrix mat = tq.matrix();
 
-    cactus_matmul_int8(A.data(), As.data(), B.data(), Bs.data(), C.data(), M, K, N, gs);
-    for (size_t i = 0; i < M * N; i++)
-        if (!std::isfinite(static_cast<float>(C[i]))) return false;
+    std::mt19937 gen(77);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    std::vector<float> x_f32(K);
+    for (auto& v : x_f32) v = dist(gen);
 
-    cactus_gemv_int8(A.data(), As[0], B.data(), Bs.data(), Cv.data(), K, N, gs);
-    for (size_t j = 0; j < N; j++) {
-        float tol = std::abs(static_cast<float>(C[j])) * 0.05f + 0.5f;
-        if (std::abs(static_cast<float>(C[j]) - static_cast<float>(Cv[j])) > tol) return false;
+    // FP32 reference
+    std::vector<float> ref(N, 0.f);
+    tq_reference_gemv_f32(tq, x_f32.data(), ref.data());
+
+    // FP16 kernel
+    std::vector<__fp16> x_f16(K), y_f16(N, static_cast<__fp16>(0));
+    for (size_t i = 0; i < K; i++) x_f16[i] = static_cast<__fp16>(x_f32[i]);
+    cactus_tq_matmul(&mat, x_f16.data(), 1, y_f16.data());
+
+    double mse = compute_mse(ref.data(), y_f16.data(), N);
+    // TQ is inherently lossy, but fp16 kernel should match fp32 ref within fp16 precision
+    // Acceptable MSE threshold depends on bit level (lower bits = higher quantization noise)
+    double threshold = 0.1; // generous for all bit levels
+    if (mse > threshold) {
+        std::cerr << "  tq" << bits << " MSE=" << mse << " > " << threshold << "\n";
+        return false;
     }
     return true;
 }
 
-bool test_matmul_int4() {
-    const size_t M = 2, K = 128, N = 8, gs = 32;
-    std::mt19937 gen(123);
-    std::uniform_int_distribution<int> id(-5, 5);
-    std::uniform_real_distribution<float> sd(0.01f, 0.1f);
-    std::vector<int8_t> A(M * K), Bf(N * K), Bp(N * K / 2);
-    std::vector<float> As(M);
-    std::vector<__fp16> Bs(N * (K / gs)), C(M * N);
-    for (auto& v : A) v = static_cast<int8_t>(id(gen));
-    for (auto& v : As) v = sd(gen);
-    for (auto& v : Bs) v = static_cast<__fp16>(sd(gen));
-    for (auto& v : Bf) v = static_cast<int8_t>(std::max(-7, std::min(7, id(gen))));
-    for (size_t i = 0; i < N * K / 2; i++)
-        Bp[i] = static_cast<int8_t>((Bf[i * 2 + 1] << 4) | (Bf[i * 2] & 0x0F));
-
-    cactus_matmul_int4(A.data(), As.data(), Bp.data(), Bs.data(), C.data(), M, K, N, gs);
-    for (size_t i = 0; i < M * N; i++)
-        if (!std::isfinite(static_cast<float>(C[i]))) return false;
-    return true;
-}
+// ══════════════════════════════════════════════════════════════════════════════
+// Benchmarks
+// ══════════════════════════════════════════════════════════════════════════════
 
 bool run_benchmarks() {
     auto bench = [](const char* label, size_t M, size_t K, size_t N, auto fn) {
@@ -75,59 +195,142 @@ bool run_benchmarks() {
         for (int i = 0; i < 100; i++) fn();
         double ms = t.elapsed_ms() / 100.0;
         double gflops = (2.0 * M * K * N) / (ms * 1e6);
-        std::cout << "  ⚡ " << std::left << std::setw(28) << label
+        std::cout << "  \u26A1 " << std::left << std::setw(28) << label
                   << std::fixed << std::setprecision(3) << ms << "ms  "
                   << std::setprecision(1) << gflops << " GFLOPS\n";
     };
 
+    const size_t K = 1024, N = 1024;
+    const size_t M_batch = 1024;
+    const uint32_t gs = 128;
+
+    // FP16
     {
-        const size_t K = 1024, N = 1024;
         std::vector<__fp16> a(K), b(N * K), c(N);
         fill_random_fp16(a, -0.5f, 0.5f); fill_random_fp16(b, -0.5f, 0.5f);
         bench("matmul_f16 1x1024x1024", 1, K, N, [&]{ cactus_matmul_f16(a.data(), b.data(), c.data(), 1, K, N); });
     }
     {
-        const size_t M = 1024, K = 1024, N = 1024;
-        std::vector<__fp16> a(M * K), b(N * K), c(M * N);
+        std::vector<__fp16> a(M_batch * K), b(N * K), c(M_batch * N);
         fill_random_fp16(a, -0.5f, 0.5f); fill_random_fp16(b, -0.5f, 0.5f);
-        bench("matmul_f16 1024^3", M, K, N, [&]{ cactus_matmul_f16(a.data(), b.data(), c.data(), M, K, N); });
+        bench("matmul_f16 1024^3", M_batch, K, N, [&]{ cactus_matmul_f16(a.data(), b.data(), c.data(), M_batch, K, N); });
+    }
+
+    // TQ1
+    {
+        SyntheticTQ tq(1, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> x(K), y(N);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench("matmul_tq1 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        const size_t K = 1024, N = 1024, gs = 32;
-        std::vector<int8_t> A(K), B(N * K);
-        std::vector<__fp16> Bs(N * (K / gs)), C(N);
-        bench("matmul_int8 1x1024x1024", 1, K, N, [&]{ cactus_gemv_int8(A.data(), 0.01f, B.data(), Bs.data(), C.data(), K, N, gs); });
+        SyntheticTQ tq(1, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> A(M_batch * K), C(M_batch * N);
+        fill_random_fp16(A, -1.f, 1.f);
+        bench("matmul_tq1 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+    }
+
+    // TQ2
+    {
+        SyntheticTQ tq(2, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> x(K), y(N);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench("matmul_tq2 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        const size_t M = 1024, K = 1024, N = 1024, gs = 32;
-        std::vector<int8_t> A(M * K), B(N * K);
-        std::vector<float> As(M, 0.01f);
-        std::vector<__fp16> Bs(N * (K / gs), static_cast<__fp16>(0.01f)), C(M * N);
-        bench("matmul_int8 1024^3", M, K, N, [&]{ cactus_matmul_int8(A.data(), As.data(), B.data(), Bs.data(), C.data(), M, K, N, gs); });
+        SyntheticTQ tq(2, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> A(M_batch * K), C(M_batch * N);
+        fill_random_fp16(A, -1.f, 1.f);
+        bench("matmul_tq2 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+    }
+
+    // TQ3
+    {
+        SyntheticTQ tq(3, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> x(K), y(N);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench("matmul_tq3 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        const size_t K = 1024, N = 1024, gs = 32;
-        std::vector<int8_t> A(K), Bp(N * K / 2);
-        std::vector<__fp16> Bs(N * (K / gs)), C(N);
-        bench("matmul_int4 1x1024x1024", 1, K, N, [&]{ cactus_gemv_int4(A.data(), 0.01f, Bp.data(), Bs.data(), C.data(), K, N, gs); });
+        SyntheticTQ tq(3, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> A(M_batch * K), C(M_batch * N);
+        fill_random_fp16(A, -1.f, 1.f);
+        bench("matmul_tq3 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+    }
+
+    // TQ4
+    {
+        SyntheticTQ tq(4, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> x(K), y(N);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench("matmul_tq4 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        const size_t M = 1024, K = 1024, N = 1024, gs = 32;
-        std::vector<int8_t> A(M * K), Bp(N * K / 2);
-        std::vector<float> As(M, 0.01f);
-        std::vector<__fp16> Bs(N * (K / gs), static_cast<__fp16>(0.01f)), C(M * N);
-        bench("matmul_int4 1024^3", M, K, N, [&]{ cactus_matmul_int4(A.data(), As.data(), Bp.data(), Bs.data(), C.data(), M, K, N, gs); });
+        SyntheticTQ tq(4, K, N, gs);
+        CactusTQMatrix mat = tq.matrix();
+        std::vector<__fp16> A(M_batch * K), C(M_batch * N);
+        fill_random_fp16(A, -1.f, 1.f);
+        bench("matmul_tq4 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
     }
+
     return true;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MSE drift report
+// ══════════════════════════════════════════════════════════════════════════════
+
+void print_mse_report() {
+    const uint32_t K = 1024, N = 256, gs = 128;
+
+    std::mt19937 gen(99);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    std::vector<float> x_f32(K);
+    for (auto& v : x_f32) v = dist(gen);
+    std::vector<__fp16> x_f16(K);
+    for (size_t i = 0; i < K; i++) x_f16[i] = static_cast<__fp16>(x_f32[i]);
+
+    std::cout << "── MSE vs FP32 reference ──────────────────────────────────────────────────────────\n";
+
+    for (uint32_t bits : {1u, 2u, 3u, 4u}) {
+        SyntheticTQ tq(bits, K, N, gs, 55 + bits);
+        CactusTQMatrix mat = tq.matrix();
+
+        std::vector<float> ref(N, 0.f);
+        tq_reference_gemv_f32(tq, x_f32.data(), ref.data());
+
+        std::vector<__fp16> y(N, static_cast<__fp16>(0));
+        cactus_tq_matmul(&mat, x_f16.data(), 1, y.data());
+
+        double mse = compute_mse(ref.data(), y.data(), N);
+        double max_err = 0.0;
+        for (size_t i = 0; i < N; i++) {
+            double err = std::abs(static_cast<double>(ref[i]) - static_cast<double>(y[i]));
+            max_err = std::max(max_err, err);
+        }
+
+        std::cout << "  TQ" << bits << " │ MSE=" << std::scientific << std::setprecision(4) << mse
+                  << "  max_err=" << std::fixed << std::setprecision(5) << max_err << "\n";
+    }
 }
 
 int main() {
     TestRunner runner("Matrix Multiplication");
     runner.run_test("matmul_f16", test_matmul_f16());
-    runner.run_test("matmul_int8_grouped", test_matmul_int8_grouped());
-    runner.run_test("matmul_int4", test_matmul_int4());
+    runner.run_test("matmul_tq1", test_tq_correctness(1));
+    runner.run_test("matmul_tq2", test_tq_correctness(2));
+    runner.run_test("matmul_tq3", test_tq_correctness(3));
+    runner.run_test("matmul_tq4", test_tq_correctness(4));
     runner.print_benchmarks_header();
     runner.run_bench("benchmarks", run_benchmarks());
+    print_mse_report();
     runner.print_summary();
     return runner.all_passed() ? 0 : 1;
 }

@@ -70,7 +70,6 @@ DECLARE_COMPUTE(compute_topk_node);
 DECLARE_COMPUTE(compute_scatter_topk_node);
 DECLARE_COMPUTE(compute_moe_layer_node);
 DECLARE_COMPUTE(compute_persistent_node);
-DECLARE_COMPUTE(compute_quantize_activations_node);
 DECLARE_COMPUTE(compute_kv_cache_state_node);
 DECLARE_COMPUTE(compute_kv_cache_append_node);
 DECLARE_COMPUTE(compute_attention_cached_node);
@@ -157,7 +156,6 @@ static bool init_dispatch() {
     dispatch_flat[static_cast<int>(OpType::SCATTER_TOPK)] = compute_scatter_topk_node;
     dispatch_flat[static_cast<int>(OpType::MOE_LAYER)] = compute_moe_layer_node;
     dispatch_flat[static_cast<int>(OpType::PERSISTENT)] = compute_persistent_node;
-    dispatch_flat[static_cast<int>(OpType::QUANTIZE_ACTIVATIONS)] = compute_quantize_activations_node;
     dispatch_flat[static_cast<int>(OpType::LSTM_CELL)] = compute_lstm_cell_node;
     dispatch_flat[static_cast<int>(OpType::GATED_DELTANET_DECODE)] = compute_gated_deltanet_decode_node;
     dispatch_flat[static_cast<int>(OpType::GATED_DELTANET_PREFILL)] = compute_gated_deltanet_prefill_node;
@@ -211,7 +209,6 @@ static const char* op_type_names[] = {
     "MOE_LAYER",
     "INDEX",
     "PERSISTENT",
-    "QUANTIZE_ACTIVATIONS",
     "LSTM_CELL",
     "GATED_DELTANET_DECODE",
     "GATED_DELTANET_PREFILL",
@@ -584,23 +581,6 @@ void CactusGraph::execute(const std::string& profile_file) {
                         const int8_t* typed = reinterpret_cast<const int8_t*>(data_ptr);
                         for (size_t i = 0; i < elements_to_process; ++i) {
                             accumulate(static_cast<float>(typed[i]), i);
-                        }
-                    } else if (buffer.precision == Precision::INT4) {
-                        assert(elements_to_process % 32 == 0 && "INT4 precision capture requires element count to be multiple of 32");
-                        const uint8_t* packed_ptr = reinterpret_cast<const uint8_t*>(data_ptr);
-                        for (size_t i = 0; i < elements_to_process; i+=32) {
-                            int8x16_t high, low;
-                            unpack_int4_as_int8x16x2(packed_ptr + i / 2, high, low);
-                            int8_t high_lanes[16], low_lanes[16];
-                            vst1q_s8(high_lanes, high);
-                            vst1q_s8(low_lanes, low);
-
-                            for (size_t j = 0; j < 16; ++j) {
-                                accumulate(static_cast<float>(low_lanes[j]), i + j);
-                            }
-                            for (size_t j = 0; j < 16; ++j) {
-                                accumulate(static_cast<float>(high_lanes[j]), i + 16 + j);
-                            }
                         }
                     } else {
                         has_data = false;

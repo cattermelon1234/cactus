@@ -244,8 +244,6 @@ CACTUS_FFI_EXPORT int cactus_graph_set_external_input(
 
 CACTUS_FFI_EXPORT int cactus_graph_precision_cast(
     cactus_graph_t graph, cactus_node_t input, int32_t target_precision, cactus_node_t* out);
-CACTUS_FFI_EXPORT int cactus_graph_quantize_activations(
-    cactus_graph_t graph, cactus_node_t input, cactus_node_t* out);
 
 CACTUS_FFI_EXPORT int cactus_graph_add(cactus_graph_t graph, cactus_node_t a,
 cactus_node_t b, cactus_node_t* out);

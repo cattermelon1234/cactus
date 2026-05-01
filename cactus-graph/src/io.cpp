@@ -194,7 +194,7 @@ namespace {
         node.inputs = read_u32_vector(in);
         node.output_shape = read_size_vector(in);
         uint32_t precision_val = read_u32(in);
-        if (precision_val > static_cast<uint32_t>(Precision::INT4)) {
+        if (precision_val > static_cast<uint32_t>(Precision::TQ4)) {
             throw std::runtime_error("Graph file corrupted: invalid precision");
         }
         node.precision = static_cast<Precision>(precision_val);
@@ -305,7 +305,38 @@ size_t CactusGraph::mmap_weights(const std::string& filename) {
     size_t node_id = input(shape, precision);
     set_external_input(node_id, const_cast<void*>(mapped_file->data()), precision);
 
-    if (PrecisionTraits::is_integer(precision) && mapped_file->group_size() > 0) {
+    if (PrecisionTraits::is_tq(precision) && mapped_file->group_size() > 0) {
+        auto& buffer = nodes_[node_index_map_.at(node_id)]->output_buffer;
+        buffer.group_size = mapped_file->group_size();
+        buffer.num_groups = mapped_file->num_groups();
+
+        // TQ scales section layout (sequentially packed):
+        // codebook [cb_size * fp16], input_scale [K * fp16], input_scale_recip [K * fp16],
+        // norms [N * num_groups * fp16], left_signs [gs * int8],
+        // right_signs [gs * int8], permutation [gs * uint32]
+        const char* scales_base = static_cast<const char*>(mapped_file->scales_data());
+        uint32_t bits = PrecisionTraits::tq_bits(precision);
+        uint32_t cb_size = 1u << bits;
+        uint32_t gs = static_cast<uint32_t>(mapped_file->group_size());
+        uint32_t K = gs * static_cast<uint32_t>(mapped_file->num_groups());
+        uint32_t N = static_cast<uint32_t>(shape.size() >= 2 ? shape[0] : 1);
+
+        size_t off = 0;
+        buffer.tq_codebook = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += cb_size * sizeof(__fp16);
+        buffer.tq_input_scale = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += K * sizeof(__fp16);
+        buffer.tq_input_scale_recip = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += K * sizeof(__fp16);
+        buffer.tq_norms = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += static_cast<size_t>(N) * mapped_file->num_groups() * sizeof(__fp16);
+        buffer.tq_left_signs = reinterpret_cast<const int8_t*>(scales_base + off);
+        off += gs;
+        buffer.tq_right_signs = reinterpret_cast<const int8_t*>(scales_base + off);
+        off += gs;
+        buffer.tq_permutation = reinterpret_cast<const uint32_t*>(scales_base + off);
+        buffer.tq_flags = 0;
+    } else if (PrecisionTraits::is_integer(precision) && mapped_file->group_size() > 0) {
         set_grouped_scales(node_id, mapped_file->group_size(), mapped_file->num_groups(),
                           const_cast<void*>(mapped_file->scales_data()));
 

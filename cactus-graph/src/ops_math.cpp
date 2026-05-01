@@ -325,7 +325,7 @@ void compute_precision_cast_node(GraphNode& node, const std::vector<std::unique_
     size_t count = input_buf.total_size;
 
     if (input_buf.precision == Precision::INT8 && node.output_buffer.precision == Precision::FP32) {
-        if (input_buf.is_grouped_int8()) {
+        if (input_buf.group_size > 0) {
             dequant_grouped_int8<float>(input_buf.data_as<int8_t>(), node.output_buffer.data_as<float>(),
                                         input_buf.scales_as_fp16(), input_buf.shape, input_buf.group_size);
         } else {
@@ -338,7 +338,7 @@ void compute_precision_cast_node(GraphNode& node, const std::vector<std::unique_
     } else if (input_buf.precision == Precision::FP32 && node.output_buffer.precision == Precision::FP16) {
         Quantization::fp32_to_fp16(input_buf.data_as<float>(), node.output_buffer.data_as<__fp16>(), count);
     } else if (input_buf.precision == Precision::INT8 && node.output_buffer.precision == Precision::FP16) {
-        if (input_buf.is_grouped_int8()) {
+        if (input_buf.group_size > 0) {
             dequant_grouped_int8<__fp16>(input_buf.data_as<int8_t>(), node.output_buffer.data_as<__fp16>(),
                                          input_buf.scales_as_fp16(), input_buf.shape, input_buf.group_size);
         } else {

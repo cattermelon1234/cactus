@@ -102,7 +102,7 @@ enum class OpType {
     RELU, SILU, GELU, GELU_ERF, SIGMOID, TANH,
     SAMPLE, CONCAT, CAT,
     SCATTER_TOPK, TOPK, LAYERNORM, GROUPNORM,
-    MOE_LAYER, INDEX, PERSISTENT, QUANTIZE_ACTIVATIONS,
+    MOE_LAYER, INDEX, PERSISTENT,
     LSTM_CELL, GATED_DELTANET_DECODE, GATED_DELTANET_PREFILL,
     STFT, ALTUP_PREDICT, ALTUP_CORRECT, GAUSSIAN_TOPK,
     MAXPOOL1D, BILSTM_SEQUENCE, LEAKY_RELU,
@@ -120,29 +120,51 @@ struct PrecisionTraits {
             case Precision::INT8: return 1;
             case Precision::FP16: return 2;
             case Precision::FP32: return 4;
-            case Precision::INT4: return 1;
+            case Precision::TQ1:
+            case Precision::TQ2:
+            case Precision::TQ3:
+            case Precision::TQ4: return 1; // packed, not element-sized
         }
         return 1;
     }
 
-    static constexpr size_t packed_size_of(Precision prec, size_t count) {
+    static constexpr bool is_tq(Precision prec) {
+        return prec == Precision::TQ1 || prec == Precision::TQ2 ||
+               prec == Precision::TQ3 || prec == Precision::TQ4;
+    }
+
+    static constexpr uint32_t tq_bits(Precision prec) {
         switch (prec) {
-            case Precision::INT4: return (count + 1) / 2;
-            default: return count * size_of(prec);
+            case Precision::TQ1: return 1;
+            case Precision::TQ2: return 2;
+            case Precision::TQ3: return 3;
+            case Precision::TQ4: return 4;
+            default: return 0;
         }
+    }
+
+    static constexpr size_t packed_size_of(Precision prec, size_t count) {
+        if (is_tq(prec)) {
+            uint32_t bits = tq_bits(prec);
+            return (count * bits + 7) / 8;
+        }
+        return count * size_of(prec);
     }
 
     static size_t byte_offset_of(Precision prec, size_t element_offset) {
-        switch (prec) {
-            case Precision::INT4:
-                assert(element_offset % 32 == 0);
-                return element_offset / 2;
-            default: return element_offset * size_of(prec);
+        if (is_tq(prec)) {
+            uint32_t bits = tq_bits(prec);
+            return (element_offset * bits) / 8;
         }
+        return element_offset * size_of(prec);
     }
 
     static constexpr bool is_integer(Precision prec) {
-        return prec == Precision::INT8 || prec == Precision::INT4;
+        return prec == Precision::INT8;
+    }
+
+    static constexpr bool is_quantized(Precision prec) {
+        return is_tq(prec);
     }
 
     static constexpr bool is_floating_point(Precision prec) {
@@ -166,9 +188,9 @@ struct BroadcastInfo {
 };
 
 struct TensorConfig {
-    Precision default_precision = Precision::INT8;
-    Precision compute_precision = Precision::INT8;
-    Precision output_precision = Precision::INT8;
+    Precision default_precision = Precision::FP16;
+    Precision compute_precision = Precision::FP16;
+    Precision output_precision = Precision::FP16;
     bool auto_mixed_precision = false;
     static TensorConfig& global();
 };
@@ -220,7 +242,7 @@ struct BufferDesc {
     size_t num_rows_for_activation_scales = 0;
 
     BufferDesc();
-    BufferDesc(const std::vector<size_t>& s, Precision prec = Precision::INT8);
+    BufferDesc(const std::vector<size_t>& s, Precision prec = Precision::FP16);
     ~BufferDesc();
     BufferDesc(BufferDesc&& other) noexcept;
     BufferDesc& operator=(BufferDesc&& other) noexcept;
@@ -234,8 +256,36 @@ struct BufferDesc {
     template<typename T> const T* data_as() const { return static_cast<const T*>(get_data()); }
 
     const __fp16* scales_as_fp16() const { return reinterpret_cast<const __fp16*>(scales_data); }
-    bool is_grouped_int8() const { return precision == Precision::INT8 && group_size > 0; }
-    bool is_grouped_int4() const { return precision == Precision::INT4 && group_size > 0; }
+    bool is_tq() const { return PrecisionTraits::is_tq(precision) && group_size > 0; }
+
+    // TQ metadata (stored in the weight file, set during mmap_weights)
+    const __fp16* tq_codebook = nullptr;
+    const __fp16* tq_input_scale = nullptr;
+    const __fp16* tq_input_scale_recip = nullptr;
+    const __fp16* tq_norms = nullptr;
+    const int8_t* tq_left_signs = nullptr;
+    const int8_t* tq_right_signs = nullptr;
+    const uint32_t* tq_permutation = nullptr;
+    uint32_t tq_flags = 0;
+
+    CactusTQMatrix to_tq_matrix() const {
+        return CactusTQMatrix{
+            .bits = PrecisionTraits::tq_bits(precision),
+            .K = static_cast<uint32_t>(shape.size() >= 2 ? shape[1] : shape[0]),
+            .N = static_cast<uint32_t>(shape.size() >= 2 ? shape[0] : 1),
+            .group_size = static_cast<uint32_t>(group_size),
+            .num_groups = static_cast<uint32_t>(num_groups),
+            .flags = tq_flags,
+            .codebook = tq_codebook,
+            .input_scale = tq_input_scale,
+            .input_scale_recip = tq_input_scale_recip,
+            .norms = tq_norms,
+            .packed_indices = static_cast<const uint8_t*>(get_data()),
+            .left_signs = tq_left_signs,
+            .right_signs = tq_right_signs,
+            .permutation = tq_permutation,
+        };
+    }
 
     void set_grouped_scales(size_t gs, size_t ng, void* scales_ptr) {
         group_size = gs; num_groups = ng; scales_data = scales_ptr;
@@ -278,7 +328,7 @@ struct OpParams {
     float logit_cap = 0.0f;
     std::vector<size_t> new_shape;
     std::vector<size_t> permutation;
-    Precision output_precision = Precision::INT8;
+    Precision output_precision = Precision::FP16;
     BroadcastInfo broadcast_info;
     ComputeBackend backend = ComputeBackend::CPU;
 
@@ -417,7 +467,7 @@ public:
     void save(const std::string& path);
     static CactusGraph load(const std::string& path);
 
-    size_t input(const std::vector<size_t>& shape, Precision precision = Precision::INT8);
+    size_t input(const std::vector<size_t>& shape, Precision precision = Precision::FP16);
     void set_input(size_t node_id, const void* data, Precision precision);
     void set_external_input(size_t node_id, void* data, Precision precision);
     void* get_output(size_t node_id);
@@ -442,7 +492,6 @@ public:
     size_t abs(size_t input);
     size_t pow(size_t input, float exponent);
     size_t precision_cast(size_t input, Precision target_precision);
-    size_t quantize_activations(size_t input);
 
     size_t relu(size_t input);
     size_t leaky_relu(size_t input, float negative_slope = 0.01f);

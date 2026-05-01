@@ -164,18 +164,6 @@ int cactus_graph_precision_cast(cactus_graph_t graph, cactus_node_t input, int32
     }
 }
 
-int cactus_graph_quantize_activations(cactus_graph_t graph, cactus_node_t input, cactus_node_t* out) {
-    if (!graph || !out) {
-        return fail_invalid("Invalid args to cactus_graph_quantize_activations");
-    }
-    try {
-        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.quantize_activations(static_cast<size_t>(input)));
-        return 0;
-    } catch (const std::exception& e) {
-        last_error_message = e.what();
-        return -1;
-    }
-}
 
 int cactus_graph_add(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, cactus_node_t* out) {
     if (!graph || !out) {

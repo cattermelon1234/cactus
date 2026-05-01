@@ -1477,18 +1477,6 @@ size_t CactusGraph::precision_cast(size_t input, Precision target_precision) {
     return add_node(OpType::PRECISION_CAST, {input}, {}, params);
 }
 
-size_t CactusGraph::quantize_activations(size_t input) {
-    const auto& input_buffer = get_output_buffer(input);
-
-    if (input_buffer.precision != Precision::FP16) {
-        throw std::invalid_argument("quantize_activations requires FP16 input");
-    }
-    
-    OpParams params{};
-    params.output_precision = Precision::INT8;
-    return add_node(OpType::QUANTIZE_ACTIVATIONS, {input}, input_buffer.shape, params);
-}
-
 size_t CactusGraph::add_node(OpType op_type, const std::vector<size_t>& inputs, const std::vector<size_t>& output_shape, const OpParams& params) {
     auto node = std::make_unique<GraphNode>(next_node_id_, op_type);
     node->input_ids = inputs;
