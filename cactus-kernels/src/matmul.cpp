@@ -344,40 +344,33 @@ static void cactus_tq_parallel_ranges(size_t total_work, size_t work_per_thread,
 }
 
 static void cactus_tq_matmul_f16_segment_accum(
-    const __fp16* A,
+    const __fp16* __restrict__ A,
     size_t a_stride,
-    const __fp16* B_tile,
-    __fp16* C,
+    const __fp16* __restrict__ B_tile,
+    __fp16* __restrict__ C,
     size_t M,
     size_t Kseg,
     size_t N,
     size_t n_start,
     size_t actual_n) {
     constexpr size_t TILE_M = 4;
-    constexpr size_t TILE_N = 24;
-    const size_t K16 = (Kseg / 16) * 16;
-    const size_t K8 = (Kseg / 8) * 8;
 
     for (size_t m_start = 0; m_start < M; m_start += TILE_M) {
         const size_t actual_m = std::min(TILE_M, M - m_start);
-        float16x8_t acc[TILE_M][TILE_N];
-        for (size_t mi = 0; mi < TILE_M; ++mi) {
-            for (size_t ni = 0; ni < TILE_N; ++ni) {
+
+        float16x8_t acc[TILE_M][16];
+        for (size_t mi = 0; mi < actual_m; ++mi) {
+            for (size_t ni = 0; ni < actual_n; ++ni) {
                 acc[mi][ni] = vdupq_n_f16(0);
             }
         }
 
-        for (size_t k = 0; k < K16; k += 16) {
+        for (size_t k = 0; k < Kseg; k += 16) {
             float16x8_t a_lo[TILE_M], a_hi[TILE_M];
-            for (size_t mi = 0; mi < TILE_M; ++mi) {
-                if (mi < actual_m) {
-                    const __fp16* ap = A + (m_start + mi) * a_stride + k;
-                    a_lo[mi] = vld1q_f16(ap);
-                    a_hi[mi] = vld1q_f16(ap + 8);
-                } else {
-                    a_lo[mi] = vdupq_n_f16(0);
-                    a_hi[mi] = vdupq_n_f16(0);
-                }
+            for (size_t mi = 0; mi < actual_m; ++mi) {
+                const __fp16* ap = A + (m_start + mi) * a_stride + k;
+                a_lo[mi] = vld1q_f16(ap);
+                a_hi[mi] = vld1q_f16(ap + 8);
             }
             for (size_t ni = 0; ni < actual_n; ++ni) {
                 const __fp16* bp = B_tile + ni * Kseg + k;
@@ -386,33 +379,6 @@ static void cactus_tq_matmul_f16_segment_accum(
                 for (size_t mi = 0; mi < actual_m; ++mi) {
                     acc[mi][ni] = vfmaq_f16(acc[mi][ni], a_lo[mi], b_lo);
                     acc[mi][ni] = vfmaq_f16(acc[mi][ni], a_hi[mi], b_hi);
-                }
-            }
-        }
-
-        for (size_t k = K16; k < K8; k += 8) {
-            float16x8_t a_v[TILE_M];
-            for (size_t mi = 0; mi < TILE_M; ++mi) {
-                a_v[mi] = mi < actual_m
-                    ? vld1q_f16(A + (m_start + mi) * a_stride + k)
-                    : vdupq_n_f16(0);
-            }
-            for (size_t ni = 0; ni < actual_n; ++ni) {
-                float16x8_t b_v = vld1q_f16(B_tile + ni * Kseg + k);
-                for (size_t mi = 0; mi < actual_m; ++mi) {
-                    acc[mi][ni] = vfmaq_f16(acc[mi][ni], a_v[mi], b_v);
-                }
-            }
-        }
-
-        for (size_t k = K8; k < Kseg; ++k) {
-            for (size_t mi = 0; mi < actual_m; ++mi) {
-                __fp16 av = A[(m_start + mi) * a_stride + k];
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    acc[mi][ni] = vsetq_lane_f16(
-                        vgetq_lane_f16(acc[mi][ni], 0) + av * B_tile[ni * Kseg + k],
-                        acc[mi][ni],
-                        0);
                 }
             }
         }
@@ -481,40 +447,42 @@ static void cactus_tq_group_gemm(
     constexpr size_t TILE_N = 16;
     const size_t n_blocks = (W.N + TILE_N - 1) / TILE_N;
 
-    cactus_tq_parallel_ranges(n_blocks, 4, [&, decode_group](size_t block_start, size_t block_end) {
-        thread_local std::vector<__fp16> b_tile;
-        if (b_tile.size() < TILE_N * W.group_size) {
-            b_tile.resize(TILE_N * W.group_size);
-        }
-
-        for (size_t block = block_start; block < block_end; ++block) {
-            const size_t n_start = block * TILE_N;
-            const size_t actual_n = std::min(TILE_N, static_cast<size_t>(W.N) - n_start);
-
-            for (size_t m = 0; m < M; ++m) {
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    C[m * W.N + n_start + ni] = 0;
-                }
+    // Use parallel_gemm_tiles for better thread distribution based on M
+    CactusThreading::parallel_gemm_tiles(M, n_blocks,
+        [&, decode_group](size_t block_start, size_t block_end) {
+            thread_local std::vector<__fp16> b_tile;
+            if (b_tile.size() < TILE_N * W.group_size) {
+                b_tile.resize(TILE_N * W.group_size);
             }
 
-            for (uint32_t g = 0; g < W.num_groups; ++g) {
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    decode_group(W, static_cast<uint32_t>(n_start + ni), g,
-                                 b_tile.data() + ni * W.group_size);
+            for (size_t block = block_start; block < block_end; ++block) {
+                const size_t n_start = block * TILE_N;
+                const size_t actual_n = std::min(TILE_N, static_cast<size_t>(W.N) - n_start);
+
+                for (size_t m = 0; m < M; ++m) {
+                    for (size_t ni = 0; ni < actual_n; ++ni) {
+                        C[m * W.N + n_start + ni] = 0;
+                    }
                 }
-                cactus_tq_matmul_f16_segment_accum(
-                    A + static_cast<size_t>(g) * W.group_size,
-                    W.K,
-                    b_tile.data(),
-                    C,
-                    M,
-                    W.group_size,
-                    W.N,
-                    n_start,
-                    actual_n);
+
+                for (uint32_t g = 0; g < W.num_groups; ++g) {
+                    for (size_t ni = 0; ni < actual_n; ++ni) {
+                        decode_group(W, static_cast<uint32_t>(n_start + ni), g,
+                                     b_tile.data() + ni * W.group_size);
+                    }
+                    cactus_tq_matmul_f16_segment_accum(
+                        A + static_cast<size_t>(g) * W.group_size,
+                        W.K,
+                        b_tile.data(),
+                        C,
+                        M,
+                        W.group_size,
+                        W.N,
+                        n_start,
+                        actual_n);
+                }
             }
-        }
-    });
+        });
 }
 
 static bool cactus_tq_valid_common(const CactusTQMatrix* W, const void* A, void* C) {
@@ -683,44 +651,28 @@ void cactus_tq4_gemv(
     if (!cactus_tq_valid_common(W, x, y)) return;
     if (W->bits != 4 || (W->group_size % 16) != 0) return;
 
-    thread_local std::vector<__fp16> code_basis_buf;
-    if (code_basis_buf.size() < W->K) code_basis_buf.resize(W->K);
-    cactus_tq_transform_hadamard_activations(*W, x, 1, code_basis_buf.data());
-    const __fp16* code_basis = code_basis_buf.data();
-
     constexpr size_t TILE_N = 12;
     const size_t n_blocks = (W->N + TILE_N - 1) / TILE_N;
+    const uint32_t gs = W->group_size;
 
     uint8x16x2_t cb_bytes;
     cb_bytes.val[0] = vld1q_u8(reinterpret_cast<const uint8_t*>(W->codebook));
     cb_bytes.val[1] = vld1q_u8(reinterpret_cast<const uint8_t*>(W->codebook) + 16);
 
-    const size_t k_stride = cactus_tq_panel_major(*W)
-        ? static_cast<size_t>(kTQPanelN) * cactus_tq_panel_chunk_bytes(W->bits)
-        : static_cast<size_t>(kTQPanelKChunk) * W->bits / 8;
+    const uint32_t pgb = cactus_tq_packed_group_bytes(4, gs);
 
     cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+        __fp16 z_buf[256];
+
         for (size_t block = block_start; block < block_end; ++block) {
             const size_t n_start = block * TILE_N;
             const size_t actual_n = std::min(TILE_N, static_cast<size_t>(W->N) - n_start);
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                const __fp16* z = code_basis + static_cast<size_t>(g) * W->group_size;
-
-                const uint8_t* packed[TILE_N] = {};
-                float rn[TILE_N] = {};
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    const uint32_t row = static_cast<uint32_t>(n_start + ni);
-                    packed[ni] = cactus_tq_packed_chunk_ptr(*W, row, g, 0);
-                    rn[ni] = static_cast<float>(*cactus_tq_scale_ptr(*W, row, g));
-                }
-                if (g + 1 < W->num_groups) {
-                    for (size_t ni = 0; ni < actual_n; ++ni) {
-                        __builtin_prefetch(cactus_tq_packed_chunk_ptr(
-                            *W, static_cast<uint32_t>(n_start + ni), g + 1, 0));
-                    }
-                }
+                // Fused: transform this group's activations on the spot
+                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                const __fp16* z = z_buf;
 
                 float16x8_t acc0[TILE_N];
                 float16x8_t acc1[TILE_N];
@@ -729,12 +681,13 @@ void cactus_tq4_gemv(
                     acc1[ni] = vdupq_n_f16(0);
                 }
 
-                size_t byte_off = 0;
-                for (uint32_t k = 0; k < W->group_size; k += 16) {
+                for (uint32_t k = 0; k < gs; k += 16) {
                     float16x8_t z0 = vld1q_f16(z + k);
                     float16x8_t z1 = vld1q_f16(z + k + 8);
                     for (size_t ni = 0; ni < actual_n; ++ni) {
-                        const uint8_t* p = packed[ni] + byte_off;
+                        const uint8_t* p = W->packed_indices
+                            + (static_cast<size_t>(n_start + ni) * W->num_groups + g) * pgb
+                            + k / 2;
                         uint8x8_t bytes = vld1_u8(p);
                         uint8x8_t lo = vand_u8(bytes, vdup_n_u8(0x0F));
                         uint8x8_t hi = vshr_n_u8(bytes, 4);
@@ -744,11 +697,11 @@ void cactus_tq4_gemv(
                         acc0[ni] = vfmaq_f16(acc0[ni], z0, cv0);
                         acc1[ni] = vfmaq_f16(acc1[ni], z1, cv1);
                     }
-                    byte_off += k_stride;
                 }
 
                 for (size_t ni = 0; ni < actual_n; ++ni) {
-                    acc[ni] += rn[ni] *
+                    float rn = static_cast<float>(W->norms[(n_start + ni) * W->num_groups + g]);
+                    acc[ni] += rn *
                         (static_cast<float>(hsum_f16x8(acc0[ni])) +
                          static_cast<float>(hsum_f16x8(acc1[ni])));
                 }
@@ -768,43 +721,37 @@ void cactus_tq2_gemv(
     if (!cactus_tq_valid_common(W, x, y)) return;
     if (W->bits != 2 || (W->group_size % 8) != 0) return;
 
-    thread_local std::vector<__fp16> code_basis_buf;
-    if (code_basis_buf.size() < W->K) code_basis_buf.resize(W->K);
-    cactus_tq_transform_hadamard_activations(*W, x, 1, code_basis_buf.data());
-    const __fp16* code_basis = code_basis_buf.data();
-
     constexpr size_t TILE_N = 12;
     const size_t n_blocks = (W->N + TILE_N - 1) / TILE_N;
+    const uint32_t gs = W->group_size;
 
     uint8x8_t cb_bytes = vld1_u8(reinterpret_cast<const uint8_t*>(W->codebook));
 
+    const uint32_t pgb = cactus_tq_packed_group_bytes(2, gs);
+
     cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+        __fp16 z_buf[256];
+
         for (size_t block = block_start; block < block_end; ++block) {
             const size_t n_start = block * TILE_N;
             const size_t actual_n = std::min(TILE_N, static_cast<size_t>(W->N) - n_start);
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                const __fp16* z = code_basis + static_cast<size_t>(g) * W->group_size;
-
-                const uint8_t* packed[TILE_N] = {};
-                float rn[TILE_N] = {};
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    const uint32_t row = static_cast<uint32_t>(n_start + ni);
-                    packed[ni] = cactus_tq_packed_chunk_ptr(*W, row, g, 0);
-                    rn[ni] = static_cast<float>(*cactus_tq_scale_ptr(*W, row, g));
-                }
+                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                const __fp16* z = z_buf;
 
                 float16x8_t accv[TILE_N];
                 for (size_t ni = 0; ni < TILE_N; ++ni) {
                     accv[ni] = vdupq_n_f16(0);
                 }
 
-                for (uint32_t k = 0; k < W->group_size; k += 8) {
+                for (uint32_t k = 0; k < gs; k += 8) {
                     float16x8_t z_v = vld1q_f16(z + k);
                     for (size_t ni = 0; ni < actual_n; ++ni) {
-                        const uint8_t* p = cactus_tq_packed_chunk_ptr(
-                            *W, static_cast<uint32_t>(n_start + ni), g, k);
+                        const uint8_t* p = W->packed_indices
+                            + (static_cast<size_t>(n_start + ni) * W->num_groups + g) * pgb
+                            + k / 4;
                         uint8x8_t indices = cactus_tq2_unpack_8x2bit_le(p[0], p[1]);
                         float16x8_t cv = cactus_tq2_lookup_codebook8(indices, cb_bytes);
                         accv[ni] = vfmaq_f16(accv[ni], z_v, cv);
@@ -812,7 +759,8 @@ void cactus_tq2_gemv(
                 }
 
                 for (size_t ni = 0; ni < actual_n; ++ni) {
-                    acc[ni] += rn[ni] * static_cast<float>(hsum_f16x8(accv[ni]));
+                    float rn = static_cast<float>(W->norms[(n_start + ni) * W->num_groups + g]);
+                    acc[ni] += rn * static_cast<float>(hsum_f16x8(accv[ni]));
                 }
             }
 
@@ -899,42 +847,36 @@ void cactus_tq1_gemv(
     if (!cactus_tq_valid_common(W, x, y)) return;
     if (W->bits != 1 || (W->group_size % 8) != 0) return;
 
-    thread_local std::vector<__fp16> code_basis_buf;
-    if (code_basis_buf.size() < W->K) code_basis_buf.resize(W->K);
-    cactus_tq_transform_hadamard_activations(*W, x, 1, code_basis_buf.data());
-    const __fp16* code_basis = code_basis_buf.data();
-
     constexpr size_t TILE_N = 12;
     const size_t n_blocks = (W->N + TILE_N - 1) / TILE_N;
+    const uint32_t gs = W->group_size;
 
     uint8x8_t cb_bytes = vld1_u8(reinterpret_cast<const uint8_t*>(W->codebook));
+    uint8x16_t cb_lut = vcombine_u8(cb_bytes, cb_bytes);
+
+    const uint32_t pgb = cactus_tq_packed_group_bytes(1, gs);
 
     cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+        __fp16 z_buf[256];
+
         for (size_t block = block_start; block < block_end; ++block) {
             const size_t n_start = block * TILE_N;
             const size_t actual_n = std::min(TILE_N, static_cast<size_t>(W->N) - n_start);
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                const __fp16* z = code_basis + static_cast<size_t>(g) * W->group_size;
-
-                const uint8_t* packed[TILE_N] = {};
-                float rn[TILE_N] = {};
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    const uint32_t row = static_cast<uint32_t>(n_start + ni);
-                    packed[ni] = cactus_tq_packed_chunk_ptr(*W, row, g, 0);
-                    rn[ni] = static_cast<float>(*cactus_tq_scale_ptr(*W, row, g));
-                }
+                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                const __fp16* z = z_buf;
 
                 float16x8_t accv[TILE_N];
                 for (size_t ni = 0; ni < TILE_N; ++ni) accv[ni] = vdupq_n_f16(0);
 
-                for (uint32_t k = 0; k < W->group_size; k += 8) {
+                for (uint32_t k = 0; k < gs; k += 8) {
                     float16x8_t z_v = vld1q_f16(z + k);
                     for (size_t ni = 0; ni < actual_n; ++ni) {
-                        // 1-bit: 8 indices per byte
-                        const uint8_t* p = cactus_tq_packed_chunk_ptr(
-                            *W, static_cast<uint32_t>(n_start + ni), g, k);
+                        const uint8_t* p = W->packed_indices
+                            + (static_cast<size_t>(n_start + ni) * W->num_groups + g) * pgb
+                            + k / 8;
                         uint8_t byte = p[0];
                         uint64_t idx_word =
                             ((uint64_t)((byte >> 0) & 1)      ) |
@@ -950,14 +892,14 @@ void cactus_tq1_gemv(
                         uint8x8_t off_hi = vadd_u8(off_lo, vdup_n_u8(1));
                         uint8x8x2_t zipped = vzip_u8(off_lo, off_hi);
                         uint8x16_t byte_idx = vcombine_u8(zipped.val[0], zipped.val[1]);
-                        uint8x16_t lut = vcombine_u8(cb_bytes, cb_bytes);
-                        float16x8_t cv = vreinterpretq_f16_u8(vqtbl1q_u8(lut, byte_idx));
+                        float16x8_t cv = vreinterpretq_f16_u8(vqtbl1q_u8(cb_lut, byte_idx));
                         accv[ni] = vfmaq_f16(accv[ni], z_v, cv);
                     }
                 }
 
                 for (size_t ni = 0; ni < actual_n; ++ni) {
-                    acc[ni] += rn[ni] * static_cast<float>(hsum_f16x8(accv[ni]));
+                    float rn = static_cast<float>(W->norms[(n_start + ni) * W->num_groups + g]);
+                    acc[ni] += rn * static_cast<float>(hsum_f16x8(accv[ni]));
                 }
             }
 
@@ -1035,41 +977,35 @@ void cactus_tq3_gemv(
     if (!cactus_tq_valid_common(W, x, y)) return;
     if (W->bits != 3 || (W->group_size % 8) != 0) return;
 
-    thread_local std::vector<__fp16> code_basis_buf;
-    if (code_basis_buf.size() < W->K) code_basis_buf.resize(W->K);
-    cactus_tq_transform_hadamard_activations(*W, x, 1, code_basis_buf.data());
-    const __fp16* code_basis = code_basis_buf.data();
-
     constexpr size_t TILE_N = 12;
     const size_t n_blocks = (W->N + TILE_N - 1) / TILE_N;
+    const uint32_t gs = W->group_size;
 
     uint8x16_t cb_bytes = vld1q_u8(reinterpret_cast<const uint8_t*>(W->codebook));
 
+    const uint32_t pgb = cactus_tq_packed_group_bytes(3, gs);
+
     cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+        __fp16 z_buf[256];
+
         for (size_t block = block_start; block < block_end; ++block) {
             const size_t n_start = block * TILE_N;
             const size_t actual_n = std::min(TILE_N, static_cast<size_t>(W->N) - n_start);
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                const __fp16* z = code_basis + static_cast<size_t>(g) * W->group_size;
-
-                const uint8_t* packed[TILE_N] = {};
-                float rn[TILE_N] = {};
-                for (size_t ni = 0; ni < actual_n; ++ni) {
-                    const uint32_t row = static_cast<uint32_t>(n_start + ni);
-                    packed[ni] = cactus_tq_packed_chunk_ptr(*W, row, g, 0);
-                    rn[ni] = static_cast<float>(*cactus_tq_scale_ptr(*W, row, g));
-                }
+                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                const __fp16* z = z_buf;
 
                 float16x8_t accv[TILE_N];
                 for (size_t ni = 0; ni < TILE_N; ++ni) accv[ni] = vdupq_n_f16(0);
 
-                for (uint32_t k = 0; k < W->group_size; k += 8) {
+                for (uint32_t k = 0; k < gs; k += 8) {
                     float16x8_t z_v = vld1q_f16(z + k);
                     for (size_t ni = 0; ni < actual_n; ++ni) {
-                        const uint8_t* p = cactus_tq_packed_chunk_ptr(
-                            *W, static_cast<uint32_t>(n_start + ni), g, k);
+                        const uint8_t* p = W->packed_indices
+                            + (static_cast<size_t>(n_start + ni) * W->num_groups + g) * pgb
+                            + (k * 3) / 8;
                         uint8x8_t indices = cactus_tq3_unpack_8x3bit(p);
                         float16x8_t cv = cactus_tq3_lookup_codebook8(indices, cb_bytes);
                         accv[ni] = vfmaq_f16(accv[ni], z_v, cv);
@@ -1077,7 +1013,8 @@ void cactus_tq3_gemv(
                 }
 
                 for (size_t ni = 0; ni < actual_n; ++ni) {
-                    acc[ni] += rn[ni] * static_cast<float>(hsum_f16x8(accv[ni]));
+                    float rn = static_cast<float>(W->norms[(n_start + ni) * W->num_groups + g]);
+                    acc[ni] += rn * static_cast<float>(hsum_f16x8(accv[ni]));
                 }
             }
 
