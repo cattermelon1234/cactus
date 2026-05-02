@@ -151,7 +151,7 @@ void compute_slice_node(GraphNode& node, const std::vector<std::unique_ptr<Graph
         node.output_buffer.set_external(base_ptr + byte_offset);
         node.output_buffer.precision = input_buffer.precision;
 
-        if (input_buffer.is_tq()) {
+        if (input_buffer.is_cq()) {
             size_t num_groups = input_buffer.num_groups;
             size_t scales_bytes = slice_length * num_groups * sizeof(__fp16);
             node.output_buffer.owned_scales = std::make_unique<char[]>(scales_bytes);

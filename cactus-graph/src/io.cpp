@@ -224,7 +224,7 @@ namespace {
         node.inputs = read_u32_vector(in);
         node.output_shape = read_size_vector(in);
         uint32_t precision_val = read_u32(in);
-        if (precision_val > static_cast<uint32_t>(Precision::TQ4)) {
+        if (precision_val > static_cast<uint32_t>(Precision::CQ4)) {
             throw std::runtime_error("Graph file corrupted: invalid precision");
         }
         node.precision = static_cast<Precision>(precision_val);
@@ -335,60 +335,57 @@ size_t CactusGraph::mmap_weights(const std::string& filename) {
     size_t node_id = input(shape, precision);
     set_external_input(node_id, const_cast<void*>(mapped_file->data()), precision);
 
-    if (PrecisionTraits::is_tq(precision) && mapped_file->group_size() > 0) {
+    if (PrecisionTraits::is_cq(precision) && mapped_file->group_size() > 0) {
         auto& buffer = nodes_[node_index_map_.at(node_id)]->output_buffer;
         buffer.group_size = mapped_file->group_size();
         buffer.num_groups = mapped_file->num_groups();
 
-        // TQ scales section layout (sequentially packed):
-        // codebook [cb_size * fp16], input_scale [K * fp16], input_scale_recip [K * fp16],
-        // norms [N * num_groups * fp16], left_signs [gs * int8],
-        // right_signs [gs * int8], permutation [gs * uint32]
+
         const char* scales_base = static_cast<const char*>(mapped_file->scales_data());
-        uint32_t bits = PrecisionTraits::tq_bits(precision);
+        uint32_t bits = PrecisionTraits::cq_bits(precision);
         uint32_t cb_size = 1u << bits;
         uint32_t gs = static_cast<uint32_t>(mapped_file->group_size());
         uint32_t K = gs * static_cast<uint32_t>(mapped_file->num_groups());
         uint32_t N = static_cast<uint32_t>(shape.size() >= 2 ? shape[0] : 1);
 
         size_t off = 0;
-        buffer.tq_codebook = reinterpret_cast<const __fp16*>(scales_base + off);
+        buffer.cq_codebook = reinterpret_cast<const __fp16*>(scales_base + off);
         off += cb_size * sizeof(__fp16);
-        buffer.tq_input_scale = reinterpret_cast<const __fp16*>(scales_base + off);
+        buffer.cq_input_scale = reinterpret_cast<const __fp16*>(scales_base + off);
         off += K * sizeof(__fp16);
-        buffer.tq_input_scale_recip = reinterpret_cast<const __fp16*>(scales_base + off);
+        buffer.cq_input_scale_recip = reinterpret_cast<const __fp16*>(scales_base + off);
         off += K * sizeof(__fp16);
-        buffer.tq_norms = reinterpret_cast<const __fp16*>(scales_base + off);
+        buffer.cq_norms = reinterpret_cast<const __fp16*>(scales_base + off);
         off += static_cast<size_t>(N) * mapped_file->num_groups() * sizeof(__fp16);
-        buffer.tq_left_signs = reinterpret_cast<const int8_t*>(scales_base + off);
+        buffer.cq_left_signs = reinterpret_cast<const int8_t*>(scales_base + off);
         off += gs;
-        buffer.tq_right_signs = reinterpret_cast<const int8_t*>(scales_base + off);
+        buffer.cq_right_signs = reinterpret_cast<const int8_t*>(scales_base + off);
         off += gs;
-        buffer.tq_permutation = reinterpret_cast<const uint32_t*>(scales_base + off);
-        buffer.tq_flags = 0;
+        buffer.cq_permutation = reinterpret_cast<const uint32_t*>(scales_base + off);
+        buffer.cq_flags = 0;
 
-        // Pre-expand and interleave weights for dotprod at load time
+
         {
             uint32_t num_grps = static_cast<uint32_t>(mapped_file->num_groups());
-            uint32_t pgb_bytes = cactus_tq_packed_group_bytes(bits, gs);
+            uint32_t pgb_bytes = cactus_quant_packed_group_bytes(bits, gs);
             size_t N_blocks = (N + 3) / 4;
 
-            // Quantize codebook to int8
+
             int8_t cb_i8[16] = {};
             float cb_max = 0.f;
             for (uint32_t i = 0; i < cb_size; i++) {
-                float v = std::abs(static_cast<float>(buffer.tq_codebook[i]));
+                float v = std::abs(static_cast<float>(buffer.cq_codebook[i]));
                 if (v > cb_max) cb_max = v;
             }
             float cb_scale_val = cb_max / 127.f;
             if (cb_scale_val < 1e-10f) cb_scale_val = 1e-10f;
             for (uint32_t i = 0; i < cb_size; i++)
-                cb_i8[i] = static_cast<int8_t>(std::round(static_cast<float>(buffer.tq_codebook[i]) / cb_scale_val));
+                cb_i8[i] = static_cast<int8_t>(std::round(static_cast<float>(buffer.cq_codebook[i]) / cb_scale_val));
             int8x16_t cb_lut = vld1q_s8(cb_i8);
 
-            // Allocate interleaved buffer + norm buffer
-            buffer.tq_expanded = std::make_unique<int8_t[]>(N_blocks * num_grps * gs * 4);
-            buffer.tq_norm_f32 = std::make_unique<float[]>(N_blocks * num_grps * 4);
+
+            buffer.cq_expanded = std::make_unique<int8_t[]>(N_blocks * num_grps * gs * 4);
+            buffer.cq_norm_f32 = std::make_unique<float[]>(N_blocks * num_grps * 4);
 
             const uint8_t* packed_base = static_cast<const uint8_t*>(buffer.get_data());
 
@@ -410,8 +407,8 @@ size_t CactusGraph::mmap_weights(const std::string& filename) {
                         for (uint32_t v = 0; v < n_vecs; ++v)
                             exp[ni][v] = vdupq_n_s8(0);
 
-                    // Interleave for CACTUS_DOTQ_LANE
-                    int8_t* dst = buffer.tq_expanded.get() + (nb * num_grps + g) * gs * 4;
+
+                    int8_t* dst = buffer.cq_expanded.get() + (nb * num_grps + g) * gs * 4;
                     for (uint32_t v = 0; v < n_vecs; ++v) {
                         int32x4_t r0 = vreinterpretq_s32_s8(exp[0][v]);
                         int32x4_t r1 = vreinterpretq_s32_s8(exp[1][v]);
@@ -427,11 +424,11 @@ size_t CactusGraph::mmap_weights(const std::string& filename) {
                         vst1q_s8(dst + v*64+48, vreinterpretq_s8_s64(vzip2q_s64(vreinterpretq_s64_s32(t01_hi), vreinterpretq_s64_s32(t23_hi))));
                     }
 
-                    // Store norms as float32×4 (with cb_scale baked in)
-                    float* nd = buffer.tq_norm_f32.get() + (nb * num_grps + g) * 4;
+
+                    float* nd = buffer.cq_norm_f32.get() + (nb * num_grps + g) * 4;
                     for (size_t ni = 0; ni < 4; ++ni)
                         nd[ni] = (n_start + ni < N)
-                            ? static_cast<float>(buffer.tq_norms[(n_start + ni) * num_grps + g]) * cb_scale_val
+                            ? static_cast<float>(buffer.cq_norms[(n_start + ni) * num_grps + g]) * cb_scale_val
                             : 0.f;
                 }
             }

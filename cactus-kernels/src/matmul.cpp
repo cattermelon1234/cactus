@@ -78,20 +78,20 @@ namespace {
 constexpr uint32_t kTQPanelN = 4;
 constexpr uint32_t kTQPanelKChunk = 16;
 
-static inline bool cactus_tq_panel_major(const CactusTQMatrix& W) {
-    return (W.flags & CACTUS_TQ_FLAG_PANEL_MAJOR) != 0;
+static inline bool cactus_quant_panel_major(const CactusQuantMatrix& W) {
+    return (W.flags & CACTUS_QUANT_FLAG_PANEL_MAJOR) != 0;
 }
 
-static inline bool cactus_tq_code_ordered(const CactusTQMatrix& W) {
-    return (W.flags & CACTUS_TQ_FLAG_CODE_ORDERED_INDICES) != 0;
+static inline bool cactus_quant_code_ordered(const CactusQuantMatrix& W) {
+    return (W.flags & CACTUS_QUANT_FLAG_CODE_ORDERED_INDICES) != 0;
 }
 
-static inline float16x8_t cactus_tq_signs_to_f16(const int8_t* signs, uint32_t offset) {
+static inline float16x8_t cactus_quant_signs_to_f16(const int8_t* signs, uint32_t offset) {
     if (signs == nullptr) return vdupq_n_f16(1);
     return vcvtq_f16_s16(vmovl_s8(vld1_s8(signs + offset)));
 }
 
-static inline float16x8_t cactus_tq_input_scale_recip8(const CactusTQMatrix& W, uint32_t offset) {
+static inline float16x8_t cactus_quant_input_scale_recip8(const CactusQuantMatrix& W, uint32_t offset) {
     if (W.input_scale_recip != nullptr) {
         return vld1q_f16(W.input_scale_recip + offset);
     }
@@ -101,22 +101,22 @@ static inline float16x8_t cactus_tq_input_scale_recip8(const CactusTQMatrix& W, 
     return vdupq_n_f16(1);
 }
 
-static inline __fp16 cactus_tq_input_scale_recip1(const CactusTQMatrix& W, uint32_t offset) {
+static inline __fp16 cactus_quant_input_scale_recip1(const CactusQuantMatrix& W, uint32_t offset) {
     if (W.input_scale_recip != nullptr) return W.input_scale_recip[offset];
     if (W.input_scale != nullptr) return static_cast<__fp16>(1.0f / static_cast<float>(W.input_scale[offset]));
     return static_cast<__fp16>(1);
 }
 
-static inline uint32_t cactus_tq_panel_chunks(const CactusTQMatrix& W) {
+static inline uint32_t cactus_quant_panel_chunks(const CactusQuantMatrix& W) {
     return W.group_size / kTQPanelKChunk;
 }
 
-static inline uint32_t cactus_tq_panel_chunk_bytes(uint32_t bits) {
+static inline uint32_t cactus_quant_panel_chunk_bytes(uint32_t bits) {
     return (kTQPanelKChunk * bits) / 8;
 }
 
-static inline const __fp16* cactus_tq_scale_ptr(const CactusTQMatrix& W, uint32_t row, uint32_t group) {
-    if (!cactus_tq_panel_major(W)) {
+static inline const __fp16* cactus_quant_scale_ptr(const CactusQuantMatrix& W, uint32_t row, uint32_t group) {
+    if (!cactus_quant_panel_major(W)) {
         return W.norms + static_cast<size_t>(row) * W.num_groups + group;
     }
 
@@ -125,15 +125,15 @@ static inline const __fp16* cactus_tq_scale_ptr(const CactusTQMatrix& W, uint32_
     return W.norms + (((static_cast<size_t>(block) * W.num_groups + group) * kTQPanelN) + lane);
 }
 
-static inline const uint8_t* cactus_tq_packed_chunk_ptr(
-    const CactusTQMatrix& W,
+static inline const uint8_t* cactus_quant_packed_chunk_ptr(
+    const CactusQuantMatrix& W,
     uint32_t row,
     uint32_t group,
     uint32_t k) {
-    if (!cactus_tq_panel_major(W)) {
+    if (!cactus_quant_panel_major(W)) {
         return W.packed_indices
             + (((static_cast<size_t>(row) * W.num_groups + group)
-                * cactus_tq_packed_group_bytes(W.bits, W.group_size))
+                * cactus_quant_packed_group_bytes(W.bits, W.group_size))
                + (static_cast<size_t>(k) * W.bits) / 8);
     }
 
@@ -141,10 +141,10 @@ static inline const uint8_t* cactus_tq_packed_chunk_ptr(
     const uint32_t block = row / kTQPanelN;
     const uint32_t chunk = k / kTQPanelKChunk;
     const uint32_t intra = ((k % kTQPanelKChunk) * W.bits) / 8;
-    const uint32_t chunk_bytes = cactus_tq_panel_chunk_bytes(W.bits);
+    const uint32_t chunk_bytes = cactus_quant_panel_chunk_bytes(W.bits);
     return W.packed_indices
         + ((((static_cast<size_t>(block) * W.num_groups + group)
-             * cactus_tq_panel_chunks(W) + chunk)
+             * cactus_quant_panel_chunks(W) + chunk)
             * kTQPanelN + lane)
            * chunk_bytes)
         + intra;
@@ -180,7 +180,7 @@ static inline float16x8_t cactus_tq2_lookup_codebook8(uint8x8_t indices, uint8x8
     return vreinterpretq_f16_u8(vqtbl1q_u8(lut, byte_idx));
 }
 
-static void cactus_tq_fwht128_f16(__fp16* x) {
+static void cactus_quant_fwht128_f16(__fp16* x) {
     float16x8_t v[16];
     for (int i = 0; i < 16; ++i) v[i] = vld1q_f16(x + i * 8);
     for (int i = 0; i < 16; ++i) {
@@ -224,7 +224,7 @@ static void cactus_tq_fwht128_f16(__fp16* x) {
     }
 }
 
-static void cactus_tq_fwht_f16(__fp16* x, uint32_t n) {
+static void cactus_quant_fwht_f16(__fp16* x, uint32_t n) {
     for (uint32_t h = 1; h < n; h <<= 1) {
         for (uint32_t i = 0; i < n; i += (h << 1)) {
             for (uint32_t j = i; j < i + h; j += 8) {
@@ -256,40 +256,40 @@ static void cactus_tq_fwht_f16(__fp16* x, uint32_t n) {
     }
 }
 
-static void cactus_tq_transform_hadamard_group(
-    const CactusTQMatrix& W,
+static void cactus_quant_transform_hadamard_group(
+    const CactusQuantMatrix& W,
     const __fp16* x_group,
     uint32_t group,
     __fp16* code_basis) {
     const uint32_t gs = W.group_size;
     __fp16 tmp[256];
-    __fp16* work = (cactus_tq_code_ordered(W) || W.permutation == nullptr) ? code_basis : tmp;
+    __fp16* work = (cactus_quant_code_ordered(W) || W.permutation == nullptr) ? code_basis : tmp;
 
     uint32_t k = 0;
     for (; k + 8 <= gs; k += 8) {
         const uint32_t offset = group * gs + k;
         float16x8_t x_v = vld1q_f16(x_group + k);
-        x_v = vmulq_f16(x_v, cactus_tq_input_scale_recip8(W, offset));
-        float16x8_t s_v = cactus_tq_signs_to_f16(W.left_signs, k);
+        x_v = vmulq_f16(x_v, cactus_quant_input_scale_recip8(W, offset));
+        float16x8_t s_v = cactus_quant_signs_to_f16(W.left_signs, k);
         vst1q_f16(work + k, vmulq_f16(x_v, s_v));
     }
     for (; k < gs; ++k) {
         const uint32_t offset = group * gs + k;
         const float sign = W.left_signs ? static_cast<float>(W.left_signs[k]) : 1.0f;
-        const float scale = static_cast<float>(cactus_tq_input_scale_recip1(W, offset));
+        const float scale = static_cast<float>(cactus_quant_input_scale_recip1(W, offset));
         work[k] = static_cast<__fp16>(static_cast<float>(x_group[k]) * scale * sign);
     }
 
     if (gs == 128) {
-        cactus_tq_fwht128_f16(work);
+        cactus_quant_fwht128_f16(work);
     } else {
-        cactus_tq_fwht_f16(work, gs);
+        cactus_quant_fwht_f16(work, gs);
     }
 
     k = 0;
     for (; k + 8 <= gs; k += 8) {
         float16x8_t w_v = vld1q_f16(work + k);
-        float16x8_t s_v = cactus_tq_signs_to_f16(W.right_signs, k);
+        float16x8_t s_v = cactus_quant_signs_to_f16(W.right_signs, k);
         vst1q_f16(work + k, vmulq_f16(w_v, s_v));
     }
     for (; k < gs; ++k) {
@@ -304,8 +304,8 @@ static void cactus_tq_transform_hadamard_group(
     }
 }
 
-static void cactus_tq_transform_hadamard_activations(
-    const CactusTQMatrix& W,
+static void cactus_quant_transform_hadamard_activations(
+    const CactusQuantMatrix& W,
     const __fp16* A,
     uint32_t M,
     __fp16* code_basis) {
@@ -317,7 +317,7 @@ static void cactus_tq_transform_hadamard_activations(
             for (size_t idx = start; idx < end; ++idx) {
                 const size_t m = idx / W.num_groups;
                 const size_t g = idx - m * W.num_groups;
-                cactus_tq_transform_hadamard_group(
+                cactus_quant_transform_hadamard_group(
                     W,
                     A + m * W.K + g * W.group_size,
                     static_cast<uint32_t>(g),
@@ -327,7 +327,7 @@ static void cactus_tq_transform_hadamard_activations(
 }
 
 template<typename WorkFunc>
-static void cactus_tq_parallel_ranges(size_t total_work, size_t work_per_thread, WorkFunc work_func) {
+static void cactus_quant_parallel_ranges(size_t total_work, size_t work_per_thread, WorkFunc work_func) {
     if (total_work == 0) return;
     if (work_per_thread == 0) work_per_thread = 1;
 
@@ -343,7 +343,7 @@ static void cactus_tq_parallel_ranges(size_t total_work, size_t work_per_thread,
     pool.wait_all();
 }
 
-static void cactus_tq_matmul_f16_segment_accum(
+static void cactus_quant_matmul_f16_segment_accum(
     const __fp16* __restrict__ A,
     size_t a_stride,
     const __fp16* __restrict__ B_tile,
@@ -395,16 +395,16 @@ static void cactus_tq_matmul_f16_segment_accum(
 struct CactusTQ4ScaledDecoder {
     uint8x16x2_t cb_bytes;
 
-    explicit CactusTQ4ScaledDecoder(const CactusTQMatrix& W) {
+    explicit CactusTQ4ScaledDecoder(const CactusQuantMatrix& W) {
         cb_bytes.val[0] = vld1q_u8(reinterpret_cast<const uint8_t*>(W.codebook));
         cb_bytes.val[1] = vld1q_u8(reinterpret_cast<const uint8_t*>(W.codebook) + 16);
     }
 
-    void operator()(const CactusTQMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
-        const __fp16 rn = *cactus_tq_scale_ptr(W, row, group);
+    void operator()(const CactusQuantMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
+        const __fp16 rn = *cactus_quant_scale_ptr(W, row, group);
         const float16x8_t rn_v = vdupq_n_f16(rn);
         for (uint32_t k = 0; k < W.group_size; k += 16) {
-            const uint8_t* packed = cactus_tq_packed_chunk_ptr(W, row, group, k);
+            const uint8_t* packed = cactus_quant_packed_chunk_ptr(W, row, group, k);
             uint8x8_t bytes = vld1_u8(packed);
             uint8x8_t lo = vand_u8(bytes, vdup_n_u8(0x0F));
             uint8x8_t hi = vshr_n_u8(bytes, 4);
@@ -419,14 +419,14 @@ struct CactusTQ4ScaledDecoder {
 struct CactusTQ2ScaledDecoder {
     uint8x8_t cb_bytes;
 
-    explicit CactusTQ2ScaledDecoder(const CactusTQMatrix& W)
+    explicit CactusTQ2ScaledDecoder(const CactusQuantMatrix& W)
         : cb_bytes(vld1_u8(reinterpret_cast<const uint8_t*>(W.codebook))) {}
 
-    void operator()(const CactusTQMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
-        const __fp16 rn = *cactus_tq_scale_ptr(W, row, group);
+    void operator()(const CactusQuantMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
+        const __fp16 rn = *cactus_quant_scale_ptr(W, row, group);
         const float16x8_t rn_v = vdupq_n_f16(rn);
         for (uint32_t k = 0; k < W.group_size; k += 8) {
-            const uint8_t* packed = cactus_tq_packed_chunk_ptr(W, row, group, k);
+            const uint8_t* packed = cactus_quant_packed_chunk_ptr(W, row, group, k);
             uint8x8_t indices = cactus_tq2_unpack_8x2bit_le(packed[0], packed[1]);
             vst1q_f16(dst + k,
                       vmulq_f16(cactus_tq2_lookup_codebook8(indices, cb_bytes), rn_v));
@@ -435,8 +435,8 @@ struct CactusTQ2ScaledDecoder {
 };
 
 template<uint32_t Bits, typename DecodeGroup>
-static void cactus_tq_group_gemm(
-    const CactusTQMatrix& W,
+static void cactus_quant_group_gemm(
+    const CactusQuantMatrix& W,
     const __fp16* A,
     uint32_t M,
     __fp16* C,
@@ -447,7 +447,7 @@ static void cactus_tq_group_gemm(
     constexpr size_t TILE_N = 16;
     const size_t n_blocks = (W.N + TILE_N - 1) / TILE_N;
 
-    // Use parallel_gemm_tiles for better thread distribution based on M
+
     CactusThreading::parallel_gemm_tiles(M, n_blocks,
         [&, decode_group](size_t block_start, size_t block_end) {
             thread_local std::vector<__fp16> b_tile;
@@ -470,7 +470,7 @@ static void cactus_tq_group_gemm(
                         decode_group(W, static_cast<uint32_t>(n_start + ni), g,
                                      b_tile.data() + ni * W.group_size);
                     }
-                    cactus_tq_matmul_f16_segment_accum(
+                    cactus_quant_matmul_f16_segment_accum(
                         A + static_cast<size_t>(g) * W.group_size,
                         W.K,
                         b_tile.data(),
@@ -485,7 +485,7 @@ static void cactus_tq_group_gemm(
         });
 }
 
-static bool cactus_tq_valid_common(const CactusTQMatrix* W, const void* A, void* C) {
+static bool cactus_quant_valid_common(const CactusQuantMatrix* W, const void* A, void* C) {
     if (W == nullptr || A == nullptr || C == nullptr) return false;
     if (W->K == 0 || W->N == 0 || W->group_size == 0 || W->num_groups == 0) return false;
     if (W->group_size > 256) return false;
@@ -639,16 +639,16 @@ void cactus_matmul_f16(
         });
 }
 
-uint32_t cactus_tq_packed_group_bytes(uint32_t bits, uint32_t group_size) {
+uint32_t cactus_quant_packed_group_bytes(uint32_t bits, uint32_t group_size) {
     if (bits == 0 || bits > 4) return 0;
     return (group_size * bits + 7) / 8;
 }
 
-void cactus_tq4_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_4bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y) {
-    if (!cactus_tq_valid_common(W, x, y)) return;
+    if (!cactus_quant_valid_common(W, x, y)) return;
     if (W->bits != 4 || (W->group_size % 16) != 0) return;
 
     constexpr size_t TILE_N = 12;
@@ -659,9 +659,9 @@ void cactus_tq4_gemv(
     cb_bytes.val[0] = vld1q_u8(reinterpret_cast<const uint8_t*>(W->codebook));
     cb_bytes.val[1] = vld1q_u8(reinterpret_cast<const uint8_t*>(W->codebook) + 16);
 
-    const uint32_t pgb = cactus_tq_packed_group_bytes(4, gs);
+    const uint32_t pgb = cactus_quant_packed_group_bytes(4, gs);
 
-    cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+    cactus_quant_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
         __fp16 z_buf[256];
 
         for (size_t block = block_start; block < block_end; ++block) {
@@ -670,8 +670,8 @@ void cactus_tq4_gemv(
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                // Fused: transform this group's activations on the spot
-                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+
+                cactus_quant_transform_hadamard_group(*W, x + g * gs, g, z_buf);
                 const __fp16* z = z_buf;
 
                 float16x8_t acc0[TILE_N];
@@ -714,11 +714,11 @@ void cactus_tq4_gemv(
     });
 }
 
-void cactus_tq2_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_2bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y) {
-    if (!cactus_tq_valid_common(W, x, y)) return;
+    if (!cactus_quant_valid_common(W, x, y)) return;
     if (W->bits != 2 || (W->group_size % 8) != 0) return;
 
     constexpr size_t TILE_N = 12;
@@ -727,9 +727,9 @@ void cactus_tq2_gemv(
 
     uint8x8_t cb_bytes = vld1_u8(reinterpret_cast<const uint8_t*>(W->codebook));
 
-    const uint32_t pgb = cactus_tq_packed_group_bytes(2, gs);
+    const uint32_t pgb = cactus_quant_packed_group_bytes(2, gs);
 
-    cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+    cactus_quant_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
         __fp16 z_buf[256];
 
         for (size_t block = block_start; block < block_end; ++block) {
@@ -738,7 +738,7 @@ void cactus_tq2_gemv(
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                cactus_quant_transform_hadamard_group(*W, x + g * gs, g, z_buf);
                 const __fp16* z = z_buf;
 
                 float16x8_t accv[TILE_N];
@@ -771,52 +771,50 @@ void cactus_tq2_gemv(
     });
 }
 
-void cactus_tq4_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_4bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C) {
-    if (!cactus_tq_valid_common(W, A, C) || M == 0) return;
+    if (!cactus_quant_valid_common(W, A, C) || M == 0) return;
     if (W->bits != 4 || (W->group_size % 16) != 0) return;
     thread_local std::vector<__fp16> code_basis_buf;
     if (code_basis_buf.size() < static_cast<size_t>(M) * W->K) {
         code_basis_buf.resize(static_cast<size_t>(M) * W->K);
     }
-    cactus_tq_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
-    cactus_tq_group_gemm<4>(*W, code_basis_buf.data(), M, C, CactusTQ4ScaledDecoder(*W));
+    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
+    cactus_quant_group_gemm<4>(*W, code_basis_buf.data(), M, C, CactusTQ4ScaledDecoder(*W));
 }
 
-void cactus_tq2_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_2bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C) {
-    if (!cactus_tq_valid_common(W, A, C) || M == 0) return;
+    if (!cactus_quant_valid_common(W, A, C) || M == 0) return;
     if (W->bits != 2 || (W->group_size % 8) != 0) return;
     thread_local std::vector<__fp16> code_basis_buf;
     if (code_basis_buf.size() < static_cast<size_t>(M) * W->K) {
         code_basis_buf.resize(static_cast<size_t>(M) * W->K);
     }
-    cactus_tq_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
-    cactus_tq_group_gemm<2>(*W, code_basis_buf.data(), M, C, CactusTQ2ScaledDecoder(*W));
+    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
+    cactus_quant_group_gemm<2>(*W, code_basis_buf.data(), M, C, CactusTQ2ScaledDecoder(*W));
 }
 
-// TQ1: 1-bit quantization (2 codebook entries, indices packed 8 per byte)
-// Reuses TQ2 decoder since 1-bit indices are stored in same 2-bit slots with only values 0/1 used.
-// The codebook has 2 entries, packed into 4 bytes (2x fp16).
+
 
 struct CactusTQ1ScaledDecoder {
     uint8x8_t cb_bytes;
 
-    explicit CactusTQ1ScaledDecoder(const CactusTQMatrix& W)
+    explicit CactusTQ1ScaledDecoder(const CactusQuantMatrix& W)
         : cb_bytes(vld1_u8(reinterpret_cast<const uint8_t*>(W.codebook))) {}
 
-    void operator()(const CactusTQMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
-        const __fp16 rn = *cactus_tq_scale_ptr(W, row, group);
+    void operator()(const CactusQuantMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
+        const __fp16 rn = *cactus_quant_scale_ptr(W, row, group);
         const float16x8_t rn_v = vdupq_n_f16(rn);
         for (uint32_t k = 0; k < W.group_size; k += 8) {
-            const uint8_t* packed = cactus_tq_packed_chunk_ptr(W, row, group, k);
-            // 1-bit: 8 indices packed in 1 byte
+            const uint8_t* packed = cactus_quant_packed_chunk_ptr(W, row, group, k);
+
             uint8_t byte = packed[0];
             uint64_t idx_word =
                 ((uint64_t)((byte >> 0) & 1)      ) |
@@ -828,7 +826,7 @@ struct CactusTQ1ScaledDecoder {
                 ((uint64_t)((byte >> 6) & 1) << 48) |
                 ((uint64_t)((byte >> 7) & 1) << 56);
             uint8x8_t indices = vcreate_u8(idx_word);
-            // Lookup: same as TQ2 but codebook only has 2 entries
+
             uint8x8_t off_lo = vshl_n_u8(indices, 1);
             uint8x8_t off_hi = vadd_u8(off_lo, vdup_n_u8(1));
             uint8x8x2_t zipped = vzip_u8(off_lo, off_hi);
@@ -840,11 +838,11 @@ struct CactusTQ1ScaledDecoder {
     }
 };
 
-void cactus_tq1_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_1bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y) {
-    if (!cactus_tq_valid_common(W, x, y)) return;
+    if (!cactus_quant_valid_common(W, x, y)) return;
     if (W->bits != 1 || (W->group_size % 8) != 0) return;
 
     constexpr size_t TILE_N = 12;
@@ -854,9 +852,9 @@ void cactus_tq1_gemv(
     uint8x8_t cb_bytes = vld1_u8(reinterpret_cast<const uint8_t*>(W->codebook));
     uint8x16_t cb_lut = vcombine_u8(cb_bytes, cb_bytes);
 
-    const uint32_t pgb = cactus_tq_packed_group_bytes(1, gs);
+    const uint32_t pgb = cactus_quant_packed_group_bytes(1, gs);
 
-    cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+    cactus_quant_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
         __fp16 z_buf[256];
 
         for (size_t block = block_start; block < block_end; ++block) {
@@ -865,7 +863,7 @@ void cactus_tq1_gemv(
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                cactus_quant_transform_hadamard_group(*W, x + g * gs, g, z_buf);
                 const __fp16* z = z_buf;
 
                 float16x8_t accv[TILE_N];
@@ -910,26 +908,25 @@ void cactus_tq1_gemv(
     });
 }
 
-void cactus_tq1_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_1bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C) {
-    if (!cactus_tq_valid_common(W, A, C) || M == 0) return;
+    if (!cactus_quant_valid_common(W, A, C) || M == 0) return;
     if (W->bits != 1 || (W->group_size % 8) != 0) return;
     thread_local std::vector<__fp16> code_basis_buf;
     if (code_basis_buf.size() < static_cast<size_t>(M) * W->K) {
         code_basis_buf.resize(static_cast<size_t>(M) * W->K);
     }
-    cactus_tq_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
-    cactus_tq_group_gemm<1>(*W, code_basis_buf.data(), M, C, CactusTQ1ScaledDecoder(*W));
+    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
+    cactus_quant_group_gemm<1>(*W, code_basis_buf.data(), M, C, CactusTQ1ScaledDecoder(*W));
 }
 
-// TQ3: 3-bit quantization (8 codebook entries)
-// 3-bit indices are packed densely: 8 indices in 3 bytes (24 bits)
+
 
 static inline uint8x8_t cactus_tq3_unpack_8x3bit(const uint8_t* packed) {
-    // 8 indices x 3 bits = 24 bits = 3 bytes
+
     uint32_t b0 = packed[0], b1 = packed[1], b2 = packed[2];
     uint32_t word = b0 | (b1 << 8) | (b2 << 16);
     uint64_t idx_word =
@@ -955,14 +952,14 @@ static inline float16x8_t cactus_tq3_lookup_codebook8(uint8x8_t indices, uint8x1
 struct CactusTQ3ScaledDecoder {
     uint8x16_t cb_bytes;
 
-    explicit CactusTQ3ScaledDecoder(const CactusTQMatrix& W)
+    explicit CactusTQ3ScaledDecoder(const CactusQuantMatrix& W)
         : cb_bytes(vld1q_u8(reinterpret_cast<const uint8_t*>(W.codebook))) {}
 
-    void operator()(const CactusTQMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
-        const __fp16 rn = *cactus_tq_scale_ptr(W, row, group);
+    void operator()(const CactusQuantMatrix& W, uint32_t row, uint32_t group, __fp16* dst) const {
+        const __fp16 rn = *cactus_quant_scale_ptr(W, row, group);
         const float16x8_t rn_v = vdupq_n_f16(rn);
         for (uint32_t k = 0; k < W.group_size; k += 8) {
-            const uint8_t* packed = cactus_tq_packed_chunk_ptr(W, row, group, k);
+            const uint8_t* packed = cactus_quant_packed_chunk_ptr(W, row, group, k);
             uint8x8_t indices = cactus_tq3_unpack_8x3bit(packed);
             float16x8_t cv = cactus_tq3_lookup_codebook8(indices, cb_bytes);
             vst1q_f16(dst + k, vmulq_f16(cv, rn_v));
@@ -970,11 +967,11 @@ struct CactusTQ3ScaledDecoder {
     }
 };
 
-void cactus_tq3_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_3bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y) {
-    if (!cactus_tq_valid_common(W, x, y)) return;
+    if (!cactus_quant_valid_common(W, x, y)) return;
     if (W->bits != 3 || (W->group_size % 8) != 0) return;
 
     constexpr size_t TILE_N = 12;
@@ -983,9 +980,9 @@ void cactus_tq3_gemv(
 
     uint8x16_t cb_bytes = vld1q_u8(reinterpret_cast<const uint8_t*>(W->codebook));
 
-    const uint32_t pgb = cactus_tq_packed_group_bytes(3, gs);
+    const uint32_t pgb = cactus_quant_packed_group_bytes(3, gs);
 
-    cactus_tq_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
+    cactus_quant_parallel_ranges(n_blocks, 16, [&](size_t block_start, size_t block_end) {
         __fp16 z_buf[256];
 
         for (size_t block = block_start; block < block_end; ++block) {
@@ -994,7 +991,7 @@ void cactus_tq3_gemv(
             float acc[TILE_N] = {};
 
             for (uint32_t g = 0; g < W->num_groups; ++g) {
-                cactus_tq_transform_hadamard_group(*W, x + g * gs, g, z_buf);
+                cactus_quant_transform_hadamard_group(*W, x + g * gs, g, z_buf);
                 const __fp16* z = z_buf;
 
                 float16x8_t accv[TILE_N];
@@ -1025,19 +1022,19 @@ void cactus_tq3_gemv(
     });
 }
 
-void cactus_tq3_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_3bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C) {
-    if (!cactus_tq_valid_common(W, A, C) || M == 0) return;
+    if (!cactus_quant_valid_common(W, A, C) || M == 0) return;
     if (W->bits != 3 || (W->group_size % 8) != 0) return;
     thread_local std::vector<__fp16> code_basis_buf;
     if (code_basis_buf.size() < static_cast<size_t>(M) * W->K) {
         code_basis_buf.resize(static_cast<size_t>(M) * W->K);
     }
-    cactus_tq_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
-    cactus_tq_group_gemm<3>(*W, code_basis_buf.data(), M, C, CactusTQ3ScaledDecoder(*W));
+    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis_buf.data());
+    cactus_quant_group_gemm<3>(*W, code_basis_buf.data(), M, C, CactusTQ3ScaledDecoder(*W));
 }
 
 static inline float tq_quantize_codebook_i8(const __fp16* codebook, int8_t* cb_i8, uint32_t cb_size) {
@@ -1082,7 +1079,7 @@ static inline float tq_quantize_group_i8(const __fp16* src, int8_t* dst, uint32_
     return scale;
 }
 
-// Expand TQ packed indices → int8 via codebook table lookup (16 elements)
+
 static inline int8x16_t tq_expand_i8_16(const uint8_t* packed, uint32_t bits, int8x16_t cb_lut) {
     if (bits == 4) {
         uint8x8_t bytes = vld1_u8(packed);
@@ -1126,24 +1123,24 @@ static inline int8x16_t tq_expand_i8_16(const uint8_t* packed, uint32_t bits, in
     }
 }
 
-void cactus_tq_matmul(
-    const CactusTQMatrix* W,
+void cactus_quant_matmul(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C) {
-    if (!cactus_tq_valid_common(W, A, C) || M == 0) return;
+    if (!cactus_quant_valid_common(W, A, C) || M == 0) return;
 
     const uint32_t gs = W->group_size;
     const uint32_t bits = W->bits;
     const uint32_t num_groups = W->num_groups;
-    const uint32_t pgb = cactus_tq_packed_group_bytes(bits, gs);
+    const uint32_t pgb = cactus_quant_packed_group_bytes(bits, gs);
 
     int8_t cb_i8[16] = {};
     float cb_scale = tq_quantize_codebook_i8(W->codebook, cb_i8, 1u << bits);
     int8x16_t cb_lut = vld1q_s8(cb_i8);
 
     std::vector<__fp16> code_basis(static_cast<size_t>(M) * W->K);
-    cactus_tq_transform_hadamard_activations(*W, A, M, code_basis.data());
+    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis.data());
 
     std::vector<int8_t> act_i8(static_cast<size_t>(M) * W->K);
     std::vector<float> act_scales(static_cast<size_t>(M) * num_groups);
@@ -1238,7 +1235,7 @@ void cactus_tq_matmul(
                         acc0 = CACTUS_DOTQ_LANE(acc0, vld1q_s8(b0 + k*4 + 112),av, 3);
                     }
 
-                    // Group 1
+
                     for (uint32_t k = 0; k < gs; k += 32) {
                         int8x16_t av = vld1q_s8(a1 + k);
                         acc1 = CACTUS_DOTQ_LANE(acc1, vld1q_s8(b1 + k*4),      av, 0);

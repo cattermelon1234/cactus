@@ -1490,7 +1490,7 @@ size_t CactusGraph::add_node(OpType op_type, const std::vector<size_t>& inputs, 
     Precision result_precision = params.output_precision;
     if (op_type == OpType::PRECISION_CAST) {
         result_precision = params.output_precision;
-    } else if (result_precision == Precision::INT8 && !inputs.empty()) {
+    } else if (!inputs.empty()) {
         result_precision = nodes_[node_index_map_[inputs[0]]]->output_buffer.precision;
     }
 

@@ -113,8 +113,7 @@ void compute_matmul_node(GraphNode& node, const std::vector<std::unique_ptr<Grap
         throw std::runtime_error("NPU matrix multiplication not yet implemented");
     }
 
-    if (PrecisionTraits::is_tq(rhs_buffer.precision) && rhs_buffer.group_size > 0) {
-        // TQ quantized matmul: activations are FP16, weights are TQ-encoded
+    if (PrecisionTraits::is_cq(rhs_buffer.precision) && rhs_buffer.group_size > 0) {
         if (lhs_buffer.precision != Precision::FP16) {
             throw std::runtime_error("TQ matmul requires FP16 activations");
         }
@@ -122,8 +121,8 @@ void compute_matmul_node(GraphNode& node, const std::vector<std::unique_ptr<Grap
         const __fp16* lhs = lhs_buffer.data_as<__fp16>();
         __fp16* output = node.output_buffer.data_as<__fp16>();
 
-        CactusTQMatrix mat = rhs_buffer.to_tq_matrix();
-        cactus_tq_matmul(&mat, lhs, static_cast<uint32_t>(M), output);
+        CactusQuantMatrix mat = rhs_buffer.to_cq_matrix();
+        cactus_quant_matmul(&mat, lhs, static_cast<uint32_t>(M), output);
     } else {
         if (lhs_buffer.precision != Precision::FP16) {
             throw std::runtime_error("FP16 matmul requires FP16 activations (got precision " + std::to_string(static_cast<int>(lhs_buffer.precision)) + ")");
@@ -180,9 +179,9 @@ namespace {
             return;
         }
 
-        if (PrecisionTraits::is_tq(rhs_buffer.precision) && rhs_buffer.group_size > 0) {
-            CactusTQMatrix mat = rhs_buffer.to_tq_matrix();
-            cactus_tq_matmul(&mat, lhs, static_cast<uint32_t>(M), output);
+        if (PrecisionTraits::is_cq(rhs_buffer.precision) && rhs_buffer.group_size > 0) {
+            CactusQuantMatrix mat = rhs_buffer.to_cq_matrix();
+            cactus_quant_matmul(&mat, lhs, static_cast<uint32_t>(M), output);
             return;
         }
 
@@ -791,7 +790,7 @@ void compute_conv1d_causal_node(GraphNode& node, const std::vector<std::unique_p
 
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t K_total = W1 * K;
             const size_t group_size = W.group_size;
@@ -877,7 +876,7 @@ void compute_conv1d_k3_node(GraphNode& node, const std::vector<std::unique_ptr<G
 
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t K_total = C_in * K;
             const size_t group_size = W.group_size;
@@ -1043,7 +1042,7 @@ void compute_conv1d_same_depthwise_k9_node(GraphNode& node, const std::vector<st
         const int8_t* W_int8 = W.data_as<int8_t>();
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t K_total = K;
             const size_t group_size = W.group_size;
@@ -1144,7 +1143,7 @@ void compute_conv2d_k3s2p1_node(GraphNode& node, const std::vector<std::unique_p
         const int8_t* W_int8 = W.data_as<int8_t>();
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t group_size = W.group_size;
             if (group_size == 0 || (K_total % group_size) != 0 || scales == nullptr) {
@@ -1259,7 +1258,7 @@ void compute_conv2d_depthwise_k3s2p1_node(GraphNode& node, const std::vector<std
         const int8_t* W_int8 = W.data_as<int8_t>();
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t group_size = W.group_size;
             if (group_size == 0 || (K_total % group_size) != 0 || scales == nullptr) {
@@ -1375,7 +1374,7 @@ void compute_conv2d_pointwise_1x1_node(GraphNode& node, const std::vector<std::u
         const int8_t* W_int8 = W.data_as<int8_t>();
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t group_size = W.group_size;
             if (group_size == 0 || (K_total % group_size) != 0 || scales == nullptr) {
@@ -1487,7 +1486,7 @@ void compute_conv1d_pointwise_node(GraphNode& node, const std::vector<std::uniqu
         const int8_t* W_int8 = W.data_as<int8_t>();
         std::vector<__fp16> W_fp16(W_size);
 
-        if (W.is_tq()) {
+        if (W.is_cq()) {
             const __fp16* scales = W.scales_as_fp16();
             const size_t group_size = W.group_size;
             if (group_size == 0 || (K_total % group_size) != 0 || scales == nullptr) {

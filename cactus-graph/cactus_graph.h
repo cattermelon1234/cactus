@@ -120,40 +120,40 @@ struct PrecisionTraits {
             case Precision::INT8: return 1;
             case Precision::FP16: return 2;
             case Precision::FP32: return 4;
-            case Precision::TQ1:
-            case Precision::TQ2:
-            case Precision::TQ3:
-            case Precision::TQ4: return 1; // packed, not element-sized
+            case Precision::CQ1:
+            case Precision::CQ2:
+            case Precision::CQ3:
+            case Precision::CQ4: return 1; // packed, not element-sized
         }
         return 1;
     }
 
-    static constexpr bool is_tq(Precision prec) {
-        return prec == Precision::TQ1 || prec == Precision::TQ2 ||
-               prec == Precision::TQ3 || prec == Precision::TQ4;
+    static constexpr bool is_cq(Precision prec) {
+        return prec == Precision::CQ1 || prec == Precision::CQ2 ||
+               prec == Precision::CQ3 || prec == Precision::CQ4;
     }
 
-    static constexpr uint32_t tq_bits(Precision prec) {
+    static constexpr uint32_t cq_bits(Precision prec) {
         switch (prec) {
-            case Precision::TQ1: return 1;
-            case Precision::TQ2: return 2;
-            case Precision::TQ3: return 3;
-            case Precision::TQ4: return 4;
+            case Precision::CQ1: return 1;
+            case Precision::CQ2: return 2;
+            case Precision::CQ3: return 3;
+            case Precision::CQ4: return 4;
             default: return 0;
         }
     }
 
     static constexpr size_t packed_size_of(Precision prec, size_t count) {
-        if (is_tq(prec)) {
-            uint32_t bits = tq_bits(prec);
+        if (is_cq(prec)) {
+            uint32_t bits = cq_bits(prec);
             return (count * bits + 7) / 8;
         }
         return count * size_of(prec);
     }
 
     static size_t byte_offset_of(Precision prec, size_t element_offset) {
-        if (is_tq(prec)) {
-            uint32_t bits = tq_bits(prec);
+        if (is_cq(prec)) {
+            uint32_t bits = cq_bits(prec);
             return (element_offset * bits) / 8;
         }
         return element_offset * size_of(prec);
@@ -164,7 +164,7 @@ struct PrecisionTraits {
     }
 
     static constexpr bool is_quantized(Precision prec) {
-        return is_tq(prec);
+        return is_cq(prec);
     }
 
     static constexpr bool is_floating_point(Precision prec) {
@@ -256,41 +256,38 @@ struct BufferDesc {
     template<typename T> const T* data_as() const { return static_cast<const T*>(get_data()); }
 
     const __fp16* scales_as_fp16() const { return reinterpret_cast<const __fp16*>(scales_data); }
-    bool is_tq() const { return PrecisionTraits::is_tq(precision) && group_size > 0; }
+    bool is_cq() const { return PrecisionTraits::is_cq(precision) && group_size > 0; }
 
-    // TQ metadata (stored in the weight file, set during mmap_weights)
-    const __fp16* tq_codebook = nullptr;
-    const __fp16* tq_input_scale = nullptr;
-    const __fp16* tq_input_scale_recip = nullptr;
-    const __fp16* tq_norms = nullptr;
-    const int8_t* tq_left_signs = nullptr;
-    const int8_t* tq_right_signs = nullptr;
-    const uint32_t* tq_permutation = nullptr;
-    uint32_t tq_flags = 0;
+    const __fp16* cq_codebook = nullptr;
+    const __fp16* cq_input_scale = nullptr;
+    const __fp16* cq_input_scale_recip = nullptr;
+    const __fp16* cq_norms = nullptr;
+    const int8_t* cq_left_signs = nullptr;
+    const int8_t* cq_right_signs = nullptr;
+    const uint32_t* cq_permutation = nullptr;
+    uint32_t cq_flags = 0;
 
-    // Pre-expanded interleaved int8 weights (populated at load time)
-    // Layout: [N_block][group][k/4][4_rows × 4_bytes] — ready for CACTUS_DOTQ_LANE
-    std::unique_ptr<int8_t[]> tq_expanded;
-    std::unique_ptr<float[]> tq_norm_f32; // [N_block × num_groups × 4]
+    std::unique_ptr<int8_t[]> cq_expanded;
+    std::unique_ptr<float[]> cq_norm_f32;
 
-    CactusTQMatrix to_tq_matrix() const {
-        return CactusTQMatrix{
-            .bits = PrecisionTraits::tq_bits(precision),
+    CactusQuantMatrix to_cq_matrix() const {
+        return CactusQuantMatrix{
+            .bits = PrecisionTraits::cq_bits(precision),
             .K = static_cast<uint32_t>(shape.size() >= 2 ? shape[1] : shape[0]),
             .N = static_cast<uint32_t>(shape.size() >= 2 ? shape[0] : 1),
             .group_size = static_cast<uint32_t>(group_size),
             .num_groups = static_cast<uint32_t>(num_groups),
-            .flags = tq_flags,
-            .codebook = tq_codebook,
-            .input_scale = tq_input_scale,
-            .input_scale_recip = tq_input_scale_recip,
-            .norms = tq_norms,
+            .flags = cq_flags,
+            .codebook = cq_codebook,
+            .input_scale = cq_input_scale,
+            .input_scale_recip = cq_input_scale_recip,
+            .norms = cq_norms,
             .packed_indices = static_cast<const uint8_t*>(get_data()),
-            .left_signs = tq_left_signs,
-            .right_signs = tq_right_signs,
-            .permutation = tq_permutation,
-            .expanded = tq_expanded.get(),
-            .norm_f32 = tq_norm_f32.get(),
+            .left_signs = cq_left_signs,
+            .right_signs = cq_right_signs,
+            .permutation = cq_permutation,
+            .expanded = cq_expanded.get(),
+            .norm_f32 = cq_norm_f32.get(),
         };
     }
 

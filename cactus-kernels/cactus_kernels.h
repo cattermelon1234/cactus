@@ -8,13 +8,13 @@
 #include "src/threading.h"
 
 enum class Precision {
-    INT8,   // KV cache quantization only (not for weights)
+    INT8,
     FP16,
     FP32,
-    TQ1,    // 1-bit ternary quantization (2 codebook entries)
-    TQ2,    // 2-bit ternary quantization (4 codebook entries)
-    TQ3,    // 3-bit ternary quantization (8 codebook entries)
-    TQ4     // 4-bit ternary quantization (16 codebook entries)
+    CQ1,
+    CQ2,
+    CQ3,
+    CQ4
 };
 
 enum class ScalarOpType {
@@ -198,12 +198,12 @@ void cactus_matmul_f16(
     size_t K,
     size_t N);
 
-enum CactusTQFlags : uint32_t {
-    CACTUS_TQ_FLAG_PANEL_MAJOR = 1u << 0,
-    CACTUS_TQ_FLAG_CODE_ORDERED_INDICES = 1u << 1
+enum CactusQuantFlags : uint32_t {
+    CACTUS_QUANT_FLAG_PANEL_MAJOR = 1u << 0,
+    CACTUS_QUANT_FLAG_CODE_ORDERED_INDICES = 1u << 1
 };
 
-struct CactusTQMatrix {
+struct CactusQuantMatrix {
     uint32_t bits;
     uint32_t K;
     uint32_t N;
@@ -222,54 +222,54 @@ struct CactusTQMatrix {
     const float* norm_f32; 
 };
 
-uint32_t cactus_tq_packed_group_bytes(uint32_t bits, uint32_t group_size);
+uint32_t cactus_quant_packed_group_bytes(uint32_t bits, uint32_t group_size);
 
-void cactus_tq4_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_4bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y);
 
-void cactus_tq4_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_4bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C);
 
-void cactus_tq2_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_2bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y);
 
-void cactus_tq2_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_2bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C);
 
-void cactus_tq1_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_1bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y);
 
-void cactus_tq1_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_1bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C);
 
-void cactus_tq3_gemv(
-    const CactusTQMatrix* W,
+void cactus_quant_3bit_gemv(
+    const CactusQuantMatrix* W,
     const __fp16* x,
     __fp16* y);
 
-void cactus_tq3_gemm(
-    const CactusTQMatrix* W,
+void cactus_quant_3bit_gemm(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C);
 
-void cactus_tq_matmul(
-    const CactusTQMatrix* W,
+void cactus_quant_matmul(
+    const CactusQuantMatrix* W,
     const __fp16* A,
     uint32_t M,
     __fp16* C);

@@ -5,7 +5,7 @@
 
 using namespace TestUtils;
 
-struct SyntheticTQ {
+struct SyntheticCQ {
     uint32_t bits, K, N, group_size, num_groups;
     std::vector<__fp16> codebook;
     std::vector<__fp16> input_scale;
@@ -16,7 +16,7 @@ struct SyntheticTQ {
     std::vector<uint32_t> permutation;
     std::vector<uint8_t> packed;
 
-    SyntheticTQ(uint32_t b, uint32_t k, uint32_t n, uint32_t gs, uint32_t seed = 42)
+    SyntheticCQ(uint32_t b, uint32_t k, uint32_t n, uint32_t gs, uint32_t seed = 42)
         : bits(b), K(k), N(n), group_size(gs), num_groups(k / gs) {
         std::mt19937 gen(seed);
         std::uniform_real_distribution<float> dist(-1.f, 1.f);
@@ -44,7 +44,7 @@ struct SyntheticTQ {
         permutation.resize(group_size);
         for (uint32_t i = 0; i < group_size; i++) permutation[i] = i;
 
-        size_t packed_bytes = size_t(N) * num_groups * cactus_tq_packed_group_bytes(bits, group_size);
+        size_t packed_bytes = size_t(N) * num_groups * cactus_quant_packed_group_bytes(bits, group_size);
         packed.resize(packed_bytes);
         for (auto& v : packed) v = static_cast<uint8_t>(gen() & 0xFF);
     }
@@ -67,7 +67,7 @@ struct SyntheticTQ {
         int8x16_t cb_lut = vld1q_s8(cb_i8);
 
         size_t N_blocks = (N + 3) / 4;
-        uint32_t pgb = cactus_tq_packed_group_bytes(bits, group_size);
+        uint32_t pgb = cactus_quant_packed_group_bytes(bits, group_size);
         expanded_buf.resize(N_blocks * num_groups * group_size * 4);
         norm_f32_buf.resize(N_blocks * num_groups * 4);
 
@@ -131,11 +131,11 @@ struct SyntheticTQ {
         }
     }
 
-    CactusTQMatrix matrix() const {
-        return CactusTQMatrix{
+    CactusQuantMatrix matrix() const {
+        return CactusQuantMatrix{
             .bits = bits, .K = K, .N = N,
             .group_size = group_size, .num_groups = num_groups,
-            .flags = CACTUS_TQ_FLAG_CODE_ORDERED_INDICES,
+            .flags = CACTUS_QUANT_FLAG_CODE_ORDERED_INDICES,
             .codebook = codebook.data(),
             .input_scale = input_scale.data(),
             .input_scale_recip = input_scale_recip.data(),
@@ -177,8 +177,8 @@ static uint8_t unpack_index(const uint8_t* base, uint32_t bits, uint32_t k) {
     }
 }
 
-static void tq_reference_gemv_f32(const SyntheticTQ& w, const float* x, float* y) {
-    uint32_t pgb = cactus_tq_packed_group_bytes(w.bits, w.group_size);
+static void cq_reference_gemv_f32(const SyntheticCQ& w, const float* x, float* y) {
+    uint32_t pgb = cactus_quant_packed_group_bytes(w.bits, w.group_size);
     for (uint32_t n = 0; n < w.N; ++n) {
         for (uint32_t g = 0; g < w.num_groups; ++g) {
             uint32_t base_k = g * w.group_size;
@@ -230,10 +230,10 @@ bool test_matmul_f16() {
     return true;
 }
 
-bool test_tq_correctness(uint32_t bits) {
+bool test_cq_correctness(uint32_t bits) {
     const uint32_t K = 1024, N = 64, gs = 128;
-    SyntheticTQ tq(bits, K, N, gs, 123);
-    CactusTQMatrix mat = tq.matrix();
+    SyntheticCQ cq(bits, K, N, gs, 123);
+    CactusQuantMatrix mat = cq.matrix();
 
     std::mt19937 gen(77);
     std::uniform_real_distribution<float> dist(-1.f, 1.f);
@@ -242,18 +242,18 @@ bool test_tq_correctness(uint32_t bits) {
 
     // FP32 reference
     std::vector<float> ref(N, 0.f);
-    tq_reference_gemv_f32(tq, x_f32.data(), ref.data());
+    cq_reference_gemv_f32(cq, x_f32.data(), ref.data());
 
     // FP16 kernel
     std::vector<__fp16> x_f16(K), y_f16(N, static_cast<__fp16>(0));
     for (size_t i = 0; i < K; i++) x_f16[i] = static_cast<__fp16>(x_f32[i]);
-    cactus_tq_matmul(&mat, x_f16.data(), 1, y_f16.data());
+    cactus_quant_matmul(&mat, x_f16.data(), 1, y_f16.data());
 
     double mse = compute_mse(ref.data(), y_f16.data(), N);
     
     double threshold = 0.1; 
     if (mse > threshold) {
-        std::cerr << "  tq" << bits << " MSE=" << mse << " > " << threshold << "\n";
+        std::cerr << "  cq" << bits << " MSE=" << mse << " > " << threshold << "\n";
         return false;
     }
     return true;
@@ -289,74 +289,71 @@ bool run_benchmarks() {
 
     // TQ1
     {
-        SyntheticTQ tq(1, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(1, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> x(K), y(N);
         fill_random_fp16(x, -1.f, 1.f);
-        bench("matmul_tq1 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
+        bench("matmul_cq1 1x1024x1024", 1, K, N, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        SyntheticTQ tq(1, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(1, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> A(M_batch * K), C(M_batch * N);
         fill_random_fp16(A, -1.f, 1.f);
-        bench("matmul_tq1 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+        bench("matmul_cq1 1024^3", M_batch, K, N, [&]{ cactus_quant_matmul(&mat, A.data(), M_batch, C.data()); });
     }
 
-    // TQ2
     {
-        SyntheticTQ tq(2, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(2, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> x(K), y(N);
         fill_random_fp16(x, -1.f, 1.f);
-        bench("matmul_tq2 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
+        bench("matmul_cq2 1x1024x1024", 1, K, N, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        SyntheticTQ tq(2, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(2, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> A(M_batch * K), C(M_batch * N);
         fill_random_fp16(A, -1.f, 1.f);
-        bench("matmul_tq2 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+        bench("matmul_cq2 1024^3", M_batch, K, N, [&]{ cactus_quant_matmul(&mat, A.data(), M_batch, C.data()); });
     }
 
-    // TQ3
     {
-        SyntheticTQ tq(3, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(3, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> x(K), y(N);
         fill_random_fp16(x, -1.f, 1.f);
-        bench("matmul_tq3 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
+        bench("matmul_cq3 1x1024x1024", 1, K, N, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        SyntheticTQ tq(3, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(3, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> A(M_batch * K), C(M_batch * N);
         fill_random_fp16(A, -1.f, 1.f);
-        bench("matmul_tq3 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+        bench("matmul_cq3 1024^3", M_batch, K, N, [&]{ cactus_quant_matmul(&mat, A.data(), M_batch, C.data()); });
     }
 
-    // TQ4
     {
-        SyntheticTQ tq(4, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(4, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> x(K), y(N);
         fill_random_fp16(x, -1.f, 1.f);
-        bench("matmul_tq4 1x1024x1024", 1, K, N, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
+        bench("matmul_cq4 1x1024x1024", 1, K, N, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        SyntheticTQ tq(4, K, N, gs);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(4, K, N, gs);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> A(M_batch * K), C(M_batch * N);
         fill_random_fp16(A, -1.f, 1.f);
-        bench("matmul_tq4 1024^3", M_batch, K, N, [&]{ cactus_tq_matmul(&mat, A.data(), M_batch, C.data()); });
+        bench("matmul_cq4 1024^3", M_batch, K, N, [&]{ cactus_quant_matmul(&mat, A.data(), M_batch, C.data()); });
     }
 
     auto bench2k = [](const char* label, size_t M, size_t K, size_t N, auto fn) {
@@ -385,36 +382,36 @@ bool run_benchmarks() {
         bench2k("matmul_f16 2048^3", M2, K2, N2, [&]{ cactus_matmul_f16(a.data(), b.data(), c.data(), M2, K2, N2); });
     }
     {
-        SyntheticTQ tq(2, K2, N2, gs2);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(2, K2, N2, gs2);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> x(K2), y(N2);
         fill_random_fp16(x, -1.f, 1.f);
-        bench2k("matmul_tq2 1x2048x2048", 1, K2, N2, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
+        bench2k("matmul_cq2 1x2048x2048", 1, K2, N2, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        SyntheticTQ tq(2, K2, N2, gs2);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(2, K2, N2, gs2);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> A(M2 * K2), C(M2 * N2);
         fill_random_fp16(A, -1.f, 1.f);
-        bench2k("matmul_tq2 2048^3", M2, K2, N2, [&]{ cactus_tq_matmul(&mat, A.data(), M2, C.data()); });
+        bench2k("matmul_cq2 2048^3", M2, K2, N2, [&]{ cactus_quant_matmul(&mat, A.data(), M2, C.data()); });
     }
     {
-        SyntheticTQ tq(4, K2, N2, gs2);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(4, K2, N2, gs2);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> x(K2), y(N2);
         fill_random_fp16(x, -1.f, 1.f);
-        bench2k("matmul_tq4 1x2048x2048", 1, K2, N2, [&]{ cactus_tq_matmul(&mat, x.data(), 1, y.data()); });
+        bench2k("matmul_cq4 1x2048x2048", 1, K2, N2, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
     }
     {
-        SyntheticTQ tq(4, K2, N2, gs2);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(4, K2, N2, gs2);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
         std::vector<__fp16> A(M2 * K2), C(M2 * N2);
         fill_random_fp16(A, -1.f, 1.f);
-        bench2k("matmul_tq4 2048^3", M2, K2, N2, [&]{ cactus_tq_matmul(&mat, A.data(), M2, C.data()); });
+        bench2k("matmul_cq4 2048^3", M2, K2, N2, [&]{ cactus_quant_matmul(&mat, A.data(), M2, C.data()); });
     }
 
     return true;
@@ -434,15 +431,15 @@ void print_mse_report() {
     std::cout << "── MSE vs FP32 reference ──────────────────────────────────────────────────────────\n";
 
     for (uint32_t bits : {1u, 2u, 3u, 4u}) {
-        SyntheticTQ tq(bits, K, N, gs, 55 + bits);
-        tq.preexpand();
-        CactusTQMatrix mat = tq.matrix();
+        SyntheticCQ cq(bits, K, N, gs, 55 + bits);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
 
         std::vector<float> ref(N, 0.f);
-        tq_reference_gemv_f32(tq, x_f32.data(), ref.data());
+        cq_reference_gemv_f32(cq, x_f32.data(), ref.data());
 
         std::vector<__fp16> y(N, static_cast<__fp16>(0));
-        cactus_tq_matmul(&mat, x_f16.data(), 1, y.data());
+        cactus_quant_matmul(&mat, x_f16.data(), 1, y.data());
 
         double mse = compute_mse(ref.data(), y.data(), N);
         double max_err = 0.0;
@@ -459,10 +456,10 @@ void print_mse_report() {
 int main() {
     TestRunner runner("Matrix Multiplication");
     runner.run_test("matmul_f16", test_matmul_f16());
-    runner.run_test("matmul_tq1", test_tq_correctness(1));
-    runner.run_test("matmul_tq2", test_tq_correctness(2));
-    runner.run_test("matmul_tq3", test_tq_correctness(3));
-    runner.run_test("matmul_tq4", test_tq_correctness(4));
+    runner.run_test("matmul_cq1", test_cq_correctness(1));
+    runner.run_test("matmul_cq2", test_cq_correctness(2));
+    runner.run_test("matmul_cq3", test_cq_correctness(3));
+    runner.run_test("matmul_cq4", test_cq_correctness(4));
     runner.print_benchmarks_header();
     runner.run_bench("benchmarks", run_benchmarks());
     print_mse_report();
