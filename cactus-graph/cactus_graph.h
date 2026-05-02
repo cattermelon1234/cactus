@@ -268,6 +268,11 @@ struct BufferDesc {
     const uint32_t* tq_permutation = nullptr;
     uint32_t tq_flags = 0;
 
+    // Pre-expanded interleaved int8 weights (populated at load time)
+    // Layout: [N_block][group][k/4][4_rows × 4_bytes] — ready for CACTUS_DOTQ_LANE
+    std::unique_ptr<int8_t[]> tq_expanded;
+    std::unique_ptr<float[]> tq_norm_f32; // [N_block × num_groups × 4]
+
     CactusTQMatrix to_tq_matrix() const {
         return CactusTQMatrix{
             .bits = PrecisionTraits::tq_bits(precision),
@@ -284,6 +289,8 @@ struct BufferDesc {
             .left_signs = tq_left_signs,
             .right_signs = tq_right_signs,
             .permutation = tq_permutation,
+            .expanded = tq_expanded.get(),
+            .norm_f32 = tq_norm_f32.get(),
         };
     }
 

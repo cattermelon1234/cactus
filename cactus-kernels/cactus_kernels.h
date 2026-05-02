@@ -218,6 +218,8 @@ struct CactusTQMatrix {
     const int8_t* left_signs;
     const int8_t* right_signs;
     const uint32_t* permutation;
+    const int8_t* expanded; 
+    const float* norm_f32; 
 };
 
 uint32_t cactus_tq_packed_group_bytes(uint32_t bits, uint32_t group_size);
