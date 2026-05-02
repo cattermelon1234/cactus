@@ -1139,17 +1139,44 @@ void cactus_quant_matmul(
     float cb_scale = tq_quantize_codebook_i8(W->codebook, cb_i8, 1u << bits);
     int8x16_t cb_lut = vld1q_s8(cb_i8);
 
-    std::vector<__fp16> code_basis(static_cast<size_t>(M) * W->K);
-    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis.data());
+    const size_t act_size = static_cast<size_t>(M) * W->K;
+    const size_t scales_size = static_cast<size_t>(M) * num_groups;
 
-    std::vector<int8_t> act_i8(static_cast<size_t>(M) * W->K);
-    std::vector<float> act_scales(static_cast<size_t>(M) * num_groups);
+    static thread_local std::vector<__fp16> tl_code_basis;
+    static thread_local std::vector<int8_t> tl_act_i8;
+    static thread_local std::vector<float> tl_act_scales;
+
+    __fp16* code_basis_ptr;
+    int8_t* act_i8_ptr;
+    float* act_scales_ptr;
+
+    std::vector<__fp16> heap_code_basis;
+    std::vector<int8_t> heap_act_i8;
+    std::vector<float> heap_act_scales;
+
+    if (M == 1) {
+        if (tl_code_basis.size() < act_size) tl_code_basis.resize(act_size);
+        if (tl_act_i8.size() < act_size) tl_act_i8.resize(act_size);
+        if (tl_act_scales.size() < scales_size) tl_act_scales.resize(scales_size);
+        code_basis_ptr = tl_code_basis.data();
+        act_i8_ptr = tl_act_i8.data();
+        act_scales_ptr = tl_act_scales.data();
+    } else {
+        heap_code_basis.resize(act_size);
+        heap_act_i8.resize(act_size);
+        heap_act_scales.resize(scales_size);
+        code_basis_ptr = heap_code_basis.data();
+        act_i8_ptr = heap_act_i8.data();
+        act_scales_ptr = heap_act_scales.data();
+    }
+
+    cactus_quant_transform_hadamard_activations(*W, A, M, code_basis_ptr);
 
     for (uint32_t m = 0; m < M; m++) {
         for (uint32_t g = 0; g < num_groups; g++) {
-            act_scales[m * num_groups + g] = tq_quantize_group_i8(
-                code_basis.data() + m * W->K + g * gs,
-                act_i8.data() + m * W->K + g * gs, gs);
+            act_scales_ptr[m * num_groups + g] = tq_quantize_group_i8(
+                code_basis_ptr + m * W->K + g * gs,
+                act_i8_ptr + m * W->K + g * gs, gs);
         }
     }
 
@@ -1198,8 +1225,8 @@ void cactus_quant_matmul(
     }
 
     if (M == 1) {
-        const int8_t* a_ptr = act_i8.data();
-        const float* a_sc_ptr = act_scales.data();
+        const int8_t* a_ptr = act_i8_ptr;
+        const float* a_sc_ptr = act_scales_ptr;
 
         auto& pool = CactusThreading::get_thread_pool();
         size_t num_threads = CactusThreading::GemmThreading::get_gemv_threads(N_blocks, pool.num_workers());
@@ -1318,7 +1345,7 @@ void cactus_quant_matmul(
                     const int8_t* a_rows[TILE_M];
                     for (size_t mi = 0; mi < TILE_M; mi++) {
                         size_t row = m_start + (mi < actual_m ? mi : actual_m - 1);
-                        a_rows[mi] = act_i8.data() + row * W->K;
+                        a_rows[mi] = act_i8_ptr + row * W->K;
                     }
 
                     float32x4_t running_sum[TILE_M];
@@ -1371,7 +1398,7 @@ void cactus_quant_matmul(
                         }
 
                         for (size_t mi = 0; mi < actual_m; mi++) {
-                            float a_sc = act_scales[(m_start + mi) * num_groups + g];
+                            float a_sc = act_scales_ptr[(m_start + mi) * num_groups + g];
                             running_sum[mi] = vmlaq_f32(running_sum[mi],
                                 vcvtq_f32_s32(row_acc[mi]), vmulq_n_f32(norms_v, a_sc));
                         }

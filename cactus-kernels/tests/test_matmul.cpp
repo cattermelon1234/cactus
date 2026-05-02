@@ -414,6 +414,50 @@ bool run_benchmarks() {
         bench2k("matmul_cq4 2048^3", M2, K2, N2, [&]{ cactus_quant_matmul(&mat, A.data(), M2, C.data()); });
     }
 
+    auto bench_model = [](const char* label, size_t M, size_t K, size_t N, auto fn) {
+        fn();
+        Timer t;
+        for (int i = 0; i < 5; i++) fn();
+        double ms = t.elapsed_ms() / 5.0;
+        double gflops = (2.0 * M * K * N) / (ms * 1e6);
+        std::cout << "  \u26A1 " << std::left << std::setw(28) << label
+                  << std::fixed << std::setprecision(3) << ms << "ms  "
+                  << std::setprecision(1) << gflops << " GFLOPS\n";
+    };
+
+    const size_t Km = 2304, Nm = 9216;
+    const uint32_t gsm = 128;
+
+    {
+        std::vector<__fp16> a(Km), b(Nm * Km), c(Nm);
+        fill_random_fp16(a, -0.5f, 0.5f); fill_random_fp16(b, -0.5f, 0.5f);
+        bench_model("f16 1x2304x9216", 1, Km, Nm, [&]{ cactus_matmul_f16(a.data(), b.data(), c.data(), 1, Km, Nm); });
+    }
+    {
+        SyntheticCQ cq(1, Km, Nm, gsm);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
+        std::vector<__fp16> x(Km), y(Nm);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench_model("cq1 1x2304x9216", 1, Km, Nm, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
+    }
+    {
+        SyntheticCQ cq(2, Km, Nm, gsm);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
+        std::vector<__fp16> x(Km), y(Nm);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench_model("cq2 1x2304x9216", 1, Km, Nm, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
+    }
+    {
+        SyntheticCQ cq(4, Km, Nm, gsm);
+        cq.preexpand();
+        CactusQuantMatrix mat = cq.matrix();
+        std::vector<__fp16> x(Km), y(Nm);
+        fill_random_fp16(x, -1.f, 1.f);
+        bench_model("cq4 1x2304x9216", 1, Km, Nm, [&]{ cactus_quant_matmul(&mat, x.data(), 1, y.data()); });
+    }
+
     return true;
 }
 
