@@ -130,6 +130,7 @@ bool test_neon_sum_axis_inner1_correctness() {
         1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
         2.0f, 4.0f, 6.0f, 8.0f, 10.0f, 12.0f, 14.0f, 16.0f, 18.0f
     };
+
     std::vector<__fp16> output(outer_size * inner_size);
     std::vector<__fp16> expected = {45.0f, 90.0f};
 
