@@ -1,0 +1,100 @@
+{
+  "backend_gap_ops": {
+    "advanced_index": {
+      "all_cases": false,
+      "count": 4,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "cumsum": {
+      "all_cases": false,
+      "count": 2,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "equal": {
+      "all_cases": false,
+      "count": 2,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "expand": {
+      "all_cases": true,
+      "count": 70,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically by materializing ones and using broadcast multiply"
+    },
+    "greater": {
+      "all_cases": false,
+      "count": 1,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "less_equal": {
+      "all_cases": false,
+      "count": 2,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "linear": {
+      "all_cases": true,
+      "count": 277,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically to matmul with reshape/bias handling"
+    },
+    "logical_and": {
+      "all_cases": false,
+      "count": 6,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    }
+  },
+  "canonical_op_counts": {
+    "add": 106,
+    "advanced_index": 4,
+    "attention": 35,
+    "cumsum": 2,
+    "embedding": 2,
+    "equal": 2,
+    "expand": 70,
+    "gelu": 70,
+    "greater": 1,
+    "index": 35,
+    "less_equal": 2,
+    "linear": 277,
+    "logical_and": 6,
+    "mean": 242,
+    "multiply": 576,
+    "permute": 100,
+    "pow": 484,
+    "precision_cast": 1180,
+    "rope": 50,
+    "scalar_add": 242,
+    "scalar_multiply": 2,
+    "scalar_not_equal": 2,
+    "scalar_subtract": 1,
+    "slice": 4,
+    "subtract": 2,
+    "view": 242
+  },
+  "important_missing_ops": [
+    "advanced_index",
+    "cumsum",
+    "equal",
+    "greater",
+    "less_equal",
+    "logical_and"
+  ],
+  "model_id": "google/gemma-4-E2B",
+  "prompt": "The capital of France is",
+  "snapshot": "/Users/bling/.cache/huggingface/hub/models--google--gemma-4-E2B/snapshots/9d53598892698e981fc42f78b0f8c005cecd63ca",
+  "source_artifact": "/Users/bling/Documents/Work/cactus/python/tests/artifacts/local_model_matrix/google_gemma-4-E2B/raw_ir.json"
+}

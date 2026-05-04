@@ -1,0 +1,184 @@
+{
+  "backend_gap_ops": {
+    "advanced_index": {
+      "all_cases": false,
+      "count": 2,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "aten.eye.default": {
+      "all_cases": false,
+      "count": 18,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "aten.masked_fill.Scalar": {
+      "all_cases": false,
+      "count": 18,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "aten.tril.default": {
+      "all_cases": false,
+      "count": 36,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "aten.triu.default": {
+      "all_cases": false,
+      "count": 18,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "aten.zeros_like.default": {
+      "all_cases": false,
+      "count": 18,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "chunk": {
+      "all_cases": true,
+      "count": 6,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically to repeated slice ops"
+    },
+    "cumsum": {
+      "all_cases": false,
+      "count": 19,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "equal": {
+      "all_cases": false,
+      "count": 1,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "expand": {
+      "all_cases": true,
+      "count": 12,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically by materializing ones and using broadcast multiply"
+    },
+    "getitem": {
+      "all_cases": false,
+      "count": 48,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "structural tuple/list projection is handled, but this is not a general tensor indexing kernel"
+    },
+    "less_equal": {
+      "all_cases": false,
+      "count": 1,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "linear": {
+      "all_cases": true,
+      "count": 187,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically to matmul with reshape/bias handling"
+    },
+    "logical_and": {
+      "all_cases": false,
+      "count": 2,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "pad": {
+      "all_cases": false,
+      "count": 72,
+      "direct_backend": false,
+      "generic_wrapper": false,
+      "note": "no generic lowering path is registered"
+    },
+    "softplus": {
+      "all_cases": true,
+      "count": 18,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically with a stable relu/log/exp composition"
+    },
+    "split_with_sizes": {
+      "all_cases": true,
+      "count": 18,
+      "direct_backend": false,
+      "generic_wrapper": true,
+      "note": "lowered generically to repeated slice ops"
+    }
+  },
+  "canonical_op_counts": {
+    "add": 84,
+    "advanced_index": 2,
+    "aten.eye.default": 18,
+    "aten.masked_fill.Scalar": 18,
+    "aten.tril.default": 36,
+    "aten.triu.default": 18,
+    "aten.zeros_like.default": 18,
+    "attention": 6,
+    "cat": 12,
+    "chunk": 6,
+    "conv1d": 18,
+    "cumsum": 19,
+    "embedding": 1,
+    "equal": 1,
+    "expand": 12,
+    "getitem": 48,
+    "index": 1,
+    "less_equal": 1,
+    "linear": 187,
+    "logical_and": 2,
+    "matmul": 36,
+    "mean": 79,
+    "multiply": 314,
+    "ones": 18,
+    "pad": 72,
+    "permute": 168,
+    "pow": 176,
+    "precision_cast": 978,
+    "rope": 12,
+    "scalar_add": 158,
+    "scalar_exp": 36,
+    "scalar_multiply": 36,
+    "scalar_not_equal": 1,
+    "sigmoid": 24,
+    "silu": 60,
+    "slice": 62,
+    "softplus": 18,
+    "split_with_sizes": 18,
+    "subtract": 19,
+    "sum": 18,
+    "view": 306
+  },
+  "important_missing_ops": [
+    "advanced_index",
+    "aten.eye.default",
+    "aten.masked_fill.Scalar",
+    "aten.tril.default",
+    "aten.triu.default",
+    "aten.zeros_like.default",
+    "cumsum",
+    "equal",
+    "getitem",
+    "less_equal",
+    "logical_and",
+    "pad"
+  ],
+  "model_id": "Qwen/Qwen3.5-2B",
+  "prompt": "The capital of France is",
+  "snapshot": "/Users/bling/.cache/huggingface/hub/models--Qwen--Qwen3.5-2B/snapshots/15852e8c16360a2fea060d615a32b45270f8a8fc",
+  "source_artifact": "/Users/bling/Documents/Work/cactus/python/tests/artifacts/local_model_matrix/Qwen_Qwen3.5-2B/raw_ir.json"
+}

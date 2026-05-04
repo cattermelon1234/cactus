@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Callable
 
 import torch
@@ -22,6 +23,14 @@ def _model_name_or_path(model: torch.nn.Module) -> str:
     if isinstance(value, str) and value:
         return value
     return ""
+
+
+def _call_mask_builder(builder, **kwargs):
+    signature = inspect.signature(builder)
+    if "input_embeds" in signature.parameters and "inputs_embeds" in kwargs:
+        kwargs = dict(kwargs)
+        kwargs["input_embeds"] = kwargs.pop("inputs_embeds")
+    return builder(**kwargs)
 
 
 class CausalLMLogitsAdapter(torch.nn.Module):
@@ -61,7 +70,8 @@ class GemmaCausalLMLogitsAdapter(torch.nn.Module):
     def debug_forward(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         inputs_embeds = self.backbone.embed_tokens(input_ids)
         position_ids = torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device).unsqueeze(0)
-        causal_mask = self._create_causal_mask(
+        causal_mask = _call_mask_builder(
+            self._create_causal_mask,
             config=self.backbone.config,
             inputs_embeds=inputs_embeds,
             attention_mask=None,
@@ -125,8 +135,8 @@ class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
             "position_ids": position_ids,
         }
         causal_mask_mapping = {
-            "full_attention": self._create_causal_mask(**mask_kwargs),
-            "sliding_attention": self._create_sliding_window_causal_mask(**mask_kwargs),
+            "full_attention": _call_mask_builder(self._create_causal_mask, **mask_kwargs),
+            "sliding_attention": _call_mask_builder(self._create_sliding_window_causal_mask, **mask_kwargs),
         }
 
         hidden_states = inputs_embeds
@@ -213,8 +223,8 @@ class Gemma4CausalLMLogitsAdapter(torch.nn.Module):
             "position_ids": position_ids,
         }
         causal_mask_mapping = {
-            "full_attention": self._create_causal_mask(**mask_kwargs),
-            "sliding_attention": self._create_sliding_window_causal_mask(**mask_kwargs),
+            "full_attention": _call_mask_builder(self._create_causal_mask, **mask_kwargs),
+            "sliding_attention": _call_mask_builder(self._create_sliding_window_causal_mask, **mask_kwargs),
         }
 
         hidden_states = inputs_embeds
@@ -375,7 +385,8 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
         text_position_ids = position_ids[0]
         multimodal_position_ids = position_ids[1:]
 
-        causal_mask = self._create_causal_mask(
+        causal_mask = _call_mask_builder(
+            self._create_causal_mask,
             config=self.backbone.config,
             inputs_embeds=inputs_embeds,
             attention_mask=None,

@@ -353,10 +353,19 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         target_shape = _resolve_expand_shape(tuple(x.shape), tuple(node.attrs["shape"]))
         if target_shape == tuple(x.shape):
             return [x]
-        raise NotImplementedError(
-            f"expand requires broadcast materialization unsupported by Cactus graph ops: "
-            f"{tuple(x.shape)} -> {target_shape}"
+        x = _reshape_for_trailing_broadcast(g, x, target_shape)
+        if tuple(x.shape) == target_shape:
+            return [x]
+        output_value = ir.values.get(node.outputs[0]) if node.outputs else None
+        materialized_dtype = _materialize_constant_torch_dtype(
+            output_value.dtype if output_value is not None else None
         )
+        materialized_ones = _materialize_constant_tensor(
+            g,
+            torch.ones(target_shape, dtype=materialized_dtype),
+        )
+        expanded, ones = _legalize_elementwise_binary_inputs(g, x, materialized_ones)
+        return [g.multiply(expanded, ones)]
 
     if op == "transpose":
         x = _legalize_for_transpose(g, _tensor(env, node.inputs[0]))

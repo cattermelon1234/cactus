@@ -1,0 +1,59 @@
+{
+  "input_tokens_transpiled": 6,
+  "model_id": "google/gemma-4-E2B",
+  "native": {
+    "iterations": 5,
+    "mean_ms": 82.05450000241399,
+    "mean_prefill_tokens": 16,
+    "median_ms": 81.66670892387629,
+    "prefill_tokens": [
+      16,
+      16,
+      16,
+      16,
+      16
+    ],
+    "reported_prefill_tps": [
+      189.12,
+      194.75,
+      196.02,
+      198.27,
+      197.64
+    ],
+    "reported_total_time_ms": [
+      84.6,
+      82.16,
+      81.62,
+      80.7,
+      80.96
+    ],
+    "timings_ms": [
+      84.64995794929564,
+      82.20062498003244,
+      81.66670892387629,
+      80.7552500627935,
+      80.99995809607208
+    ],
+    "tokens_per_second_wall": 194.9923526379332
+  },
+  "native_weights_dir": "/Users/bling/Documents/Work/cactus/weights/gemma-4-e2b",
+  "prompt": "The capital of France is",
+  "slowdown_native_over_transpiled": 6.158486527447687,
+  "slowdown_threshold": 3.0,
+  "snapshot": "/Users/bling/.cache/huggingface/hub/models--google--gemma-4-E2B/snapshots/9d53598892698e981fc42f78b0f8c005cecd63ca",
+  "threshold_enforced": false,
+  "transpiled": {
+    "iterations": 5,
+    "mean_ms": 189.49932479299605,
+    "median_ms": 188.7136660516262,
+    "timings_ms": [
+      193.83654207922518,
+      188.7136660516262,
+      187.17729090712965,
+      188.6917499359697,
+      189.0773749910295
+    ],
+    "tokens": 6,
+    "tokens_per_second": 31.66238194544618
+  }
+}

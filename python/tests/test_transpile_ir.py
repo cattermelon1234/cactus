@@ -99,6 +99,11 @@ class ConstantExpandToy(nn.Module):
         return pos.cos() + x.reshape(1, 1, 1) * 0
 
 
+class RuntimeExpandToy(nn.Module):
+    def forward(self, x):
+        return x.view(3, 1).expand(3, 4)
+
+
 class DepthwiseCausalConv1dToy(nn.Module):
     def __init__(self, channels: int = 4, kernel_size: int = 4):
         super().__init__()
@@ -334,6 +339,21 @@ class TestTranspileIR(unittest.TestCase):
         ref = model(x).numpy()
         got = outputs[0].numpy()
         np.testing.assert_allclose(ref, got, atol=5e-4)
+
+    def test_runtime_expand_transpiles_and_matches(self):
+        model = RuntimeExpandToy().eval()
+        x = torch.tensor([1.0, -2.0, 3.0], dtype=torch.float16)
+
+        captured = capture_model(model, (x,))
+        canonicalize_exported_graph(captured.ir_graph)
+
+        tg = transpile_captured(captured)
+        tg.set_inputs([x.numpy()])
+        outputs = tg.execute()
+
+        ref = model(x).numpy()
+        got = outputs[0].numpy()
+        np.testing.assert_allclose(ref, got, atol=1e-2)
 
     def test_depthwise_causal_conv1d_pattern_transpiles_and_matches(self):
         model = DepthwiseCausalConv1dToy().eval()
