@@ -48,8 +48,12 @@ DEFAULT_MODEL_ID = "google/gemma-4-E2B-it"
 DEFAULT_TEST_MODEL_ID = "google/gemma-4-E2B-it"
 WEIGHTS_VARIANT_CHOICES = ["auto", "apple", "standard"]
 
-with open(PROJECT_ROOT / "models.json") as _f:
-    MODELS_REGISTRY = json.load(_f)
+# dont fail if models.json is missing or malformed - just have an empty registry and rely on HF download_args
+try:
+    with open(PROJECT_ROOT / "models.json", "r", encoding="utf-8") as f:
+        MODEL_REGISTRY = json.load(f)
+except Exception:
+    MODEL_REGISTRY = {}
 
 RED = '\033[0;31m'
 GREEN = '\033[0;32m'
@@ -718,7 +722,7 @@ def check_libcurl():
 
 
 def cmd_build(args):
-    """Build the Cactus library and chat binary."""
+    """Build the Cactus library."""
     if getattr(args, 'apple', False):
         return cmd_build_apple(args)
     if getattr(args, 'android', False):
@@ -728,8 +732,8 @@ def cmd_build(args):
     if getattr(args, 'python', False):
         return cmd_build_python(args)
 
-    print_color(BLUE, "Building Cactus chat...")
-    print("=" * 23)
+    print_color(BLUE, "Building Cactus library...")
+    print("=" * 24)
 
     if not check_command('cmake'):
         print_color(RED, "Error: CMake is not installed")
@@ -745,7 +749,6 @@ def cmd_build(args):
 
     cactus_dir = PROJECT_ROOT / "cactus"
     lib_path = cactus_dir / "build" / "libcactus.a"
-    vendored_curl = PROJECT_ROOT / "cactus-engine" / "libs" / "curl" / "macos" / "libcurl.a"
 
     print_color(YELLOW, "Building Cactus library...")
     build_script = cactus_dir / "build.sh"
@@ -756,144 +759,8 @@ def cmd_build(args):
     if result.returncode != 0:
         print_color(RED, "Failed to build cactus library")
         return 1
-
-    tests_dir = PROJECT_ROOT / "cactus-engine" / "tests"
-    build_dir = tests_dir / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
-
-    print("Compiling chat.cpp...")
-
-    chat_cpp = tests_dir / "chat.cpp"
-    if not chat_cpp.exists():
-        print_color(RED, f"Error: chat.cpp not found at {chat_cpp}")
-        return 1
-
-    is_darwin = platform.system() == "Darwin"
-
-    sdl2_available = False
-    sdl2_flags = []
-    sdl2_link = []
-    if is_darwin:
-        sdl2_check = subprocess.run(["brew", "list", "sdl2"], capture_output=True)
-        if sdl2_check.returncode == 0:
-            sdl2_prefix_result = subprocess.run(["brew", "--prefix", "sdl2"], capture_output=True, text=True)
-            if sdl2_prefix_result.returncode == 0:
-                sdl2_prefix = sdl2_prefix_result.stdout.strip()
-                sdl2_flags = ["-DHAVE_SDL2", f"-I{sdl2_prefix}/include", f"-I{sdl2_prefix}/include/SDL2"]
-                sdl2_link = [f"-L{sdl2_prefix}/lib", "-lSDL2"]
-                sdl2_available = True
-    else:
-        sdl2_check = subprocess.run(["pkg-config", "--exists", "sdl2"], capture_output=True)
-        if sdl2_check.returncode == 0:
-            cflags = subprocess.run(["pkg-config", "--cflags", "sdl2"], capture_output=True, text=True)
-            libs = subprocess.run(["pkg-config", "--libs", "sdl2"], capture_output=True, text=True)
-            if cflags.returncode == 0 and libs.returncode == 0:
-                sdl2_flags = ["-DHAVE_SDL2"] + cflags.stdout.strip().split()
-                sdl2_link = libs.stdout.strip().split()
-                sdl2_available = True
-
-    if sdl2_available:
-        print_color(GREEN, "SDL2 found - building with live audio support")
-    else:
-        print_color(YELLOW, "SDL2 not found - live mic recording will be disabled")
-        print_color(YELLOW, "Install SDL2 for live mic support: brew install sdl2 (macOS)")
-        print_color(YELLOW, "Then run `cactus build`")
-
-    if is_darwin:
-        if not vendored_curl.exists():
-            print_color(RED, f"Error: vendored libcurl not found at {vendored_curl}")
-            print("Build it first and place it in libs/curl/macos/libcurl.a")
-            return 1
-        compiler = "clang++"
-        cmd = [
-            compiler, "-std=c++20", "-O3",
-            "-DACCELERATE_NEW_LAPACK",
-            f"-I{PROJECT_ROOT}",
-            f"-I{PROJECT_ROOT / 'cactus-engine'}",
-            f"-I{PROJECT_ROOT / 'cactus-graph'}",
-            f"-I{PROJECT_ROOT / 'cactus-kernels'}",
-            *sdl2_flags,
-            str(chat_cpp),
-            str(lib_path),
-            "-o", "chat",
-            str(vendored_curl),
-            "-framework", "Accelerate",
-            "-framework", "CoreML",
-            "-framework", "Foundation",
-            "-framework", "Security",
-            "-framework", "SystemConfiguration",
-            "-framework", "CFNetwork",
-            *sdl2_link,
-        ]
-    else:
-        compiler = "g++"
-        cmd = [
-            compiler, "-std=c++20", "-O3",
-            f"-I{PROJECT_ROOT}",
-            f"-I{PROJECT_ROOT / 'cactus-engine'}",
-            f"-I{PROJECT_ROOT / 'cactus-graph'}",
-            f"-I{PROJECT_ROOT / 'cactus-kernels'}",
-            *sdl2_flags,
-            str(chat_cpp),
-            str(lib_path),
-            "-o", "chat",
-            "-lcurl",
-            "-pthread",
-            *sdl2_link,
-        ]
-
-    if not check_command(compiler):
-        print_color(RED, f"Error: {compiler} is not installed")
-        return 1
-
-    result = subprocess.run(cmd, cwd=build_dir)
-    if result.returncode != 0:
-        print_color(RED, "Build failed")
-        return 1
-
-    print_color(GREEN, f"Build complete: {build_dir / 'chat'}")
-
-    asr_cpp = tests_dir / "asr.cpp"
-    if asr_cpp.exists():
-        print("Compiling asr.cpp...")
-
-        if is_darwin:
-            cmd = [
-                compiler, "-std=c++20", "-O3",
-                "-DACCELERATE_NEW_LAPACK",
-                f"-I{PROJECT_ROOT}",
-                *sdl2_flags,
-                str(asr_cpp),
-                str(lib_path),
-                "-o", "asr",
-                str(vendored_curl),
-                "-framework", "Accelerate",
-                "-framework", "CoreML",
-                "-framework", "Foundation",
-                "-framework", "Security",
-                "-framework", "SystemConfiguration",
-                "-framework", "CFNetwork",
-                *sdl2_link,
-            ]
-        else:
-            cmd = [
-                compiler, "-std=c++20", "-O3",
-                f"-I{PROJECT_ROOT}",
-                *sdl2_flags,
-                str(asr_cpp),
-                str(lib_path),
-                "-o", "asr",
-                "-lcurl",
-                "-pthread",
-                *sdl2_link,
-            ]
-
-        result = subprocess.run(cmd, cwd=build_dir)
-        if result.returncode != 0:
-            print_color(RED, "ASR build failed")
-            return 1
-
-        print_color(GREEN, f"Build complete: {build_dir / 'asr'}")
+    print_color(GREEN, "Cactus library built successfully!")
+    print(f"Library location: {lib_path}")
 
     return 0
 
@@ -1250,7 +1117,7 @@ def _cmd_transcribe_ios(weights_dir, audio_file, args):
         print_color(RED, f"Error: audio file not found: {audio_path}")
         return 1
 
-    ios_script = PROJECT_ROOT / "tests" / "ios" / "run.sh"
+    ios_script = PROJECT_ROOT / "tests" / "ios" / "test.sh"
     if not ios_script.exists():
         print_color(RED, f"Error: iOS runner not found at {ios_script}")
         return 1
@@ -1504,7 +1371,21 @@ def cmd_test(args):
         if cmd_download(dl_args) != 0:
             return 1
 
-    test_script = PROJECT_ROOT / "tests" / "run.sh"
+    test_filter = args.only
+    for _test_name in ['llm', 'vlm', 'stt', 'embed', 'rag', 'graph', 'index', 'kernel', 'kv_cache', 'performance']:
+        if getattr(args, _test_name, False):
+            test_filter = _test_name
+            break
+
+    if test_filter == "kernel":
+        test_script = PROJECT_ROOT / "cactus-kernels" / "test.sh"
+        test_cwd = PROJECT_ROOT / "cactus-kernels"
+    elif test_filter in ("graph", "kv_cache"):
+        test_script = PROJECT_ROOT / "cactus-graph" / "test.sh"
+        test_cwd = PROJECT_ROOT / "cactus-graph"
+    else:
+        test_script = PROJECT_ROOT / "cactus-engine" / "test.sh"
+        test_cwd = PROJECT_ROOT / "cactus-engine"
 
     if not test_script.exists():
         print_color(RED, f"Error: Test script not found at {test_script}")
@@ -1522,11 +1403,6 @@ def cmd_test(args):
         cmd.append("--android")
     if args.ios:
         cmd.append("--ios")
-    test_filter = args.only
-    for _test_name in ['llm', 'vlm', 'stt', 'embed', 'rag', 'graph', 'index', 'kernel', 'kv_cache', 'performance']:
-        if getattr(args, _test_name, False):
-            test_filter = _test_name
-            break
     if test_filter:
         cmd.extend(["--only", test_filter])
     env = os.environ.copy()
@@ -1535,7 +1411,7 @@ def cmd_test(args):
     else:
         env["CACTUS_NO_CLOUD_TELE"] = "1"
 
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT / "tests", env=env)
+    result = subprocess.run(cmd, cwd=test_cwd, env=env)
     return result.returncode
 
 
