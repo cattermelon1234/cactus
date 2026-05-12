@@ -7,8 +7,8 @@ from typing import Any
 
 import torch
 
-from src.graph import Graph
-from src.graph import Tensor
+from src.transpile.runtime_compat import Graph
+from src.transpile.runtime_compat import Tensor
 from src.transpile.capture_pytorch import CapturedModel
 from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.graph_ir import IRGraph
@@ -16,6 +16,7 @@ from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
 from src.transpile.graph_ir import verify_ir
 from src.transpile.optimize_graph import optimize_graph
+from src.transpile.weight_compat import ensure_binding_compatible
 from src.transpile.weight_binding import WeightBinding
 
 
@@ -25,6 +26,7 @@ class TranspiledGraph:
     runtime_inputs: list[Tensor]
     bound_constants: list[Tensor]
     bound_constant_bindings: list[dict[str, object]]
+    bound_constant_value_ids: dict[int, str]
     outputs: list[Tensor]
 
     def set_input(self, index: int, data: Any, *, dtype: int | None = None) -> None:
@@ -73,6 +75,7 @@ def transpile_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
     runtime_inputs: list[Tensor] = []
     bound_constants: list[Tensor] = []
     bound_constant_bindings: list[dict[str, object]] = []
+    bound_constant_value_ids: dict[int, str] = {}
 
     for value_id in ir.inputs:
         value = ir.values[value_id]
@@ -83,10 +86,13 @@ def transpile_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
     for value_id, const in ir.constants.items():
         value = ir.values[value_id]
         binding = _lookup_weight_binding(value)
-        lowered_const = _lower_constant_value(g, value, const)
+        if binding is not None:
+            binding = ensure_binding_compatible(binding, source_tensor=const)
+        lowered_const = _lower_constant_value(g, value, const, binding=binding)
         env[value_id] = lowered_const
         if isinstance(lowered_const, Tensor):
             bound_constants.append(lowered_const)
+            bound_constant_value_ids[int(lowered_const.id)] = str(value_id)
             if binding is not None:
                 bound_constant_bindings.append(
                     {
@@ -121,6 +127,7 @@ def transpile_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
         runtime_inputs=runtime_inputs,
         bound_constants=bound_constants,
         bound_constant_bindings=bound_constant_bindings,
+        bound_constant_value_ids=bound_constant_value_ids,
         outputs=outputs,
     )
 
@@ -130,12 +137,18 @@ def _lower_input_value(g: Graph, value: IRValue) -> Tensor:
         raise ValueError(f"IR input missing shape or dtype: {value.id}")
     return g.input(shape=value.shape, dtype=_map_ir_dtype(value.dtype))
 
-def _lower_constant_value(g: Graph, value: IRValue, const: Any) -> Any:
-    binding = _lookup_weight_binding(value)
+def _lower_constant_value(
+    g: Graph,
+    value: IRValue,
+    const: Any,
+    *,
+    binding: WeightBinding | None = None,
+) -> Any:
+    if binding is None:
+        binding = _lookup_weight_binding(value)
     if binding is not None:
         _debug_mmap_binding(value.id, binding)
         if binding.kind == "embedding":
-            print("generating embedding tensor") # Observe which shit actually has embeddings generated
             return g.mmap_embeddings(binding.path)
         return g.mmap_weights(binding.path)
 
@@ -244,8 +257,42 @@ def _matmul_output_dtype(
     return output_dtype
 
 
+def _trim_padded_last_dim(g: Graph, tensor: Tensor, expected_shape: tuple[int, ...] | None) -> Tensor:
+    if expected_shape is None:
+        return tensor
+    actual_shape = tuple(int(dim) for dim in tensor.shape)
+    target_shape = tuple(int(dim) for dim in expected_shape)
+    if actual_shape == target_shape:
+        return tensor
+    if (
+        len(actual_shape) == len(target_shape)
+        and len(actual_shape) >= 1
+        and actual_shape[:-1] == target_shape[:-1]
+        and actual_shape[-1] > target_shape[-1]
+    ):
+        return g.slice(tensor, len(actual_shape) - 1, 0, target_shape[-1])
+    return tensor
+
+
 def _legalize_for_transpose(g: Graph, x: Tensor) -> Tensor:
     return x
+
+
+def _reshape_attention_output_for_linear(
+    g: Graph,
+    attn_out: Tensor,
+    target_shape: tuple[int, ...],
+) -> Tensor:
+    actual_shape = tuple(int(dim) for dim in attn_out.shape)
+    target_shape = tuple(int(dim) for dim in target_shape)
+    if len(actual_shape) == 4 and len(target_shape) == 3 and actual_shape[0] == target_shape[0]:
+        batch, dim1, dim2, dim3 = actual_shape
+        _, target_seq, target_hidden = target_shape
+        if dim1 == target_seq and dim2 * dim3 == target_hidden:
+            return g.reshape(attn_out, target_shape)
+        if dim2 == target_seq and dim1 * dim3 == target_hidden:
+            return g.reshape(g.permute(attn_out, (0, 2, 1, 3)), target_shape)
+    return g.reshape(attn_out, target_shape)
 
 
 def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> list[Any]:
@@ -546,6 +593,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
             pretransposed_rhs=True,
             output_dtype=matmul_output_dtype,
         )
+        out = _trim_padded_last_dim(g, out, output_value.shape if output_value is not None else None)
         if node.attrs.get("has_bias"):
             bias = _ensure_tensor_dtype(g, bias, matmul_output_dtype)
             out = g.add(out, bias)
@@ -567,6 +615,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         elif bias.dtype == Graph.FP32 and rhs.dtype not in (Graph.INT8, Graph.INT4):
             matmul_output_dtype = Graph.FP32
         out = _matmul_with_quantized_rhs_legalization(g, lhs, rhs, output_dtype=matmul_output_dtype)
+        out = _trim_padded_last_dim(g, out, output_value.shape if output_value is not None else None)
         bias = _ensure_tensor_dtype(g, bias, matmul_output_dtype)
         out = g.add(bias, out)
         if out.dtype != output_dtype:
@@ -650,6 +699,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         value = g.permute(_attention_tensor(env, node.inputs[2]), (0, 2, 1, 3))
         if mask_tensor is not None:
             mask_tensor = _ensure_fp16_tensor(g, mask_tensor)
+            mask_tensor = _normalize_attention_mask_for_cactus(g, mask_tensor, query)
         out = g.attention(
             query,
             key,
@@ -678,6 +728,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
             mask_tensor = _tensor(env, node.inputs[input_index])
             input_index += 1
             mask_tensor = _ensure_fp16_tensor(g, mask_tensor)
+            mask_tensor = _normalize_attention_mask_for_cactus(g, mask_tensor, query)
 
         attn_out = g.attention(
             query,
@@ -692,7 +743,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         flat_shape_attr = tuple(int(v) for v in node.attrs.get("attention_output_shape", ()))
         flat_shape = _resolve_reshape_shape(tuple(attn_out.shape), flat_shape_attr) if flat_shape_attr else ()
         if flat_shape:
-            attn_out = g.reshape(attn_out, flat_shape)
+            attn_out = _reshape_attention_output_for_linear(g, attn_out, flat_shape)
 
         if has_gate:
             gate = _tensor(env, node.inputs[input_index])
@@ -833,6 +884,8 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
             mask_tensor = _ensure_fp16_tensor(g, mask_tensor)
         elif mask_tensor is not None:
             mask_tensor = _ensure_fp16_tensor(g, mask_tensor)
+        if mask_tensor is not None:
+            mask_tensor = _normalize_attention_mask_for_cactus(g, mask_tensor, query)
 
         attn_out = g.attention(
             query,
@@ -847,7 +900,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         flat_shape_attr = tuple(int(v) for v in node.attrs.get("attention_output_shape", ()))
         flat_shape = _resolve_reshape_shape(tuple(attn_out.shape), flat_shape_attr) if flat_shape_attr else ()
         if flat_shape:
-            attn_out = g.reshape(attn_out, flat_shape)
+            attn_out = _reshape_attention_output_for_linear(g, attn_out, flat_shape)
 
         if gate is not None:
             attn_out, gate = _legalize_elementwise_binary_inputs(g, attn_out, gate)
@@ -1310,6 +1363,34 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         if dilation != 1:
             raise NotImplementedError(f"conv2d with dilation != 1 is unsupported: {dilation}")
 
+        if stride == 2 and padding == 0 and groups == 1 and weight.shape[2:] == (3, 3):
+            batch_size, channels, height, width = (int(dim) for dim in x.shape)
+            pad_dtype = _torch_dtype_for_graph_dtype(x.dtype)
+            top = _materialize_constant_tensor(
+                g,
+                torch.zeros((batch_size, channels, 1, width), dtype=pad_dtype),
+            )
+            bottom = _materialize_constant_tensor(
+                g,
+                torch.zeros((batch_size, channels, 1, width), dtype=pad_dtype),
+            )
+            x = g.cat([top, x, bottom], axis=2)
+            left = _materialize_constant_tensor(
+                g,
+                torch.zeros((batch_size, channels, height + 2, 1), dtype=pad_dtype),
+            )
+            right = _materialize_constant_tensor(
+                g,
+                torch.zeros((batch_size, channels, height + 2, 1), dtype=pad_dtype),
+            )
+            x = g.cat([left, x, right], axis=3)
+            y = g.conv2d_k3s2p1(x, weight, bias=bias)
+            output_height = ((height - 3) // 2) + 1
+            output_width = ((width - 3) // 2) + 1
+            y = g.slice(y, axis=2, start=1, length=output_height)
+            y = g.slice(y, axis=3, start=1, length=output_width)
+            return [y]
+
         if stride == 2 and padding == 1 and groups == 1 and weight.shape[2:] == (3, 3):
             return [g.conv2d_k3s2p1(x, weight, bias=bias)]
 
@@ -1616,6 +1697,35 @@ def _resolve_attention_scale(node: IRNode, query: Tensor) -> float:
     return 1.0
 
 
+def _normalize_attention_mask_for_cactus(g: Graph, mask: Tensor, query: Tensor) -> Tensor:
+    """Convert broadcastable HF masks into the native Cactus attention contract."""
+
+    mask_shape = tuple(int(dim) for dim in mask.shape)
+    query_shape = tuple(int(dim) for dim in query.shape)
+    if len(query_shape) != 4:
+        return mask
+
+    batch_size, seq_len, num_heads, _ = query_shape
+    if len(mask_shape) == 2 and batch_size == 1 and mask_shape[0] == seq_len:
+        return g.reshape(mask, (1, mask_shape[0], mask_shape[1]))
+
+    if len(mask_shape) == 4:
+        if (
+            mask_shape[0] == batch_size
+            and mask_shape[1] == 1
+            and mask_shape[2] == seq_len
+        ):
+            return g.reshape(mask, (mask_shape[0], mask_shape[2], mask_shape[3]))
+        if (
+            mask_shape[0] == batch_size
+            and mask_shape[1] == num_heads
+            and mask_shape[2] == seq_len
+        ):
+            return mask
+
+    return mask
+
+
 def _lower_projected_attention_tensor(
     g: Graph,
     hidden: Tensor,
@@ -1812,9 +1922,23 @@ def _try_lower_prefix_mask_advanced_index(
         return None
     if source_shape[: len(mask_shape)] != mask_shape:
         return None
-    selected = g.masked_select_prefix(source, mask)
 
     output_shape = _static_shape(ir.values[node.outputs[0]].shape if node.outputs and node.outputs[0] in ir.values else None)
+    if output_shape:
+        prefix_elems = 1
+        for dim in mask_shape:
+            prefix_elems *= int(dim)
+        trailing_shape = source_shape[len(mask_shape) :]
+        flattened_shape = (prefix_elems, *trailing_shape)
+        flattened = source if source_shape == flattened_shape else g.reshape(source, flattened_shape)
+        expected_prefix = int(output_shape[0])
+        if 0 <= expected_prefix <= prefix_elems:
+            selected = g.slice(flattened, axis=0, start=0, length=expected_prefix)
+            if tuple(int(dim) for dim in selected.shape) != tuple(int(dim) for dim in output_shape):
+                selected = g.reshape(selected, output_shape)
+            return selected
+
+    selected = g.masked_select_prefix(source, mask)
     if output_shape is None or not output_shape:
         return selected
     if len(output_shape) != len(selected.shape):
@@ -1882,11 +2006,7 @@ def _lower_binary_op(g: Graph, lhs_value: Any, rhs_value: Any, op: str) -> Tenso
         raise NotImplementedError(f"unsupported binary op: {op}")
 
     if isinstance(lhs_value, Tensor) and _is_scalar_like(rhs_value):
-        lhs_value = _ensure_tensor_dtype(
-            g,
-            lhs_value,
-            Graph.FP16 if lhs_value.dtype == Graph.FP16 else Graph.FP32,
-        )
+        lhs_value = _ensure_scalar_math_tensor(g, lhs_value)
         scalar = float(rhs_value)
         if op == "add":
             return g.scalar_add(lhs_value, scalar)
@@ -1899,11 +2019,7 @@ def _lower_binary_op(g: Graph, lhs_value: Any, rhs_value: Any, op: str) -> Tenso
         raise NotImplementedError(f"unsupported binary op: {op}")
 
     if _is_scalar_like(lhs_value) and isinstance(rhs_value, Tensor):
-        rhs_value = _ensure_tensor_dtype(
-            g,
-            rhs_value,
-            Graph.FP16 if rhs_value.dtype == Graph.FP16 else Graph.FP32,
-        )
+        rhs_value = _ensure_scalar_math_tensor(g, rhs_value)
         scalar = float(lhs_value)
         if op == "add":
             return g.scalar_add(rhs_value, scalar)
@@ -1996,7 +2112,7 @@ def _ensure_fp16_tensor(g: Graph, tensor: Tensor) -> Tensor:
 
 
 def _ensure_scalar_math_tensor(g: Graph, tensor: Tensor) -> Tensor:
-    if tensor.dtype in (Graph.FP16, Graph.FP32):
+    if tensor.dtype == Graph.FP16:
         return tensor
     return g.precision_cast(tensor, Graph.FP16)
 
@@ -2100,7 +2216,7 @@ def _flatten_to_2d_for_linear(g: Graph, tensor: Tensor) -> Tensor:
     leading = 1
     for dim in shape[:-1]:
         leading *= int(dim)
-    return g.reshape(tensor, (leading, int(shape[-1])))
+    return g.view(tensor, (leading, int(shape[-1])))
 
 
 def _broadcast_batch_shape(lhs_batch: tuple[int, ...], rhs_batch: tuple[int, ...]) -> tuple[int, ...] | None:

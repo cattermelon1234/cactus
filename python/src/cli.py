@@ -46,6 +46,15 @@ PROJECT_ROOT = _resolve_project_root()
 DEFAULT_MODEL_ID = "google/gemma-4-E2B-it"
 DEFAULT_TEST_MODEL_ID = "google/gemma-4-E2B-it"
 WEIGHTS_VARIANT_CHOICES = ["auto", "apple", "standard"]
+MODEL_ID_ALIASES = {
+    "gemma4": DEFAULT_MODEL_ID,
+    "gemma4-e2b": DEFAULT_MODEL_ID,
+    "parakeet": "nvidia/parakeet-tdt-0.6b-v3",
+    "parakeet-tdt": "nvidia/parakeet-tdt-0.6b-v3",
+    "whisper": "openai/whisper-small",
+    "qwen": "Qwen/Qwen3-1.7B",
+    "lfm": "LiquidAI/LFM2-350M",
+}
 
 
 def _python_runtime_library_path() -> Path:
@@ -93,6 +102,11 @@ NC = '\033[0m'
 def print_color(color, message):
     """Print a message with ANSI color codes."""
     print(f"{color}{message}{NC}")
+
+
+def resolve_model_id_alias(model_id: str) -> str:
+    normalized = (model_id or "").strip()
+    return MODEL_ID_ALIASES.get(normalized.lower(), normalized)
 
 
 from .downloads import get_model_dir_name, get_weights_dir, download_from_hf as _download_from_hf_impl
@@ -1128,12 +1142,25 @@ def cmd_run_transpiled(args):
     from .transpile.component_bundle_runtime import run_transpiled_bundle
 
     bundle_dir = getattr(args, "bundle_dir", None) or getattr(args, "model_id", None)
+    image_values: list[str] = []
+    for attr_name in ("image_file", "image_files"):
+        value = getattr(args, attr_name, None)
+        if isinstance(value, str) and value.strip():
+            image_values.append(value.strip())
+        elif isinstance(value, (list, tuple)):
+            image_values.extend(str(item).strip() for item in value if str(item).strip())
+    image_arg = getattr(args, "image", None)
+    if isinstance(image_arg, str) and image_arg.strip():
+        image_values.append(image_arg.strip())
     result = run_transpiled_bundle(
         bundle_dir,
         audio_file=getattr(args, "audio_file", None) or getattr(args, "audio", None),
+        image_files=tuple(image_values),
         prompt=getattr(args, "prompt", None),
         input_ids=getattr(args, "input_ids", None),
         weights_dir=getattr(args, "weights_dir", None),
+        system_prompt=getattr(args, "system", None),
+        enable_thinking=bool(getattr(args, "thinking", False)),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     if getattr(args, "result_json", None):
@@ -1152,8 +1179,14 @@ def cmd_transpile(args):
         return 1
 
     transpile_lib = _ensure_python_runtime_library()
-    command = [sys.executable, str(script_path), "--model-id", args.model_id]
-    command.extend(getattr(args, "extra_args", []) or [])
+    model_id = resolve_model_id_alias(args.model_id)
+    extra_args = list(getattr(args, "extra_args", []) or [])
+    command = [sys.executable, str(script_path), "--model-id", model_id]
+    if "--weights-dir" not in extra_args:
+        default_weights_dir = get_weights_dir(model_id)
+        if default_weights_dir.exists():
+            command.extend(["--weights-dir", str(default_weights_dir)])
+    command.extend(extra_args)
     env = os.environ.copy()
     env["CACTUS_LIB_PATH"] = str(transpile_lib)
     result = subprocess.run(command, cwd=PROJECT_ROOT, env=env)
@@ -1162,7 +1195,8 @@ def cmd_transpile(args):
 
 def cmd_run(args):
     """Download model if needed and start interactive chat."""
-    manifest_path = _resolve_transpiled_manifest(args.model_id)
+    model_id_or_path = getattr(args, "model_id", DEFAULT_MODEL_ID)
+    manifest_path = _resolve_transpiled_manifest(model_id_or_path)
     if manifest_path is not None:
         args.bundle_dir = str(manifest_path.parent.parent if manifest_path.parent.name == "components" else manifest_path.parent)
         return cmd_run_transpiled(args)
@@ -1175,7 +1209,7 @@ def cmd_run(args):
     if api_key:
         os.environ["CACTUS_CLOUD_KEY"] = api_key
 
-    model_id = args.model_id
+    model_id = resolve_model_id_alias(args.model_id)
 
     if getattr(args, 'no_cloud_tele', False):
         os.environ["CACTUS_NO_CLOUD_TELE"] = "1"
@@ -2257,13 +2291,17 @@ def create_parser():
                             help='Enable thinking/reasoning for models that support it')
 
     transpile_parser = subparsers.add_parser('transpile', help='Transpile a HuggingFace model into Cactus component graphs')
-    transpile_parser.add_argument('model_id', help='HuggingFace model ID to transpile')
+    transpile_parser.add_argument('model_id', help='HuggingFace model ID to transpile (aliases: gemma4, parakeet, whisper, qwen, lfm)')
 
     run_transpiled_parser = subparsers.add_parser('run-transpiled', help='Run a saved transpiled component bundle')
     run_transpiled_parser.add_argument('bundle_dir',
                                        help='Bundle root directory or manifest.json path from transpile_hf_model.py')
     run_transpiled_parser.add_argument('--file', dest='audio_file', default=None,
                                        help='Audio file for transcription bundles such as parakeet-tdt')
+    run_transpiled_parser.add_argument('--image', default=None,
+                                       help='Image file for multimodal transpiled bundles')
+    run_transpiled_parser.add_argument('--image-file', action='append', default=[],
+                                       help='Repeatable image input for multimodal transpiled bundles')
     run_transpiled_parser.add_argument('--weights-dir', default=None,
                                        help='Optional converted weights directory for bound-weight bundles')
     run_transpiled_parser.add_argument('--prompt', default=None,
@@ -2272,6 +2310,10 @@ def create_parser():
                                        help='Comma-separated token ids for causal-LM bundles')
     run_transpiled_parser.add_argument('--result-json', default=None,
                                        help='Optional path to save the result payload as JSON')
+    run_transpiled_parser.add_argument('--system', default=None,
+                                       help='Optional system prompt for multimodal transpiled bundles')
+    run_transpiled_parser.add_argument('--thinking', action='store_true',
+                                       help='Enable thinking/reasoning markers when supported by the transpiled bundle')
 
     transcribe_parser = subparsers.add_parser('transcribe', help='Download ASR model and run transcription')
     transcribe_parser.add_argument('model_id', nargs='?', default=DEFAULT_ASR_MODEL_ID,

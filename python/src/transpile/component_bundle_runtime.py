@@ -13,19 +13,25 @@ from typing import Any
 import numpy as np
 import torch
 
-from src.cactus import _lib
-from src.cactus import cactus_node_t
-from src.graph import Graph
-from src.graph import Tensor
 from src.tensor_io import CACTUS_MAGIC
 from src.tensor_io import FLAG_INTERLEAVED
 from src.tensor_io import align_offset
 from src.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
 from src.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
 from src.transpile.audio_preprocess import prepare_cactus_audio_features
+from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from src.transpile.graph_ir import IRGraph
+from src.transpile.graph_ir import IRNode
+from src.transpile.graph_ir import IRValue
+from src.transpile.lower import transpile_preoptimized_ir
+from src.transpile.optimize_graph import optimize_graph
 from src.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
 from src.transpile.parakeet_tdt_local import load_parakeet_tdt_config
 from src.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
+from src.transpile.runtime_compat import _lib
+from src.transpile.runtime_compat import cactus_node_t
+from src.transpile.runtime_compat import Graph
+from src.transpile.runtime_compat import Tensor
 
 
 _HEADER_SIZE = 84
@@ -100,6 +106,17 @@ def load_saved_component_graph(
     weights_dir: str | Path | None = None,
 ) -> LoadedComponentGraph:
     root = Path(bundle_root).expanduser().resolve()
+    raw_ir_relpath = component_entry.get("raw_ir")
+    optimized_ir_relpath = component_entry.get("optimized_ir")
+    has_raw_ir = isinstance(raw_ir_relpath, str) and bool(raw_ir_relpath)
+    has_optimized_ir = isinstance(optimized_ir_relpath, str) and bool(optimized_ir_relpath)
+    if has_raw_ir or has_optimized_ir:
+        return _load_component_graph_from_ir(
+            bundle_root=root,
+            component_entry=component_entry,
+            weights_dir=weights_dir,
+        )
+
     graph_relpath = component_entry.get("graph")
     if not isinstance(graph_relpath, str) or not graph_relpath:
         raise ValueError(f"component entry is missing graph path: {component_entry}")
@@ -132,6 +149,44 @@ def load_saved_component_graph(
     )
 
 
+def _load_component_graph_from_ir(
+    *,
+    bundle_root: Path,
+    component_entry: dict[str, object],
+    weights_dir: str | Path | None,
+) -> LoadedComponentGraph:
+    raw_ir_relpath = component_entry.get("raw_ir")
+    optimized_ir_relpath = component_entry.get("optimized_ir")
+    has_raw_ir = isinstance(raw_ir_relpath, str) and bool(raw_ir_relpath)
+    has_optimized_ir = isinstance(optimized_ir_relpath, str) and bool(optimized_ir_relpath)
+    use_raw_ir = has_raw_ir and not has_optimized_ir
+    ir_relpath = str(raw_ir_relpath if use_raw_ir else optimized_ir_relpath)
+    ir_path = (bundle_root / ir_relpath).resolve()
+    payload = json.loads(ir_path.read_text())
+    graph_payload = payload.get("graph")
+    if not isinstance(graph_payload, dict):
+        raise ValueError(f"saved IR payload is missing graph data: {ir_path}")
+
+    ir_graph = _deserialize_saved_ir_graph(
+        graph_payload=graph_payload,
+        component_entry=component_entry,
+        bundle_root=bundle_root,
+        weights_dir=weights_dir,
+    )
+    if use_raw_ir:
+        canonicalize_exported_graph(ir_graph)
+        optimize_graph(ir_graph)
+    transpiled = transpile_preoptimized_ir(ir_graph)
+    return LoadedComponentGraph(
+        component=str(component_entry.get("component", "unknown")),
+        graph=transpiled.graph,
+        runtime_inputs=list(transpiled.runtime_inputs),
+        outputs=list(transpiled.outputs),
+        bound_constant_bindings=list(component_entry.get("bound_constant_bindings") or []),
+        bound_tensor_files=[],
+    )
+
+
 def load_saved_component_graphs(
     bundle_dir_or_manifest: str | Path,
     *,
@@ -157,14 +212,19 @@ def run_transpiled_bundle(
     bundle_dir_or_manifest: str | Path,
     *,
     audio_file: str | Path | None = None,
+    image_files: tuple[str, ...] = (),
     prompt: str | None = None,
     input_ids: str | list[int] | tuple[int, ...] | None = None,
     weights_dir: str | Path | None = None,
     torch_dtype: torch.dtype = torch.float16,
+    system_prompt: str | None = None,
+    enable_thinking: bool = False,
 ) -> dict[str, object]:
+    bundle_root, manifest = load_component_bundle_manifest(bundle_dir_or_manifest)
+    resolved_weights_dir = _default_weights_dir_for_manifest(manifest, explicit=weights_dir)
     component_graphs, manifest = load_saved_component_graphs(
         bundle_dir_or_manifest,
-        weights_dir=weights_dir,
+        weights_dir=resolved_weights_dir,
     )
     family = str(manifest.get("family", "") or "")
     task = str(manifest.get("task", "") or "")
@@ -177,7 +237,18 @@ def run_transpiled_bundle(
             audio_file=audio_file,
             torch_dtype=torch_dtype,
         )
-    if task in {"causal_lm_logits", "multimodal_causal_lm_logits"}:
+    if task == "multimodal_causal_lm_logits":
+        return _run_multimodal_causal_lm_bundle(
+            component_graphs=component_graphs,
+            manifest=manifest,
+            prompt=prompt,
+            image_files=image_files,
+            audio_file=audio_file,
+            torch_dtype=torch_dtype,
+            system_prompt=system_prompt,
+            enable_thinking=enable_thinking,
+        )
+    if task == "causal_lm_logits":
         return _run_causal_lm_logits_bundle(
             component_graphs=component_graphs,
             manifest=manifest,
@@ -202,6 +273,166 @@ def run_transpiled_bundle(
     raise NotImplementedError(
         f"saved transpiled bundle execution is not implemented for family={family!r} task={task!r}"
     )
+
+
+def _default_weights_dir_for_manifest(
+    manifest: Mapping[str, object],
+    *,
+    explicit: str | Path | None,
+) -> str | Path | None:
+    if explicit is not None:
+        return explicit
+    model_id = str(manifest.get("model_id", "") or "").strip()
+    if not model_id:
+        return None
+    try:
+        from src.downloads import get_weights_dir
+
+        candidate = get_weights_dir(model_id)
+    except Exception:
+        return None
+    return candidate if candidate.exists() else None
+
+
+def _deserialize_saved_ir_graph(
+    *,
+    graph_payload: Mapping[str, object],
+    component_entry: Mapping[str, object],
+    bundle_root: Path,
+    weights_dir: str | Path | None,
+) -> IRGraph:
+    values_payload = graph_payload.get("values")
+    nodes_payload = graph_payload.get("nodes")
+    if not isinstance(values_payload, dict) or not isinstance(nodes_payload, list):
+        raise ValueError("saved optimized IR graph is missing values or nodes payload")
+
+    values: dict[str, IRValue] = {}
+    for value_id, raw_value in values_payload.items():
+        if not isinstance(value_id, str) or not isinstance(raw_value, dict):
+            continue
+        shape = raw_value.get("shape")
+        values[value_id] = IRValue(
+            id=str(raw_value.get("id", value_id)),
+            shape=None if shape is None else tuple(int(dim) for dim in shape),
+            dtype=None if raw_value.get("dtype") is None else str(raw_value.get("dtype")),
+            producer=None if raw_value.get("producer") is None else str(raw_value.get("producer")),
+            users=[str(item) for item in raw_value.get("users", [])],
+            meta=dict(raw_value.get("meta") or {}),
+        )
+
+    nodes: dict[str, IRNode] = {}
+    order: list[str] = []
+    for raw_node in nodes_payload:
+        if not isinstance(raw_node, dict):
+            continue
+        node_id = str(raw_node["id"])
+        node = IRNode(
+            id=node_id,
+            op=str(raw_node["op"]),
+            inputs=[str(item) for item in raw_node.get("inputs", [])],
+            outputs=[str(item) for item in raw_node.get("outputs", [])],
+            attrs=dict(raw_node.get("attrs") or {}),
+            meta=dict(raw_node.get("meta") or {}),
+            kind=str(raw_node.get("kind", "generic")),
+        )
+        nodes[node_id] = node
+        order.append(node_id)
+
+    constants_payload = graph_payload.get("constants")
+    if not isinstance(constants_payload, dict):
+        raise ValueError("saved optimized IR graph is missing constants payload")
+
+    constant_bindings_by_value_id = {
+        str(binding.get("value_id")): binding
+        for binding in component_entry.get("bound_constant_bindings", [])
+        if isinstance(binding, dict) and isinstance(binding.get("value_id"), str)
+    }
+
+    constants: dict[str, object] = {}
+    for value_id, serialized in constants_payload.items():
+        if not isinstance(value_id, str):
+            continue
+        value = values.get(value_id)
+        if value is None:
+            continue
+        constants[value_id] = _deserialize_saved_ir_constant(
+            value=value,
+            serialized=serialized,
+            binding=constant_bindings_by_value_id.get(value_id),
+            bundle_root=bundle_root,
+            weights_dir=weights_dir,
+        )
+
+    return IRGraph(
+        values=values,
+        nodes=nodes,
+        order=order,
+        inputs=[str(item) for item in graph_payload.get("inputs", [])],
+        outputs=[str(item) for item in graph_payload.get("outputs", [])],
+        constants=constants,
+        meta=dict(graph_payload.get("meta") or {}),
+    )
+
+
+def _deserialize_saved_ir_constant(
+    *,
+    value: IRValue,
+    serialized: object,
+    binding: Mapping[str, object] | None,
+    bundle_root: Path,
+    weights_dir: str | Path | None,
+) -> object:
+    def _torch_dtype_from_name(name: str) -> torch.dtype | None:
+        return {
+            "torch.bool": torch.bool,
+            "torch.uint8": torch.uint8,
+            "torch.int8": torch.int8,
+            "torch.int16": torch.int16,
+            "torch.int32": torch.int32,
+            "torch.int64": torch.int64,
+            "torch.float16": torch.float16,
+            "torch.float32": torch.float32,
+            "torch.float64": torch.float64,
+        }.get(name)
+
+    meta = value.meta if isinstance(value.meta, dict) else {}
+    if isinstance(meta.get("path"), str) and isinstance(meta.get("kind"), str):
+        # The lowerer ignores the constant payload when a weight binding is present
+        # in IRValue metadata and re-attaches the mmap-backed tensor directly.
+        return 0
+
+    if isinstance(binding, Mapping):
+        binding_format = str(binding.get("format", "tensor_io") or "tensor_io")
+        if binding_format == "npy":
+            tensor_path = _resolve_bound_tensor_path(
+                str(binding["path"]),
+                bundle_root=bundle_root,
+                weights_dir=weights_dir,
+            )
+            array = np.load(tensor_path, mmap_mode="r")
+            return torch.from_numpy(np.asarray(array))
+
+    if isinstance(serialized, (str, int, float, bool)) or serialized is None:
+        return serialized
+
+    if isinstance(serialized, list):
+        return serialized
+
+    if isinstance(serialized, dict):
+        value_type = str(serialized.get("type", ""))
+        if value_type in {"torch.Tensor", "numpy.ndarray"}:
+            shape = tuple(int(dim) for dim in serialized.get("shape", []) or [])
+            if not shape:
+                dtype = _torch_dtype_from_name(str(serialized.get("dtype", ""))) or torch.float32
+                zero_scalar = False if dtype is torch.bool else 0
+                return torch.tensor(zero_scalar, dtype=dtype)
+            raise ValueError(
+                "saved optimized IR is missing a materialized constant payload for "
+                f"{value.id} with shape={shape}; expected a bound_constants entry"
+            )
+        return dict(serialized)
+
+    return serialized
 
 
 def execute_loaded_component_pipeline(
@@ -344,6 +575,119 @@ def _run_parakeet_tdt_bundle(
         "transcript": _decode_parakeet_tdt_token_ids(config.vocabulary, emitted),
         "encoder_hidden_shape": list(encoder_hidden_states.shape),
         "component_order": list(manifest.get("component_order", [])),
+    }
+
+
+def _run_multimodal_causal_lm_bundle(
+    *,
+    component_graphs: dict[str, LoadedComponentGraph],
+    manifest: dict[str, object],
+    prompt: str | None,
+    image_files: tuple[str, ...],
+    audio_file: str | Path | None,
+    torch_dtype: torch.dtype,
+    system_prompt: str | None,
+    enable_thinking: bool,
+) -> dict[str, object]:
+    required_components = ("vision_encoder", "audio_encoder", "lm_encoder", "decoder")
+    missing = [name for name in required_components if name not in component_graphs]
+    if missing:
+        raise ValueError(
+            "multimodal causal LM bundle requires components "
+            f"{required_components!r}, missing {missing!r}"
+        )
+
+    inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+    resolved_prompt = prompt if prompt is not None else str(inputs_meta.get("prompt", "") or "")
+    if not resolved_prompt:
+        raise ValueError("provide --prompt for multimodal causal-LM bundles")
+
+    resolved_image_files: tuple[str, ...]
+    if image_files:
+        resolved_image_files = tuple(str(Path(path).expanduser().resolve()) for path in image_files)
+    else:
+        stored_images = inputs_meta.get("image_files")
+        if isinstance(stored_images, list):
+            resolved_image_files = tuple(str(Path(path).expanduser().resolve()) for path in stored_images if isinstance(path, str) and path)
+        else:
+            resolved_image_files = ()
+    if not resolved_image_files:
+        raise ValueError("provide --image or --image-file for multimodal causal-LM bundles")
+
+    resolved_audio: str | None = None
+    if audio_file is not None:
+        resolved_audio = str(Path(audio_file).expanduser().resolve())
+    else:
+        stored_audio = inputs_meta.get("audio_file")
+        if isinstance(stored_audio, str) and stored_audio:
+            resolved_audio = str(Path(stored_audio).expanduser().resolve())
+
+    from examples.transpile_hf_model import _patch_torch_flex_attention_compat
+    from examples.transpile_hf_model import _patch_transformers_torchvision_probe
+    from examples.transpile_hf_model import _prepare_gemma4_multimodal_inputs
+
+    _patch_transformers_torchvision_probe()
+    _patch_torch_flex_attention_compat()
+
+    from transformers import AutoProcessor
+
+    model_source = str(manifest.get("model_source", "") or manifest.get("model_id", "") or "")
+    if not model_source:
+        raise ValueError("bundle manifest is missing model_source/model_id for multimodal preprocessing")
+
+    processor = AutoProcessor.from_pretrained(
+        model_source,
+        local_files_only=Path(model_source).exists(),
+        trust_remote_code=True,
+    )
+    prepared = _prepare_gemma4_multimodal_inputs(
+        processor,
+        prompt=resolved_prompt,
+        image_files=resolved_image_files,
+        audio_file=resolved_audio,
+        torch_dtype=torch_dtype,
+        system_prompt=system_prompt or "",
+        enable_thinking_if_supported=enable_thinking,
+        use_gemma4_chat_template=True,
+    )
+
+    _attach_component_io_names(manifest, component_graphs)
+    prepared_store = {
+        name: tensor.detach().cpu().numpy()
+        for name, tensor in zip(prepared.names, prepared.tensors, strict=True)
+    }
+    start = time.perf_counter()
+    store, _ = execute_loaded_component_pipeline(
+        [component_graphs[name] for name in required_components],
+        initial_store=prepared_store,
+    )
+    end = time.perf_counter()
+    logits = np.asarray(store["logits"], dtype=np.float32)
+    if logits.ndim != 3:
+        raise RuntimeError(f"expected logits with shape [batch, seq, vocab], got {list(logits.shape)}")
+
+    next_token_id = int(np.argmax(logits[0, -1]))
+    tokenizer = getattr(processor, "tokenizer", processor)
+    next_token = None
+    if hasattr(tokenizer, "decode"):
+        next_token = tokenizer.decode([next_token_id])
+
+    return {
+        "bundle_model_id": str(manifest.get("model_id", "") or ""),
+        "family": str(manifest.get("family", "") or ""),
+        "task": str(manifest.get("task", "") or ""),
+        "component_order": list(manifest.get("component_order", [])),
+        "prompt": resolved_prompt,
+        "image_files": list(resolved_image_files),
+        "audio_file": resolved_audio,
+        "input_shapes": {
+            name: list(np.asarray(value).shape)
+            for name, value in prepared_store.items()
+        },
+        "output_shape": list(logits.shape),
+        "total_ms": (end - start) * 1000.0,
+        "next_token_id": next_token_id,
+        "next_token": next_token,
     }
 
 
@@ -832,4 +1176,3 @@ def _to_numpy(value: Any) -> np.ndarray:
     if isinstance(value, torch.Tensor):
         return np.ascontiguousarray(value.detach().cpu().numpy())
     raise TypeError(f"unsupported runtime value type: {type(value).__name__}")
-

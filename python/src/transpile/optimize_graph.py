@@ -62,6 +62,7 @@ def optimize_graph(graph: IRGraph, *, max_passes: int = 8, config: FusionConfig 
     config = config or FusionConfig()
     verify_ir(graph)
     canonicalize_exported_graph(graph)
+    enable_gemma4_attention_block_fusions = not _is_gemma4_graph(graph)
 
     for _ in range(max_passes):
         changed = False
@@ -80,9 +81,17 @@ def optimize_graph(graph: IRGraph, *, max_passes: int = 8, config: FusionConfig 
             changed = True
         if config.enable_attention and fuse_attention(graph):
             changed = True
-        if config.enable_self_attention_block and fuse_self_attention_blocks(graph):
+        if (
+            enable_gemma4_attention_block_fusions
+            and config.enable_self_attention_block
+            and fuse_self_attention_blocks(graph)
+        ):
             changed = True
-        if config.enable_attention_block and fuse_attention_blocks(graph):
+        if (
+            enable_gemma4_attention_block_fusions
+            and config.enable_attention_block
+            and fuse_attention_blocks(graph)
+        ):
             changed = True
         if normalize_gemma4_decoder_attention_semantics(graph):
             changed = True
@@ -487,7 +496,53 @@ def normalize_gemma4_decoder_attention_semantics(graph: IRGraph) -> bool:
         node = graph.nodes.get(node_id)
         if node is None or node.op not in {"attention", "scaled_dot_product_attention", "attention_block"}:
             continue
-        if str(node.meta.get("attention_layer_type") or "").strip().lower() != "sliding_attention":
+        layer_type = str(node.meta.get("attention_layer_type") or "").strip().lower()
+        if layer_type == "full_attention":
+            mask_input_index: int | None = None
+            if node.op == "attention_block":
+                if bool(node.attrs.get("has_mask", False)) and len(node.inputs) > 3:
+                    mask_input_index = 3
+            elif len(node.inputs) > 3:
+                mask_input_index = 3
+
+            if mask_input_index is not None:
+                mask_value_id = node.inputs[mask_input_index]
+                mask_value = graph.values.get(mask_value_id)
+                if mask_value is not None and mask_value.dtype in (None, "bool"):
+                    del node.inputs[mask_input_index]
+                    node.meta["gemma4_full_mask_elided"] = True
+                    changed = True
+
+            if node.op == "attention_block" and bool(node.attrs.get("has_mask", False)):
+                node.attrs["has_mask"] = False
+                changed = True
+            if not bool(node.attrs.get("is_causal", False)):
+                node.attrs["is_causal"] = True
+                changed = True
+            if "additive_mask" in node.attrs and not bool(node.attrs.get("additive_mask", False)):
+                node.attrs.pop("additive_mask", None)
+                changed = True
+            if int(node.attrs.get("window_size", 0)) == 0:
+                seq_len = 0
+                attention_output_shape = node.attrs.get("attention_output_shape")
+                if isinstance(attention_output_shape, (list, tuple)) and len(attention_output_shape) >= 2:
+                    try:
+                        seq_len = int(attention_output_shape[1])
+                    except (TypeError, ValueError):
+                        seq_len = 0
+                if seq_len <= 0 and node.inputs:
+                    query_value = graph.values.get(node.inputs[0])
+                    if query_value is not None and query_value.shape is not None and len(query_value.shape) >= 3:
+                        seq_len = int(query_value.shape[2])
+                if seq_len > 0:
+                    # Gemma4 full-attention layers are semantically unwindowed, but using a
+                    # window_size >= seq_len avoids the Apple Accelerate full-window fast path
+                    # that has been unstable for transpiled grouped-query Gemma4 graphs.
+                    node.attrs["window_size"] = seq_len
+                    node.meta["gemma4_full_attention_window_compat"] = True
+                    changed = True
+            continue
+        if layer_type != "sliding_attention":
             continue
         if bool(node.attrs.get("additive_mask", False)):
             continue
@@ -502,22 +557,19 @@ def normalize_gemma4_decoder_attention_semantics(graph: IRGraph) -> bool:
         if mask_input_index is not None:
             mask_value_id = node.inputs[mask_input_index]
             mask_value = graph.values.get(mask_value_id)
-            if mask_value is None or mask_value.dtype not in (None, "bool"):
-                continue
-            mask_info = _extract_sliding_window_mask(graph, mask_value_id)
-            mask_input_name = _graph_input_name(graph, mask_value_id)
-            if mask_info is None and mask_input_name != "sliding_attention_mask":
-                continue
-            del node.inputs[mask_input_index]
-            node.meta["gemma4_sliding_mask_elided"] = True
-            if mask_info is not None:
-                node.meta["mask_window_size_hint"] = int(mask_info["window_size"])
-                if int(node.attrs.get("window_size", 0)) == 0 and int(mask_info["window_size"]) > 0:
-                    node.attrs["window_size"] = int(mask_info["window_size"])
-                    node.meta.setdefault("window_size_source", "mask_pattern")
-            elif mask_input_name is not None:
-                node.meta["gemma4_elided_mask_input_name"] = mask_input_name
-            changed = True
+            if mask_value is not None and mask_value.dtype in (None, "bool"):
+                mask_info = _extract_sliding_window_mask(graph, mask_value_id)
+                mask_input_name = _graph_input_name(graph, mask_value_id)
+                del node.inputs[mask_input_index]
+                node.meta["gemma4_sliding_mask_elided"] = True
+                if mask_info is not None:
+                    node.meta["mask_window_size_hint"] = int(mask_info["window_size"])
+                    if int(node.attrs.get("window_size", 0)) == 0 and int(mask_info["window_size"]) > 0:
+                        node.attrs["window_size"] = int(mask_info["window_size"])
+                        node.meta.setdefault("window_size_source", "mask_pattern")
+                elif mask_input_name is not None:
+                    node.meta["gemma4_elided_mask_input_name"] = mask_input_name
+                changed = True
 
         if node.op == "attention_block" and bool(node.attrs.get("has_mask", False)):
             node.attrs["has_mask"] = False
@@ -723,14 +775,35 @@ def _materialize_shifted_constant(graph: IRGraph, value_id: str, offset: float, 
 
 def _materialize_zero_like_constant(graph: IRGraph, value_id: str, *, suffix: str) -> str:
     base = graph.constants[value_id]
-    if not isinstance(base, torch.Tensor):
-        raise NotImplementedError(f"expected tensor constant for {value_id}, got {type(base).__name__}")
-
     new_value_id = f"{value_id}_{suffix}"
     if new_value_id in graph.constants:
         return new_value_id
 
-    zero = torch.zeros_like(base.detach().cpu())
+    if isinstance(base, torch.Tensor):
+        zero = torch.zeros_like(base.detach().cpu())
+    else:
+        value = graph.values.get(value_id)
+        if value is None or value.shape is None or value.dtype is None:
+            raise NotImplementedError(
+                f"expected tensor constant metadata for {value_id}, got {type(base).__name__}"
+            )
+        dtype_map = {
+            "bool": torch.bool,
+            "u8": torch.uint8,
+            "i8": torch.int8,
+            "i16": torch.int16,
+            "i32": torch.int32,
+            "i64": torch.int64,
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16,
+            "fp32": torch.float32,
+            "fp64": torch.float64,
+        }
+        torch_dtype = dtype_map.get(str(value.dtype))
+        if torch_dtype is None:
+            raise NotImplementedError(f"unsupported IR dtype for zero-like constant: {value.dtype}")
+        zero = torch.zeros(tuple(int(dim) for dim in value.shape), dtype=torch_dtype)
+
     graph.constants[new_value_id] = zero
     graph.values[new_value_id] = IRValue(
         id=new_value_id,

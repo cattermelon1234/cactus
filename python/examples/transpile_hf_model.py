@@ -21,7 +21,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.graph import Graph
+from src.transpile.runtime_compat import Graph
 from src.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
 from src.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
 from src.transpile.audio_preprocess import prepare_cactus_audio_features
@@ -153,11 +153,17 @@ def _validate_weights_dir(weights_dir: str | None, *, model_id: str) -> Path | N
 
     manifest_path = root / "weights_manifest.json"
     if not manifest_path.exists():
-        raise RuntimeError(
-            f"weights_dir is missing weights_manifest.json: {manifest_path}\n"
-            "\n"
-            f"Re-convert with the current converter:\n"
-            f"  cactus convert {model_id} {root}\n"
+        has_weight_files = any(root.glob("*.weights"))
+        if not has_weight_files:
+            raise RuntimeError(
+                f"weights_dir is missing weights_manifest.json: {manifest_path}\n"
+                "\n"
+                f"Re-convert with the current converter:\n"
+                f"  cactus convert {model_id} {root}\n"
+            )
+        print(
+            "note=weights_manifest_missing using filename-based weight binding fallback "
+            f"for {root}"
         )
 
     return root
@@ -250,6 +256,17 @@ def _binding_entries_by_node_id(
             result[int(binding["node_id"])] = binding
         except Exception:
             continue
+    return result
+
+
+def _binding_entries_by_value_id(
+    bindings: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for binding in bindings:
+        value_id = binding.get("value_id")
+        if isinstance(value_id, str) and value_id:
+            result[value_id] = binding
     return result
 
 
@@ -360,24 +377,62 @@ def _write_component_bundle(
         if transpiled_graph is not None:
             existing_bindings = list(_serialize_json_compatible(transpiled_graph.bound_constant_bindings))
             existing_by_node_id = _binding_entries_by_node_id(existing_bindings)
+            existing_by_value_id = _binding_entries_by_value_id(existing_bindings)
+            constant_value_ids = dict(getattr(transpiled_graph, "bound_constant_value_ids", {}))
+            value_to_node_id = {value_id: node_id for node_id, value_id in constant_value_ids.items()}
             constant_dir = component_dir / "bound_constants"
             for constant_tensor in transpiled_graph.bound_constants:
-                if int(constant_tensor.id) in existing_by_node_id:
+                node_id = int(constant_tensor.id)
+                if node_id in existing_by_node_id:
                     continue
                 constant_dir.mkdir(parents=True, exist_ok=True)
-                constant_filename = f"node_{int(constant_tensor.id)}.npy"
+                constant_filename = f"node_{node_id}.npy"
                 constant_relpath = Path(component) / "bound_constants" / constant_filename
                 constant_array = constant_tensor.numpy().copy()
                 np.save(bundle_dir / constant_relpath, constant_array, allow_pickle=False)
                 materialized_constant_bindings.append(
                     {
-                        "node_id": int(constant_tensor.id),
-                        "value_id": f"materialized_constant_{int(constant_tensor.id)}",
+                        "node_id": node_id,
+                        "value_id": str(constant_value_ids.get(node_id, f"materialized_constant_{node_id}")),
                         "path": str((bundle_dir / constant_relpath).relative_to(artifact_dir)),
                         "kind": "saved_constant",
-                        "source_name": f"materialized_constant_{int(constant_tensor.id)}",
+                        "source_name": str(constant_value_ids.get(node_id, f"materialized_constant_{node_id}")),
                         "format": "npy",
                         "precision": int(constant_tensor.dtype),
+                    }
+                )
+
+            graph_constants = (optimized_graph or raw_graph).constants if (optimized_graph or raw_graph) is not None else {}
+            for value_id, constant_value in graph_constants.items():
+                if value_id in existing_by_value_id:
+                    continue
+                if any(binding.get("value_id") == value_id for binding in materialized_constant_bindings):
+                    continue
+                if isinstance(constant_value, torch.Tensor):
+                    constant_array = constant_value.detach().cpu().numpy().copy()
+                elif isinstance(constant_value, np.ndarray):
+                    constant_array = np.ascontiguousarray(constant_value)
+                else:
+                    continue
+                constant_dir.mkdir(parents=True, exist_ok=True)
+                safe_value_id = re.sub(r"[^A-Za-z0-9._-]+", "_", value_id).strip("._-") or "constant"
+                constant_filename = f"{safe_value_id}.npy"
+                constant_relpath = Path(component) / "bound_constants" / constant_filename
+                np.save(bundle_dir / constant_relpath, constant_array, allow_pickle=False)
+                materialized_constant_bindings.append(
+                    {
+                        "node_id": int(value_to_node_id.get(value_id, -1)),
+                        "value_id": str(value_id),
+                        "path": str((bundle_dir / constant_relpath).relative_to(artifact_dir)),
+                        "kind": "saved_constant",
+                        "source_name": str(value_id),
+                        "format": "npy",
+                        "precision": int(
+                            Graph.FP16 if constant_array.dtype == np.float16
+                            else Graph.FP32 if constant_array.dtype == np.float32
+                            else Graph.INT8 if constant_array.dtype == np.int8
+                            else Graph.INT8
+                        ),
                     }
                 )
 
@@ -1882,14 +1937,30 @@ def _prepare_gemma4_multimodal_inputs(
         if audio_file and isinstance(batch.get("input_features"), torch.Tensor):
             feature_tensor = batch["input_features"]
             expected_mels = int(feature_tensor.shape[-1])
-            native_audio, native_audio_mask, native_audio_frames = prepare_native_gemma4_audio_features(
-                audio_file,
-                expected_mels=expected_mels,
-                torch_dtype=torch_dtype,
-            )
-            batch["input_features"] = native_audio
-            batch["input_features_mask"] = native_audio_mask
-            batch["native_audio_frames"] = native_audio_frames
+            try:
+                native_audio, native_audio_mask, native_audio_frames = prepare_native_gemma4_audio_features(
+                    audio_file,
+                    expected_mels=expected_mels,
+                    torch_dtype=torch_dtype,
+                )
+            except Exception as exc:
+                print(f"note=falling back to processor gemma4 audio features: {exc}")
+                batch["input_features"] = feature_tensor.to(dtype=torch_dtype)
+                fallback_mask = batch.get("input_features_mask")
+                if isinstance(fallback_mask, torch.Tensor):
+                    batch["input_features_mask"] = fallback_mask.to(dtype=torch.bool)
+                    native_audio_frames = int(fallback_mask.to(dtype=torch.int32).sum().item())
+                else:
+                    native_audio_frames = int(feature_tensor.shape[1])
+                    batch["input_features_mask"] = torch.ones(
+                        (int(feature_tensor.shape[0]), native_audio_frames),
+                        dtype=torch.bool,
+                    )
+                batch["native_audio_frames"] = native_audio_frames
+            else:
+                batch["input_features"] = native_audio
+                batch["input_features_mask"] = native_audio_mask
+                batch["native_audio_frames"] = native_audio_frames
 
     ordered_keys = [
         key

@@ -1739,11 +1739,9 @@ class Gemma4MultimodalCausalLMLogitsAdapter(BoundInputAdapter):
         }
 
 
-_GEMMA4_DECODER_PIPELINE_OUTPUT_KEYS = (
+_GEMMA4_DECODER_PIPELINE_IO_KEYS = (
     "inputs_embeds",
     "per_layer_inputs",
-    "full_attention_mask",
-    "sliding_attention_mask",
     "position_ids",
 )
 
@@ -1918,7 +1916,7 @@ class _Gemma4MultimodalComponentBase(torch.nn.Module):
         token_type_ids: torch.Tensor,
         image_features: torch.Tensor,
         audio_features: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.LongTensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.LongTensor]:
         if self._native_merge_plan is not None:
             inputs_embeds, per_layer_inputs_tokens = _gemma4_apply_native_merge_plan(
                 self.model,
@@ -1968,45 +1966,9 @@ class _Gemma4MultimodalComponentBase(torch.nn.Module):
             per_layer_inputs = inputs_embeds.new_empty((inputs_embeds.shape[0], inputs_embeds.shape[1], 0, 0))
 
         position_ids = torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device).unsqueeze(0)
-        if self._native_merge_plan is not None:
-            causal_mask_mapping = _gemma4_build_standard_causal_mask_mapping(
-                create_causal_mask=self._create_causal_mask,
-                create_sliding_window_causal_mask=self._create_sliding_window_causal_mask,
-                config=self.backbone.config,
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-            )
-        elif getattr(text_config, "use_bidirectional_attention", None) == "vision":
-            if not callable(self._create_causal_mask_mapping):
-                raise RuntimeError("Gemma4 component LM encoder requires create_causal_mask_mapping")
-            causal_mask_mapping = self._create_causal_mask_mapping(
-                self.multimodal_backbone.config,
-                inputs_embeds,
-                attention_mask,
-                None,
-                position_ids,
-                token_type_ids,
-                None,
-                is_training=self.training,
-            )
-        else:
-            if not callable(self._create_masks_for_generate):
-                raise RuntimeError("Gemma4 component LM encoder requires create_masks_for_generate")
-            causal_mask_mapping = self._create_masks_for_generate(
-                self.multimodal_backbone.config,
-                inputs_embeds,
-                attention_mask,
-                None,
-                position_ids,
-            )
-        full_attention_mask = causal_mask_mapping["full_attention"]
-        sliding_attention_mask = causal_mask_mapping.get("sliding_attention", full_attention_mask)
         return (
             inputs_embeds,
             per_layer_inputs,
-            full_attention_mask,
-            sliding_attention_mask,
             position_ids,
         )
 
@@ -2091,27 +2053,35 @@ class Gemma4LMEncoderAdapter(_Gemma4MultimodalComponentBase):
 
 class Gemma4DecoderAdapter(_Gemma4MultimodalComponentBase):
     def __init__(self, model: torch.nn.Module, *, weights_dir: str | None = None):
-        super().__init__(model, input_names=_GEMMA4_DECODER_PIPELINE_OUTPUT_KEYS, weights_dir=weights_dir)
+        super().__init__(model, input_names=_GEMMA4_DECODER_PIPELINE_IO_KEYS, weights_dir=weights_dir)
 
     def forward(
         self,
         inputs_embeds: torch.Tensor,
         per_layer_inputs: torch.Tensor,
-        full_attention_mask: torch.Tensor,
-        sliding_attention_mask: torch.Tensor,
         position_ids: torch.LongTensor,
     ) -> torch.Tensor:
         normalized_per_layer_inputs = per_layer_inputs
         if normalized_per_layer_inputs.numel() == 0:
             normalized_per_layer_inputs = None
+        attention_mask = torch.ones(
+            position_ids.shape,
+            dtype=torch.long,
+            device=position_ids.device,
+        )
+        causal_mask_mapping = _gemma4_build_standard_causal_mask_mapping(
+            create_causal_mask=self._create_causal_mask,
+            create_sliding_window_causal_mask=self._create_sliding_window_causal_mask,
+            config=self.backbone.config,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )
         hidden_states = _gemma4_text_backbone_forward(
             self.backbone,
             inputs_embeds=inputs_embeds,
             per_layer_inputs=normalized_per_layer_inputs,
-            causal_mask_mapping={
-                "full_attention": full_attention_mask,
-                "sliding_attention": sliding_attention_mask,
-            },
+            causal_mask_mapping=causal_mask_mapping,
             position_ids=position_ids,
         )
         logits = self.model.lm_head(hidden_states[:, -1:, :])
@@ -2121,7 +2091,7 @@ class Gemma4DecoderAdapter(_Gemma4MultimodalComponentBase):
         return {
             "graph": self._base_graph_meta(
                 adapter_type=type(self).__name__,
-                input_names=_GEMMA4_DECODER_PIPELINE_OUTPUT_KEYS,
+                input_names=_GEMMA4_DECODER_PIPELINE_IO_KEYS,
             ),
             "import_hints": _gemma4_import_hints(
                 self.backbone,
@@ -2246,7 +2216,7 @@ def _build_gemma4_multimodal_component_specs(
             module=lm_encoder,
             example_inputs=(input_ids, attention_mask, token_type_ids, image_features, audio_features),
             input_keys=("input_ids", "attention_mask", "token_type_ids", "image_features", "audio_features"),
-            output_keys=_GEMMA4_DECODER_PIPELINE_OUTPUT_KEYS,
+            output_keys=_GEMMA4_DECODER_PIPELINE_IO_KEYS,
             graph_meta={**common_graph_meta, "component": "lm_encoder"},
             metadata={"family": "gemma4", "task": "multimodal_causal_lm_logits"},
         ))
@@ -2257,7 +2227,7 @@ def _build_gemma4_multimodal_component_specs(
             component="decoder",
             module=decoder,
             example_inputs=tuple(decoder_inputs),
-            input_keys=_GEMMA4_DECODER_PIPELINE_OUTPUT_KEYS,
+            input_keys=_GEMMA4_DECODER_PIPELINE_IO_KEYS,
             output_keys=("logits",),
             graph_meta={**common_graph_meta, "component": "decoder"},
             metadata={"family": "gemma4", "task": "multimodal_causal_lm_logits"},

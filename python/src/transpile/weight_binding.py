@@ -115,6 +115,8 @@ _GEMMA4_VISION_TOWER_PREFIX = "model.vision_tower."
 _GEMMA4_AUDIO_TOWER_PREFIX = "model.audio_tower."
 
 _GEMMA_GLOBAL_FILENAMES: dict[str, tuple[str, str]] = {
+    "model.embed_tokens.weight": ("token_embeddings.weights", "embedding"),
+    "model.language_model.embed_tokens.weight": ("token_embeddings.weights", "embedding"),
     "model.language_model.embed_tokens_per_layer.weight": ("embed_tokens_per_layer.weights", "embedding"),
     "model.language_model.per_layer_model_projection.weight": ("per_layer_model_proj.weights", "weight"),
     "model.language_model.per_layer_projection_norm.weight": ("per_layer_proj_norm.weights", "weight"),
@@ -126,6 +128,26 @@ _GEMMA_GLOBAL_FILENAMES: dict[str, tuple[str, str]] = {
     "model.embed_audio.embedding_projection.weight": ("embed_audio_proj.weights", "weight"),
     "model.embed_audio.soft_embedding_norm.weight": ("embed_audio_soft_norm.weights", "weight"),
     "model.embed_audio.hard_embedding_norm.weight": ("embed_audio_hard_norm.weights", "weight"),
+}
+
+_GEMMA_DECODER_LAYER_FILENAMES: dict[str, tuple[str, str]] = {
+    "layer_scalar": ("layer_scalar.weights", "weight"),
+    "self_attn.q_proj.weight": ("attn_q.weights", "weight"),
+    "self_attn.k_proj.weight": ("attn_k.weights", "weight"),
+    "self_attn.v_proj.weight": ("attn_v.weights", "weight"),
+    "self_attn.o_proj.weight": ("attn_output.weights", "weight"),
+    "self_attn.q_norm.weight": ("attn_q_norm.weights", "weight"),
+    "self_attn.k_norm.weight": ("attn_k_norm.weights", "weight"),
+    "mlp.gate_proj.weight": ("ffn_gate.weights", "weight"),
+    "mlp.up_proj.weight": ("ffn_up.weights", "weight"),
+    "mlp.down_proj.weight": ("ffn_down.weights", "weight"),
+    "input_layernorm.weight": ("input_norm.weights", "weight"),
+    "post_attention_layernorm.weight": ("post_attn_norm.weights", "weight"),
+    "pre_feedforward_layernorm.weight": ("pre_ffn_norm.weights", "weight"),
+    "post_feedforward_layernorm.weight": ("post_ffn_norm.weights", "weight"),
+    "post_per_layer_projection_layernorm.weight": ("post_per_layer_norm.weights", "weight"),
+    "per_layer_input_gate.weight": ("per_layer_gate.weights", "weight"),
+    "per_layer_projection.weight": ("per_layer_proj.weights", "weight"),
 }
 
 
@@ -222,6 +244,15 @@ def _normalized_source_candidates(source_name: str) -> list[str]:
             break
 
     for candidate in tuple(candidates):
+        for repeated_prefix, collapsed_prefix in (
+            ("model.model.", "model."),
+            ("language_model.language_model.", "language_model."),
+            ("backbone.backbone.", "backbone."),
+        ):
+            if candidate.startswith(repeated_prefix):
+                tail = candidate[len(repeated_prefix) :]
+                _add(f"{collapsed_prefix}{tail}")
+
         for prefix in (
             "module.backbone.",
             "adapter.backbone.",
@@ -401,6 +432,17 @@ def _fallback_filename_candidates(source_name: str) -> list[tuple[str, str]]:
             if mapped is not None:
                 _add(f"layer_{layer_index}_{mapped}")
 
+        gemma_layer_match = re.match(
+            r"^(?:model(?:\.language_model)?\.)?layers\.(\d+)\.(.+)$",
+            candidate,
+        )
+        if gemma_layer_match:
+            layer_index = int(gemma_layer_match.group(1))
+            suffix = gemma_layer_match.group(2)
+            mapped = _GEMMA_DECODER_LAYER_FILENAMES.get(suffix)
+            if mapped is not None:
+                _add(f"layer_{layer_index}_{mapped[0]}", kind=mapped[1])
+
     return filenames
 
 
@@ -432,15 +474,15 @@ def resolve_weight_binding(*, weights_dir: str | None, source_name: str) -> Weig
     root = Path(weights_dir)
     if not root.exists():
         return None
+    manifest: dict[str, object] = {}
     manifest_path = root / "weights_manifest.json"
-    if not manifest_path.exists():
-        return None
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except Exception:
-        return None
-    if not isinstance(manifest, dict):
-        return None
+    if manifest_path.exists():
+        try:
+            loaded_manifest = json.loads(manifest_path.read_text())
+        except Exception:
+            loaded_manifest = None
+        if isinstance(loaded_manifest, dict):
+            manifest = loaded_manifest
     for candidate_name in _normalized_source_candidates(source_name):
         entry = manifest.get(candidate_name)
         if not isinstance(entry, dict):
