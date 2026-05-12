@@ -48,57 +48,30 @@ DEFAULT_TEST_MODEL_ID = "google/gemma-4-E2B-it"
 WEIGHTS_VARIANT_CHOICES = ["auto", "apple", "standard"]
 
 
-def _transpile_runtime_root() -> Path:
-    return PROJECT_ROOT / "cactus-transpile"
-
-
-def _transpile_runtime_library_path() -> Path:
+def _python_runtime_library_path() -> Path:
     suffix = ".dylib" if platform.system() == "Darwin" else ".so"
-    return _transpile_runtime_root() / "build" / f"libcactus{suffix}"
+    return PROJECT_ROOT / "cactus" / "build" / f"libcactus{suffix}"
 
 
-def _ensure_transpile_runtime_library() -> Path:
-    runtime_root = _transpile_runtime_root()
-    cmake_lists = runtime_root / "CMakeLists.txt"
-    if not cmake_lists.exists():
+def _ensure_python_runtime_library() -> Path:
+    build_script = PROJECT_ROOT / "cactus" / "build.sh"
+    if not build_script.exists():
         raise RuntimeError(
-            "The vendored transpiler runtime is missing.\n"
-            f"Expected: {cmake_lists}"
+            "The Cactus build script is missing.\n"
+            f"Expected: {build_script}"
         )
 
-    library_path = _transpile_runtime_library_path()
+    library_path = _python_runtime_library_path()
     if library_path.exists():
         return library_path
 
-    build_dir = runtime_root / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
-    jobs = str(os.cpu_count() or 4)
-
-    print_color(YELLOW, "Building vendored transpiler runtime...")
-    configure = subprocess.run(
-        [
-            "cmake",
-            "-S",
-            str(runtime_root),
-            "-B",
-            str(build_dir),
-            "-DCMAKE_RULE_MESSAGES=OFF",
-            "-DCMAKE_VERBOSE_MAKEFILE=OFF",
-        ],
-        cwd=PROJECT_ROOT,
-    )
-    if configure.returncode != 0:
-        raise RuntimeError("Failed to configure the vendored transpiler runtime")
-
-    build = subprocess.run(
-        ["cmake", "--build", str(build_dir), "-j", jobs],
-        cwd=PROJECT_ROOT,
-    )
+    print_color(YELLOW, "Building Cactus shared runtime for transpiler...")
+    build = subprocess.run([str(build_script)], cwd=PROJECT_ROOT / "cactus")
     if build.returncode != 0:
-        raise RuntimeError("Failed to build the vendored transpiler runtime")
+        raise RuntimeError("Failed to build the Cactus shared runtime")
     if not library_path.exists():
         raise RuntimeError(
-            "The vendored transpiler runtime build completed, but the library was not produced.\n"
+            "The Cactus build completed, but the shared library was not produced.\n"
             f"Expected: {library_path}"
         )
     return library_path
@@ -1095,7 +1068,7 @@ def _resolve_transpiled_manifest(path_value):
 
 def cmd_run_transpiled(args):
     """Run a saved transpiled component bundle."""
-    transpile_lib = _ensure_transpile_runtime_library()
+    transpile_lib = _ensure_python_runtime_library()
     os.environ["CACTUS_LIB_PATH"] = str(transpile_lib)
     from .transpile.component_bundle_runtime import run_transpiled_bundle
 
@@ -1123,7 +1096,7 @@ def cmd_transpile(args):
         print_color(RED, f"Error: transpiler script not found at {script_path}")
         return 1
 
-    transpile_lib = _ensure_transpile_runtime_library()
+    transpile_lib = _ensure_python_runtime_library()
     command = [sys.executable, str(script_path), "--model-id", args.model_id]
     command.extend(getattr(args, "extra_args", []) or [])
     env = os.environ.copy()
