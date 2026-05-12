@@ -276,8 +276,8 @@ size_t CactusGraph::mmap_embeddings(const std::string& filename) {
     size_t node_id = input(shape, precision);
     set_external_input(node_id, const_cast<void*>(mapped_file->data()), precision);
 
+    auto& buffer = nodes_[node_index_map_.at(node_id)]->output_buffer;
     if (PrecisionTraits::is_cq(precision) && mapped_file->group_size() > 0) {
-        auto& buffer = nodes_[node_index_map_.at(node_id)]->output_buffer;
         buffer.group_size = mapped_file->group_size();
         buffer.num_groups = mapped_file->num_groups();
 
@@ -309,6 +309,10 @@ size_t CactusGraph::mmap_embeddings(const std::string& filename) {
             buffer.cq_permutation = reinterpret_cast<const uint32_t*>(scales_base + off);
             buffer.cq_flags = 0;
         }
+    } else if (precision == Precision::INT8 && mapped_file->group_size() > 0) {
+        buffer.group_size = mapped_file->group_size();
+        buffer.num_groups = mapped_file->num_groups();
+        buffer.set_activation_scales(const_cast<void*>(mapped_file->scales_data()), shape.empty() ? 0 : shape[0]);
     }
 
     size_t file_idx = mapped_files_.size();
