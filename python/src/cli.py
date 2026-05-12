@@ -13,11 +13,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def _looks_like_project_root(path: Path) -> bool:
-    return (
-        (path / "python" / "src" / "cli.py").exists()
-        and (path / "cactus").exists()
-        and (path / "tests").exists()
-    )
+    has_cli = (path / "python" / "src" / "cli.py").exists()
+    has_engine = (path / "cactus").exists() or (path / "cactus-engine").exists()
+    has_tests = (path / "tests").exists() or (path / "python" / "tests").exists()
+    return has_cli and has_engine and has_tests
 
 
 def _resolve_project_root() -> Path:
@@ -47,6 +46,62 @@ PROJECT_ROOT = _resolve_project_root()
 DEFAULT_MODEL_ID = "google/gemma-4-E2B-it"
 DEFAULT_TEST_MODEL_ID = "google/gemma-4-E2B-it"
 WEIGHTS_VARIANT_CHOICES = ["auto", "apple", "standard"]
+
+
+def _transpile_runtime_root() -> Path:
+    return PROJECT_ROOT / "cactus-transpile"
+
+
+def _transpile_runtime_library_path() -> Path:
+    suffix = ".dylib" if platform.system() == "Darwin" else ".so"
+    return _transpile_runtime_root() / "build" / f"libcactus{suffix}"
+
+
+def _ensure_transpile_runtime_library() -> Path:
+    runtime_root = _transpile_runtime_root()
+    cmake_lists = runtime_root / "CMakeLists.txt"
+    if not cmake_lists.exists():
+        raise RuntimeError(
+            "The vendored transpiler runtime is missing.\n"
+            f"Expected: {cmake_lists}"
+        )
+
+    library_path = _transpile_runtime_library_path()
+    if library_path.exists():
+        return library_path
+
+    build_dir = runtime_root / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    jobs = str(os.cpu_count() or 4)
+
+    print_color(YELLOW, "Building vendored transpiler runtime...")
+    configure = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(runtime_root),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_RULE_MESSAGES=OFF",
+            "-DCMAKE_VERBOSE_MAKEFILE=OFF",
+        ],
+        cwd=PROJECT_ROOT,
+    )
+    if configure.returncode != 0:
+        raise RuntimeError("Failed to configure the vendored transpiler runtime")
+
+    build = subprocess.run(
+        ["cmake", "--build", str(build_dir), "-j", jobs],
+        cwd=PROJECT_ROOT,
+    )
+    if build.returncode != 0:
+        raise RuntimeError("Failed to build the vendored transpiler runtime")
+    if not library_path.exists():
+        raise RuntimeError(
+            "The vendored transpiler runtime build completed, but the library was not produced.\n"
+            f"Expected: {library_path}"
+        )
+    return library_path
 
 # dont fail if models.json is missing or malformed - just have an empty registry and rely on HF download_args
 try:
@@ -1023,8 +1078,67 @@ def prompt_for_api_key(config):
     return api_key
 
 
+def _resolve_transpiled_manifest(path_value):
+    candidate = Path(path_value).expanduser().resolve()
+    if not candidate.exists():
+        return None
+    if candidate.is_file() and candidate.name == "manifest.json":
+        return candidate
+    manifest = candidate / "components" / "manifest.json"
+    if manifest.exists():
+        return manifest
+    manifest = candidate / "manifest.json"
+    if manifest.exists():
+        return manifest
+    return None
+
+
+def cmd_run_transpiled(args):
+    """Run a saved transpiled component bundle."""
+    transpile_lib = _ensure_transpile_runtime_library()
+    os.environ["CACTUS_LIB_PATH"] = str(transpile_lib)
+    from .transpile.component_bundle_runtime import run_transpiled_bundle
+
+    bundle_dir = getattr(args, "bundle_dir", None) or getattr(args, "model_id", None)
+    result = run_transpiled_bundle(
+        bundle_dir,
+        audio_file=getattr(args, "audio_file", None) or getattr(args, "audio", None),
+        prompt=getattr(args, "prompt", None),
+        input_ids=getattr(args, "input_ids", None),
+        weights_dir=getattr(args, "weights_dir", None),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if getattr(args, "result_json", None):
+        result_path = Path(args.result_json).expanduser().resolve()
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        print_color(GREEN, f"Saved result to {result_path}")
+    return 0
+
+
+def cmd_transpile(args):
+    """Invoke the saved-model transpiler entrypoint."""
+    script_path = PROJECT_ROOT / "python" / "examples" / "transpile_hf_model.py"
+    if not script_path.exists():
+        print_color(RED, f"Error: transpiler script not found at {script_path}")
+        return 1
+
+    transpile_lib = _ensure_transpile_runtime_library()
+    command = [sys.executable, str(script_path), "--model-id", args.model_id]
+    command.extend(getattr(args, "extra_args", []) or [])
+    env = os.environ.copy()
+    env["CACTUS_LIB_PATH"] = str(transpile_lib)
+    result = subprocess.run(command, cwd=PROJECT_ROOT, env=env)
+    return result.returncode
+
+
 def cmd_run(args):
     """Download model if needed and start interactive chat."""
+    manifest_path = _resolve_transpiled_manifest(args.model_id)
+    if manifest_path is not None:
+        args.bundle_dir = str(manifest_path.parent.parent if manifest_path.parent.name == "components" else manifest_path.parent)
+        return cmd_run_transpiled(args)
+
     from .config_utils import CactusConfig
 
     config = CactusConfig()
@@ -2080,12 +2194,37 @@ def create_parser():
                             help='Path to image file for VLM inference (attached to first message)')
     run_parser.add_argument('--audio',
                             help='Path to audio file (WAV) for audio chat (attached to first message)')
+    run_parser.add_argument('--file', dest='audio_file', default=None,
+                            help='Audio file for transpiled bundles when model_id points to a transpiled folder')
+    run_parser.add_argument('--weights-dir', default=None,
+                            help='Converted weights directory for transpiled bundles with bound weights')
     run_parser.add_argument('--system',
                             help='System prompt to prepend to all messages')
     run_parser.add_argument('--prompt',
                             help='Initial prompt to send immediately')
+    run_parser.add_argument('--input-ids', default=None,
+                            help='Comma-separated token ids for transpiled causal-LM bundles')
+    run_parser.add_argument('--result-json', default=None,
+                            help='Optional path to save transpiled bundle results as JSON')
     run_parser.add_argument('--thinking', action='store_true',
                             help='Enable thinking/reasoning for models that support it')
+
+    transpile_parser = subparsers.add_parser('transpile', help='Transpile a HuggingFace model into Cactus component graphs')
+    transpile_parser.add_argument('model_id', help='HuggingFace model ID to transpile')
+
+    run_transpiled_parser = subparsers.add_parser('run-transpiled', help='Run a saved transpiled component bundle')
+    run_transpiled_parser.add_argument('bundle_dir',
+                                       help='Bundle root directory or manifest.json path from transpile_hf_model.py')
+    run_transpiled_parser.add_argument('--file', dest='audio_file', default=None,
+                                       help='Audio file for transcription bundles such as parakeet-tdt')
+    run_transpiled_parser.add_argument('--weights-dir', default=None,
+                                       help='Optional converted weights directory for bound-weight bundles')
+    run_transpiled_parser.add_argument('--prompt', default=None,
+                                       help='Prompt for causal-LM bundles')
+    run_transpiled_parser.add_argument('--input-ids', default=None,
+                                       help='Comma-separated token ids for causal-LM bundles')
+    run_transpiled_parser.add_argument('--result-json', default=None,
+                                       help='Optional path to save the result payload as JSON')
 
     transcribe_parser = subparsers.add_parser('transcribe', help='Download ASR model and run transcription')
     transcribe_parser.add_argument('model_id', nargs='?', default=DEFAULT_ASR_MODEL_ID,
@@ -2182,6 +2321,9 @@ def preprocess_eval_args(parser, argv):
     if getattr(args, 'command', None) == 'eval':
         setattr(args, 'extra_args', unknown)
         return args
+    if getattr(args, 'command', None) == 'transpile':
+        setattr(args, 'extra_args', unknown)
+        return args
 
     if unknown:
         parser.error(f"unrecognized arguments: {' '.join(unknown)}")
@@ -2202,8 +2344,12 @@ def main():
         sys.exit(cmd_build(args))
     elif args.command == 'run':
         sys.exit(cmd_run(args))
+    elif args.command == 'transpile':
+        sys.exit(cmd_transpile(args))
     elif args.command == 'transcribe':
         sys.exit(cmd_transcribe(args))
+    elif args.command == 'run-transpiled':
+        sys.exit(cmd_run_transpiled(args))
     elif args.command == 'test':
         sys.exit(cmd_test(args))
     elif args.command == 'eval':
