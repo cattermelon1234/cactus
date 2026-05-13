@@ -2671,6 +2671,14 @@ def main() -> int:
         choices=("auto", "on", "off"),
         help="Use a split component pipeline when the model adapter supports it.",
     )
+    parser.add_argument(
+        "--components",
+        default=None,
+        help=(
+            "Optional comma-separated component subset for component-pipeline models "
+            "(for example: vision_encoder,audio_encoder,lm_encoder,decoder)."
+        ),
+    )
     parser.add_argument("--no-fuse-gated-deltanet", action="store_true")
     parser.add_argument("--no-fuse-rms-norm", action="store_true")
     parser.add_argument("--no-fuse-rope", action="store_true")
@@ -2822,12 +2830,20 @@ def main() -> int:
             task=task,
             input_names=prepared.names,
         )
+    requested_components = None
+    if args.components:
+        requested_components = tuple(
+            component.strip()
+            for component in str(args.components).split(",")
+            if component.strip()
+        )
     component_specs = build_component_module_specs(
         model,
         task=task,
         named_tensors=_named_tensor_store(prepared),
         weights_dir=weights_dir,
         inputs_metadata=prepared.metadata,
+        components=requested_components,
     )
     use_component_pipeline = False
     if args.component_pipeline == "on":

@@ -304,6 +304,7 @@ void CactusGraph::execute(const std::string& profile_file) {
     };
 
     bool trace_execution = get_env_int("CACTUS_TRACE_EXECUTE", 0) != 0;
+    bool trace_nan = get_env_int("CACTUS_TRACE_NAN", 0) != 0;
     bool need_debug = !profile_file.empty();
     if (!need_debug) {
         static const bool env_debug = check_debug_env();
@@ -312,6 +313,47 @@ void CactusGraph::execute(const std::string& profile_file) {
     if (trace_execution) {
         need_debug = true;
     }
+
+    auto trace_nonfinite = [&](size_t node_idx, const GraphNode& node) {
+        if (!trace_nan) return;
+        const BufferDesc& buffer = node.output_buffer;
+        const void* data = buffer.get_data();
+        if (!data || buffer.total_size == 0) return;
+
+        auto report = [&](size_t elem_idx, float value) {
+            std::cerr << "[cactus:nan] idx=" << node_idx
+                      << " id=" << node.id
+                      << " op=" << get_op_name(node.op_type)
+                      << " elem=" << elem_idx
+                      << " value=" << value
+                      << " shape=[";
+            for (size_t dim_idx = 0; dim_idx < buffer.shape.size(); ++dim_idx) {
+                if (dim_idx > 0) std::cerr << ",";
+                std::cerr << buffer.shape[dim_idx];
+            }
+            std::cerr << "]" << std::endl;
+        };
+
+        if (buffer.precision == Precision::FP16) {
+            const __fp16* values = buffer.data_as<__fp16>();
+            for (size_t i = 0; i < buffer.total_size; ++i) {
+                float value = static_cast<float>(values[i]);
+                if (!std::isfinite(value)) {
+                    report(i, value);
+                    return;
+                }
+            }
+        } else if (buffer.precision == Precision::FP32) {
+            const float* values = buffer.data_as<float>();
+            for (size_t i = 0; i < buffer.total_size; ++i) {
+                float value = values[i];
+                if (!std::isfinite(value)) {
+                    report(i, value);
+                    return;
+                }
+            }
+        }
+    };
 
     if (!need_debug) {
         for (size_t i = 0; i < n; ++i) {
@@ -324,6 +366,7 @@ void CactusGraph::execute(const std::string& profile_file) {
             }
             node->output_buffer.allocate_from_pool(pool);
             dispatch_node(*node, nodes_, node_index_map_);
+            trace_nonfinite(i, *node);
             if (node->op_type == OpType::PERSISTENT) {
                 populated_node_ids_.insert(node->id);
             }
@@ -415,10 +458,12 @@ void CactusGraph::execute(const std::string& profile_file) {
 
         if (node->op_type == OpType::KV_CACHE_STATE || node->op_type == OpType::CONV_CACHE_STATE) {
             dispatch_node(*node, nodes_, node_index_map_);
+            trace_nonfinite(node_idx, *node);
             populated_node_ids_.insert(node->id);
         } else if (enable_profiling) {
             auto start = std::chrono::high_resolution_clock::now();
             dispatch_node(*node, nodes_, node_index_map_);
+            trace_nonfinite(node_idx, *node);
             if (node->op_type == OpType::PERSISTENT) {
                 populated_node_ids_.insert(node->id);
             }
@@ -437,6 +482,7 @@ void CactusGraph::execute(const std::string& profile_file) {
                  << std::setw(20) << shape_str << std::endl;
         } else {
             dispatch_node(*node, nodes_, node_index_map_);
+            trace_nonfinite(node_idx, *node);
             if (node->op_type == OpType::PERSISTENT) {
                 populated_node_ids_.insert(node->id);
             }

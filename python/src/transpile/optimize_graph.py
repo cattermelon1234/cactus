@@ -21,6 +21,7 @@ from src.transpile.fusion import match_rope
 from src.transpile.fusion import match_self_attention_block
 from src.transpile.fusion.common import producer
 from src.transpile.fusion.common import strip_passthrough
+from src.transpile.fusion.linear import match_linear
 from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
@@ -50,6 +51,7 @@ class FusionConfig:
     enable_attention_block: bool = True
     enable_conv_module: bool = True
     enable_add_clipped: bool = True
+    enable_dense_mlp_tq_fused: bool = True
 
 
 _DECODER_SELF_ATTN_OUTPUT_WEIGHT_RE = re.compile(r"(?:^|.*\.)layers\.(\d+)\.self_attn\.(?:o_proj|out_proj)\.weight$")
@@ -94,6 +96,8 @@ def optimize_graph(graph: IRGraph, *, max_passes: int = 8, config: FusionConfig 
         ):
             changed = True
         if normalize_gemma4_decoder_attention_semantics(graph):
+            changed = True
+        if config.enable_dense_mlp_tq_fused and fuse_gemma4_dense_mlps(graph):
             changed = True
         if config.enable_conv_module and fuse_conv_modules(graph):
             changed = True
@@ -760,6 +764,162 @@ def fuse_add_clipped(graph: IRGraph) -> bool:
     if changed:
         rebuild_graph(graph)
     return changed
+
+
+def fuse_gemma4_dense_mlps(graph: IRGraph) -> bool:
+    if not _is_gemma4_graph(graph):
+        return False
+
+    changed = False
+    for node_id in list(graph.order):
+        node = graph.nodes.get(node_id)
+        if node is None:
+            continue
+
+        match = _match_gemma4_dense_mlp(graph, node)
+        if match is None:
+            continue
+
+        matched_node_ids = set(match["node_ids"])
+        if not _matched_nodes_are_private(graph, matched_node_ids, keep_node_id=node.id):
+            continue
+
+        node.op = "dense_mlp_tq_fused"
+        node.inputs = [
+            str(match["input_value_id"]),
+            str(match["gate_weight_value_id"]),
+            str(match["up_weight_value_id"]),
+            str(match["down_weight_value_id"]),
+        ]
+        node.attrs = {"product_scale": float(match.get("product_scale") or 1.0)}
+        node.kind = "semantic"
+        node.meta["gemma4_dense_mlp_fused"] = True
+        node.meta["gemma4_dense_mlp_nodes"] = tuple(sorted(matched_node_ids))
+        if match.get("product_scale") is not None:
+            node.meta["product_scale_from_export"] = float(match["product_scale"])
+
+        for other_node_id in matched_node_ids - {node.id}:
+            graph.nodes.pop(other_node_id, None)
+            if other_node_id in graph.order:
+                graph.order.remove(other_node_id)
+        changed = True
+
+    if changed:
+        rebuild_graph(graph)
+    return changed
+
+
+def _match_gemma4_dense_mlp(graph: IRGraph, node: IRNode) -> dict[str, object] | None:
+    down = match_linear(graph, node)
+    if down is None or down.bias_value_id is not None:
+        return None
+    if not _is_gemma4_dense_mlp_weight(graph, down.weight_value_id, "down"):
+        return None
+
+    mul_node = producer(graph, down.input_value_id)
+    if mul_node is None or mul_node.op != "multiply" or len(mul_node.inputs) != 2:
+        return None
+
+    for activated_value_id, up_value_id in ((mul_node.inputs[0], mul_node.inputs[1]), (mul_node.inputs[1], mul_node.inputs[0])):
+        activation_node, product_scale, scale_node_id = _unwrap_gemma4_scaled_activation(graph, activated_value_id)
+        if activation_node is None or activation_node.op != "gelu" or len(activation_node.inputs) != 1:
+            continue
+
+        gate_input_producer = producer(graph, strip_passthrough(graph, activation_node.inputs[0]))
+        up_producer = producer(graph, strip_passthrough(graph, up_value_id))
+        if gate_input_producer is None or up_producer is None:
+            continue
+
+        gate = match_linear(graph, gate_input_producer)
+        up = match_linear(graph, up_producer)
+        if gate is None or up is None:
+            continue
+        if gate.bias_value_id is not None or up.bias_value_id is not None:
+            continue
+        if strip_passthrough(graph, gate.input_value_id) != strip_passthrough(graph, up.input_value_id):
+            continue
+        if not _is_gemma4_dense_mlp_weight(graph, gate.weight_value_id, "gate"):
+            continue
+        if not _is_gemma4_dense_mlp_weight(graph, up.weight_value_id, "up"):
+            continue
+        layer_idx = _gemma4_mlp_layer_index(graph, gate.weight_value_id)
+        if layer_idx is None:
+            continue
+        if layer_idx != _gemma4_mlp_layer_index(graph, up.weight_value_id):
+            continue
+        if layer_idx != _gemma4_mlp_layer_index(graph, down.weight_value_id):
+            continue
+
+        node_ids = {
+            *gate.node_ids,
+            activation_node.id,
+            *up.node_ids,
+            mul_node.id,
+            *down.node_ids,
+        }
+        if scale_node_id is not None:
+            node_ids.add(scale_node_id)
+
+        return {
+            "input_value_id": strip_passthrough(graph, gate.input_value_id),
+            "gate_weight_value_id": gate.weight_value_id,
+            "up_weight_value_id": up.weight_value_id,
+            "down_weight_value_id": down.weight_value_id,
+            "product_scale": product_scale,
+            "node_ids": tuple(sorted(node_ids)),
+        }
+
+    return None
+
+
+def _unwrap_gemma4_scaled_activation(graph: IRGraph, value_id: str) -> tuple[IRNode | None, float | None, str | None]:
+    node = producer(graph, strip_passthrough(graph, value_id))
+    if node is None:
+        return None, None, None
+    if node.op == "scalar_multiply" and len(node.inputs) == 1:
+        scale = float(node.attrs.get("value", 1.0))
+        inner = producer(graph, strip_passthrough(graph, node.inputs[0]))
+        return inner, scale, node.id
+    return node, None, None
+
+
+def _is_gemma4_dense_mlp_weight(graph: IRGraph, value_id: str, role: str) -> bool:
+    value = graph.values.get(value_id)
+    if value is None:
+        return False
+    source_name = str(value.meta.get("source_name") or value_id)
+    return (
+        "language_model.layers." in source_name
+        and f"mlp.{role}_proj.weight" in source_name
+    )
+
+
+def _gemma4_mlp_layer_index(graph: IRGraph, value_id: str) -> int | None:
+    value = graph.values.get(value_id)
+    if value is None:
+        return None
+    source_name = str(value.meta.get("source_name") or value_id)
+    match = re.search(r"language_model\.layers\.(\d+)\.mlp\.", source_name)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _matched_nodes_are_private(graph: IRGraph, matched_node_ids: set[str], *, keep_node_id: str) -> bool:
+    for node_id in matched_node_ids:
+        if node_id == keep_node_id:
+            continue
+        node = graph.nodes.get(node_id)
+        if node is None:
+            continue
+        for output_id in node.outputs:
+            value = graph.values.get(output_id)
+            if value is None:
+                continue
+            for user_id in value.users:
+                if user_id not in matched_node_ids:
+                    return False
+    return True
 
 
 def fuse_conv_modules(graph: IRGraph) -> bool:

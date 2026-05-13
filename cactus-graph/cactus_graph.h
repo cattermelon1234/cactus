@@ -649,7 +649,7 @@ public:
         size_t num_experts, size_t num_experts_per_tok,
         bool normalize_routing, float epsilon, float routed_scaling_factor,
         Activation activation);
-    size_t dense_mlp_tq_fused(size_t hidden, size_t gate_weight, size_t up_weight, size_t down_weight);
+    size_t dense_mlp_tq_fused(size_t hidden, size_t gate_weight, size_t up_weight, size_t down_weight, float product_scale = 1.0f);
     size_t stats_pool(size_t input);
     size_t weighted_stats_pool(size_t input, size_t weights);
 

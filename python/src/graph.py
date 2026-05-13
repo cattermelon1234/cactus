@@ -1022,6 +1022,25 @@ class Graph:
             raise RuntimeError("graph_moe_layer_gated failed")
         return self._tensor_from_node(out.value)
 
+    def dense_mlp_tq_fused(self, hidden, gate_weight, up_weight, down_weight, product_scale=1.0):
+        hidden = self._ensure_tensor(hidden)
+        gate_weight = self._ensure_tensor(gate_weight)
+        up_weight = self._ensure_tensor(up_weight)
+        down_weight = self._ensure_tensor(down_weight)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_dense_mlp_tq_fused(
+            self.h,
+            cactus_node_t(hidden.id),
+            cactus_node_t(gate_weight.id),
+            cactus_node_t(up_weight.id),
+            cactus_node_t(down_weight.id),
+            ctypes.c_float(float(product_scale)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_dense_mlp_tq_fused failed"))
+        return self._tensor_from_node(out.value)
+
     def moe_layer_ungated(self, hidden, routing_probs, topk_indices, w1_weights, w2_weights,
                           num_experts, num_experts_per_tok, normalize_routing=True, epsilon=1e-6,
                           routed_scaling_factor=1.0, activation=ACT_GELU):

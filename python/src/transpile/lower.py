@@ -82,6 +82,7 @@ def transpile_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
     verify_ir(ir)
     g = Graph()
     g._transpile_materialized_constants = []  # type: ignore[attr-defined]
+    trace_lower = os.environ.get("CACTUS_LOWER_TRACE_NODES", "0") != "0"
     env: dict[str, Any] = {}
     runtime_inputs: list[Tensor] = []
     bound_constants: list[Tensor] = []
@@ -124,6 +125,16 @@ def transpile_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
             )
         for output_id, tensor in zip(node.outputs, outputs):
             env[output_id] = tensor
+            if trace_lower and isinstance(tensor, Tensor):
+                print(
+                    "lower_trace"
+                    f" cactus_id={int(tensor.id)}"
+                    f" ir_node={node.id}"
+                    f" op={node.op}"
+                    f" output={output_id}"
+                    f" shape={tuple(int(dim) for dim in tensor.shape)}",
+                    flush=True,
+                )
 
     outputs = [env[value_id] for value_id in ir.outputs]
     seen_bound_constant_ids = {int(tensor.id) for tensor in bound_constants}
@@ -615,6 +626,29 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
             out = g.add(out, bias)
         if reshape_back is not None:
             out = g.reshape(out, reshape_back)
+        if out.dtype != output_dtype:
+            out = g.precision_cast(out, output_dtype)
+        return [out]
+
+    if op == "dense_mlp_tq_fused":
+        hidden = _tensor(env, node.inputs[0])
+        gate_weight = _tensor(env, node.inputs[1])
+        up_weight = _tensor(env, node.inputs[2])
+        down_weight = _tensor(env, node.inputs[3])
+        product_scale = (
+            node.attrs.get("product_scale")
+            if "product_scale" in node.attrs
+            else node.meta.get("product_scale_from_export", node.meta.get("product_scale_elided_by_post_norm", 1.0))
+        )
+        out = g.dense_mlp_tq_fused(
+            hidden,
+            gate_weight,
+            up_weight,
+            down_weight,
+            product_scale=float(product_scale),
+        )
+        output_value = ir.values.get(node.outputs[0])
+        output_dtype = _map_ir_dtype(output_value.dtype) if output_value is not None and output_value.dtype is not None else out.dtype
         if out.dtype != output_dtype:
             out = g.precision_cast(out, output_dtype)
         return [out]
@@ -2373,6 +2407,8 @@ def _lower_static_batched_matmul(
 
 
 def _should_lower_gemma4_decoder_attention_without_kernel(ir: IRGraph, node: IRNode) -> bool:
+    if os.environ.get("CACTUS_GEMMA4_DECODER_MANUAL_ATTENTION", "0") != "1":
+        return False
     family = str(ir.meta.get("adapter_family") or ir.meta.get("family") or "").strip().lower()
     component = str(ir.meta.get("component", "") or "").strip().lower()
     if family != "gemma4" or component != "decoder":

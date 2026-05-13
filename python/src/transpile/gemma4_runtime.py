@@ -317,6 +317,18 @@ def _get_processor_image_attr(processor: object, name: str, default: object) -> 
     return default
 
 
+def _image_channel_array(value: object, default: float) -> np.ndarray:
+    if isinstance(value, (list, tuple, np.ndarray)):
+        array = np.asarray(value, dtype=np.float32).reshape(-1)
+        if array.size >= 3:
+            return array[:3]
+        if array.size == 1:
+            return np.full((3,), float(array[0]), dtype=np.float32)
+    if isinstance(value, (int, float)):
+        return np.full((3,), float(value), dtype=np.float32)
+    return np.full((3,), float(default), dtype=np.float32)
+
+
 def _prepare_gemma4_native_image_tensors(
     processor: object,
     image_files: tuple[str, ...],
@@ -332,6 +344,10 @@ def _prepare_gemma4_native_image_tensors(
     pooling_kernel_size = int(_get_processor_image_attr(processor, "pooling_kernel_size", 3))
     max_soft_tokens = int(_get_processor_image_attr(processor, "max_soft_tokens", 280))
     rescale_factor = float(_get_processor_image_attr(processor, "rescale_factor", 1.0 / 255.0))
+    # Native Cactus Gemma4 uses its config defaults here, even though the HF
+    # processor advertises do_normalize=False. Match the C++ path exactly.
+    image_mean = np.full((3,), 0.5, dtype=np.float32)
+    image_std = np.full((3,), 0.5, dtype=np.float32)
     max_patches = max_soft_tokens * pooling_kernel_size * pooling_kernel_size
     side_multiple = pooling_kernel_size * patch_size
     patch_dim = 3 * patch_size * patch_size
@@ -361,6 +377,7 @@ def _prepare_gemma4_native_image_tensors(
             if (target_w, target_h) != rgb.size:
                 rgb = rgb.resize((target_w, target_h), resample=resample_bilinear)
             array = np.asarray(rgb, dtype=np.float32) * rescale_factor
+            array = (array - image_mean.reshape(1, 1, 3)) / image_std.reshape(1, 1, 3)
 
         patch_h = target_h // patch_size
         patch_w = target_w // patch_size

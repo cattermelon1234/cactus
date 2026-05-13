@@ -100,6 +100,7 @@ OPS: tuple[OpSchema, ...] = (
     OpSchema("lstm_cell", num_inputs=7, backend_op="lstm_cell"),
 
     # CUSTOM / FUSED OPS
+    OpSchema("dense_mlp_tq_fused", num_inputs=4, attrs=("product_scale",), backend_op="dense_mlp_tq_fused"),
     OpSchema("rms_norm", num_inputs=2, attrs=("eps",), backend_op="rms_norm"),
     OpSchema("rope", num_inputs=1, attrs=("theta", "position_offset"), backend_op="rope"),
     OpSchema("rel_pos_bias", num_inputs=2, attrs=("scale",), backend_op="rel_pos_bias"),

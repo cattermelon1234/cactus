@@ -311,7 +311,7 @@ size_t CactusGraph::moe_layer(size_t hidden,
     return add_node(OpType::MOE_LAYER, input_ids, hidden_buffer.shape, params);
 }
 
-size_t CactusGraph::dense_mlp_tq_fused(size_t hidden, size_t gate_weight, size_t up_weight, size_t down_weight) {
+size_t CactusGraph::dense_mlp_tq_fused(size_t hidden, size_t gate_weight, size_t up_weight, size_t down_weight, float product_scale) {
     const auto& hidden_buffer = get_output_buffer(hidden);
     const auto& down_buffer = get_output_buffer(down_weight);
     if (hidden_buffer.shape.empty()) {
@@ -326,6 +326,7 @@ size_t CactusGraph::dense_mlp_tq_fused(size_t hidden, size_t gate_weight, size_t
 
     OpParams params;
     params.output_precision = Precision::FP16;
+    params.scalar = product_scale;
     return add_node(OpType::DENSE_MLP_TQ_FUSED,
                     {hidden, gate_weight, up_weight, down_weight},
                     output_shape, params);

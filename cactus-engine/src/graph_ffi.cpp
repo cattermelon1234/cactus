@@ -1237,6 +1237,25 @@ int cactus_graph_moe_layer_gated(cactus_graph_t graph, cactus_node_t hidden, cac
     }
 }
 
+int cactus_graph_dense_mlp_tq_fused(cactus_graph_t graph, cactus_node_t hidden, cactus_node_t gate_weight, cactus_node_t up_weight, cactus_node_t down_weight, float product_scale, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_dense_mlp_tq_fused");
+    try {
+        *out = static_cast<cactus_node_t>(
+            as_graph(graph)->graph.dense_mlp_tq_fused(
+                static_cast<size_t>(hidden),
+                static_cast<size_t>(gate_weight),
+                static_cast<size_t>(up_weight),
+                static_cast<size_t>(down_weight),
+                product_scale
+            )
+        );
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
 int cactus_graph_moe_layer_ungated(cactus_graph_t graph, cactus_node_t hidden, cactus_node_t routing_probs, cactus_node_t topk_indices,
                                    const cactus_node_t* w1_weights, const cactus_node_t* w2_weights,
                                    size_t num_experts, size_t num_experts_per_tok, bool normalize_routing, float epsilon, float routed_scaling_factor, int32_t activation, cactus_node_t* out) {

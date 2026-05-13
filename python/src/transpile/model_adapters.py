@@ -570,25 +570,56 @@ def _gemma4_pool_vision_hidden_native_like(
     vision_tower: torch.nn.Module,
     hidden_states: torch.Tensor,
     pixel_position_ids: torch.Tensor,
+    *,
+    image_soft_token_counts: tuple[int, ...] | None = None,
+    image_pool_shapes: tuple[tuple[int, int, int], ...] | None = None,
 ) -> torch.Tensor:
     output_length = int(getattr(vision_tower, "default_output_length"))
     pooling_kernel_size = int(getattr(vision_tower, "pooling_kernel_size"))
     padding_positions = (pixel_position_ids == -1).all(dim=-1)
     pooled_batches: list[torch.Tensor] = []
-    for hidden_row, position_row, padding_row in zip(hidden_states, pixel_position_ids, padding_positions, strict=True):
-        valid_hidden = hidden_row[~padding_row].float()
-        valid_positions = position_row[~padding_row].clamp(min=0)
-        max_x = valid_positions[:, 0].max() + 1
-        kernel_positions = torch.div(valid_positions, pooling_kernel_size, rounding_mode="floor")
+    for row_idx, (hidden_row, position_row, padding_row) in enumerate(
+        zip(hidden_states, pixel_position_ids, padding_positions, strict=True)
+    ):
+        if image_pool_shapes is not None and row_idx < len(image_pool_shapes):
+            grid_h, grid_w, pooled_count = image_pool_shapes[row_idx]
+            valid_patch_count = int(grid_h) * int(grid_w)
+            channels = int(hidden_row.shape[-1])
+            valid_hidden = hidden_row[:valid_patch_count].float()
+            pooled = valid_hidden.reshape(
+                int(grid_h) // pooling_kernel_size,
+                pooling_kernel_size,
+                int(grid_w) // pooling_kernel_size,
+                pooling_kernel_size,
+                channels,
+            ).mean(dim=(1, 3))
+            pooled_batches.append(pooled.reshape(int(pooled_count), channels))
+            continue
+
+        # Avoid boolean advanced indexing here. Gemma4 image padding is not
+        # guaranteed to be prefix-shaped, and the generic lowerer optimizes
+        # some masks as prefix slices. Zero-weighting padded patches preserves
+        # native pooling semantics while staying easy to lower.
+        clamped_positions = position_row.clamp(min=0)
+        max_x = clamped_positions[:, 0].max() + 1
+        kernel_positions = torch.div(clamped_positions, pooling_kernel_size, rounding_mode="floor")
         kernel_indices = kernel_positions[:, 0] + torch.div(
             max_x,
             pooling_kernel_size,
             rounding_mode="floor",
         ) * kernel_positions[:, 1]
-        weights = F.one_hot(kernel_indices.long(), output_length).float() / float(pooling_kernel_size**2)
-        pooled_full = weights.transpose(0, 1) @ valid_hidden
-        valid_bins = torch.logical_not((weights == 0).all(dim=0))
-        pooled_batches.append(pooled_full[valid_bins])
+        valid_patch_weights = torch.logical_not(padding_row).float().unsqueeze(-1)
+        weights = (
+            F.one_hot(kernel_indices.long(), output_length).float()
+            * valid_patch_weights
+            / float(pooling_kernel_size**2)
+        )
+        pooled_full = weights.transpose(0, 1) @ hidden_row.float()
+        if image_soft_token_counts is not None and row_idx < len(image_soft_token_counts):
+            pooled_batches.append(pooled_full[: int(image_soft_token_counts[row_idx])])
+        else:
+            valid_bins = torch.logical_not((weights == 0).all(dim=0))
+            pooled_batches.append(pooled_full[valid_bins])
     return torch.cat(pooled_batches, dim=0)
 
 
@@ -598,6 +629,8 @@ def _gemma4_compute_native_like_image_features(
     pixel_position_ids: torch.Tensor | None,
     *,
     post_proj_norm_weight: torch.Tensor | None = None,
+    image_soft_token_counts: tuple[int, ...] | None = None,
+    image_pool_shapes: tuple[tuple[int, int, int], ...] | None = None,
 ) -> torch.Tensor:
     if pixel_position_ids is None:
         raise TypeError("Gemma4 native-like vision feature path requires pixel_position_ids")
@@ -622,6 +655,8 @@ def _gemma4_compute_native_like_image_features(
         vision_tower,
         vision_hidden,
         pixel_position_ids,
+        image_soft_token_counts=image_soft_token_counts,
+        image_pool_shapes=image_pool_shapes,
     )
     projection = getattr(embed_vision, "embedding_projection", None)
     if not isinstance(projection, torch.nn.Linear):
@@ -685,6 +720,45 @@ def _gemma4_feature_token_count(features: torch.Tensor | None) -> int:
     if features.ndim >= 1:
         return int(features.reshape(-1, features.shape[-1]).shape[0])
     return 0
+
+
+def _gemma4_static_image_soft_token_counts(
+    pixel_position_ids: torch.Tensor | None,
+    *,
+    pooling_kernel_size: int,
+) -> tuple[int, ...] | None:
+    if pixel_position_ids is None or pixel_position_ids.ndim != 3:
+        return None
+    counts: list[int] = []
+    for positions in pixel_position_ids.detach().cpu():
+        valid = positions[(positions != -1).any(dim=-1)]
+        if valid.numel() == 0:
+            counts.append(0)
+            continue
+        max_x = int(valid[:, 0].max().item()) + 1
+        max_y = int(valid[:, 1].max().item()) + 1
+        counts.append((max_x // int(pooling_kernel_size)) * (max_y // int(pooling_kernel_size)))
+    return tuple(counts)
+
+
+def _gemma4_static_image_pool_shapes(
+    pixel_position_ids: torch.Tensor | None,
+    *,
+    pooling_kernel_size: int,
+) -> tuple[tuple[int, int, int], ...] | None:
+    if pixel_position_ids is None or pixel_position_ids.ndim != 3:
+        return None
+    shapes: list[tuple[int, int, int]] = []
+    for positions in pixel_position_ids.detach().cpu():
+        valid = positions[(positions != -1).any(dim=-1)]
+        if valid.numel() == 0:
+            shapes.append((0, 0, 0))
+            continue
+        grid_w = int(valid[:, 0].max().item()) + 1
+        grid_h = int(valid[:, 1].max().item()) + 1
+        pooled_count = (grid_w // int(pooling_kernel_size)) * (grid_h // int(pooling_kernel_size))
+        shapes.append((grid_h, grid_w, pooled_count))
+    return tuple(shapes)
 
 
 def _gemma4_build_native_merge_plan(
@@ -794,6 +868,26 @@ def _gemma4_feature_sequence(
     raise ValueError(f"unsupported Gemma4 feature tensor shape: {tuple(features.shape)}")
 
 
+def _gemma4_text_embedding_scale(embedding: torch.nn.Module, fallback_scale: float) -> float:
+    """Return the extra scale needed after calling the HF embedding module.
+
+    Native Cactus scales raw token embedding weights by sqrt(hidden_dim).  The
+    HF Gemma4 embedding module already applies that scale in forward(), so the
+    transpiler must not multiply a second time when it traces the HF module.
+    """
+    for attr_name in ("scalar_embed_scale", "embed_scale"):
+        value = getattr(embedding, attr_name, None)
+        if isinstance(value, torch.Tensor):
+            try:
+                if value.numel() > 0 and abs(float(value.reshape(-1)[0].item()) - float(fallback_scale)) < 1e-3:
+                    return 1.0
+            except Exception:
+                continue
+        elif isinstance(value, (float, int)) and abs(float(value) - float(fallback_scale)) < 1e-3:
+            return 1.0
+    return float(fallback_scale)
+
+
 def _gemma4_apply_native_merge_plan(
     model: torch.nn.Module,
     *,
@@ -829,10 +923,14 @@ def _gemma4_apply_native_merge_plan(
     if hidden_scale <= 0.0:
         hidden_scale = float(feature_dim)
     hidden_scale = float(hidden_scale) ** 0.5
+    text_extra_scale = _gemma4_text_embedding_scale(embedding, hidden_scale)
     for segment in merge_plan.segments:
         if segment.kind == "text":
             text_tokens = input_ids[:, segment.input_start : segment.input_start + segment.length]
-            embedded_segments.append(embedding(text_tokens) * hidden_scale)
+            text_embeds = embedding(text_tokens)
+            if text_extra_scale != 1.0:
+                text_embeds = text_embeds * text_extra_scale
+            embedded_segments.append(text_embeds)
         elif segment.kind == "image":
             embedded_segments.append(
                 image_sequence[:, segment.feature_start : segment.feature_start + segment.length, :]
@@ -1847,6 +1945,8 @@ class _Gemma4MultimodalComponentBase(torch.nn.Module):
         input_names: tuple[str, ...],
         weights_dir: str | None = None,
         native_merge_plan: _Gemma4NativeMergePlan | None = None,
+        native_image_soft_token_counts: tuple[int, ...] | None = None,
+        native_image_pool_shapes: tuple[tuple[int, int, int], ...] | None = None,
     ):
         super().__init__()
         self.model = model
@@ -1855,6 +1955,8 @@ class _Gemma4MultimodalComponentBase(torch.nn.Module):
         model_backbone = model.model
         self.backbone = getattr(model_backbone, "language_model", model_backbone)
         self._native_merge_plan = native_merge_plan
+        self._native_image_soft_token_counts = native_image_soft_token_counts
+        self._native_image_pool_shapes = native_image_pool_shapes
         self.register_buffer(
             "_native_merge_pli_token_ids",
             torch.tensor(native_merge_plan.pli_token_ids, dtype=torch.long)
@@ -1911,6 +2013,8 @@ class _Gemma4MultimodalComponentBase(torch.nn.Module):
                 pixel_values,
                 pixel_position_ids,
                 post_proj_norm_weight=self._cactus_vision_post_proj_norm,
+                image_soft_token_counts=self._native_image_soft_token_counts,
+                image_pool_shapes=self._native_image_pool_shapes,
             )
         get_image_features = getattr(self.multimodal_backbone, "get_image_features", None)
         vision_tower = getattr(self.multimodal_backbone, "vision_tower", None)
@@ -2067,8 +2171,21 @@ class _Gemma4MultimodalComponentBase(torch.nn.Module):
 
 
 class Gemma4VisionEncoderAdapter(_Gemma4MultimodalComponentBase):
-    def __init__(self, model: torch.nn.Module, *, weights_dir: str | None = None):
-        super().__init__(model, input_names=("pixel_values", "pixel_position_ids"), weights_dir=weights_dir)
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        *,
+        weights_dir: str | None = None,
+        native_image_soft_token_counts: tuple[int, ...] | None = None,
+        native_image_pool_shapes: tuple[tuple[int, int, int], ...] | None = None,
+    ):
+        super().__init__(
+            model,
+            input_names=("pixel_values", "pixel_position_ids"),
+            weights_dir=weights_dir,
+            native_image_soft_token_counts=native_image_soft_token_counts,
+            native_image_pool_shapes=native_image_pool_shapes,
+        )
 
     def _modules_to_prepare_for_capture(self) -> tuple[torch.nn.Module, ...]:
         return ()
@@ -2234,7 +2351,23 @@ def _build_gemma4_multimodal_component_specs(
         if "audio_encoder" in requested_set:
             _require("audio_encoder")
 
-    vision_encoder = Gemma4VisionEncoderAdapter(model, weights_dir=weights_dir).eval()
+    vision_tower = getattr(getattr(model, "model", model), "vision_tower", None)
+    pooling_kernel_size = int(getattr(vision_tower, "pooling_kernel_size", 3))
+    native_image_soft_token_counts = _gemma4_static_image_soft_token_counts(
+        pixel_position_ids,
+        pooling_kernel_size=pooling_kernel_size,
+    )
+    native_image_pool_shapes = _gemma4_static_image_pool_shapes(
+        pixel_position_ids,
+        pooling_kernel_size=pooling_kernel_size,
+    )
+
+    vision_encoder = Gemma4VisionEncoderAdapter(
+        model,
+        weights_dir=weights_dir,
+        native_image_soft_token_counts=native_image_soft_token_counts,
+        native_image_pool_shapes=native_image_pool_shapes,
+    ).eval()
     audio_encoder = Gemma4AudioEncoderAdapter(model, weights_dir=weights_dir).eval()
 
     image_features: torch.Tensor | None = None

@@ -517,6 +517,11 @@ _lib.cactus_graph_moe_layer_gated.argtypes = [
     ctypes.c_size_t, ctypes.c_size_t, ctypes.c_bool, ctypes.c_float, ctypes.c_float, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_moe_layer_gated.restype = ctypes.c_int
+_lib.cactus_graph_dense_mlp_tq_fused.argtypes = [
+    cactus_graph_t, cactus_node_t, cactus_node_t, cactus_node_t, cactus_node_t,
+    ctypes.c_float, ctypes.POINTER(cactus_node_t)
+]
+_lib.cactus_graph_dense_mlp_tq_fused.restype = ctypes.c_int
 _lib.cactus_graph_moe_layer_ungated.argtypes = [
     cactus_graph_t, cactus_node_t, cactus_node_t, cactus_node_t,
     ctypes.POINTER(cactus_node_t), ctypes.POINTER(cactus_node_t),

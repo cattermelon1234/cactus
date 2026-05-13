@@ -331,6 +331,19 @@ def run_transpiled_bundle(
             weights_dir=resolved_weights_dir,
             max_new_tokens=max_new_tokens,
         )
+    if _should_use_native_stateful_multimodal_runner(family=family, task=task, manifest=manifest):
+        return _run_native_stateful_multimodal_bundle(
+            bundle_root=bundle_root,
+            manifest=manifest,
+            prompt=prompt,
+            image_files=image_files,
+            audio_file=audio_file,
+            weights_dir=resolved_weights_dir,
+            system_prompt=system_prompt,
+            enable_thinking=enable_thinking,
+            max_new_tokens=max_new_tokens,
+            stop_sequences=stop_sequences,
+        )
 
     component_graphs, manifest = load_saved_component_graphs(
         bundle_dir_or_manifest,
@@ -446,6 +459,21 @@ def _should_use_native_stateful_audio_runner(
     return False
 
 
+def _should_use_native_stateful_multimodal_runner(
+    *,
+    family: str,
+    task: str,
+    manifest: Mapping[str, object],
+) -> bool:
+    if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_MULTIMODAL_RUNNER") == "1":
+        return False
+    model_id = str(manifest.get("model_id", "") or "").lower()
+    normalized_family = family.strip().lower()
+    return task == "multimodal_causal_lm_logits" and (
+        normalized_family == "gemma4" or "gemma-4" in model_id or "gemma4" in model_id
+    )
+
+
 def _run_native_stateful_audio_bundle(
     *,
     bundle_root: Path,
@@ -541,6 +569,156 @@ def _run_native_stateful_audio_bundle(
         "generated_token_ids": generated_token_ids,
         "token_pieces": token_pieces,
         "decode_tokens": decode_tokens,
+        "prefill_tokens": int(payload.get("prefill_tokens", 0) or 0),
+        "total_tokens": int(payload.get("total_tokens", 0) or 0),
+        "time_to_first_token_ms": float(payload.get("time_to_first_token_ms", 0.0) or 0.0),
+        "prefill_tps": float(payload.get("prefill_tps", 0.0) or 0.0),
+        "decode_tps": float(payload.get("decode_tps", 0.0) or 0.0),
+        "decoder_ms": total_ms,
+        "total_ms": total_ms,
+        "wall_ms": (end - start) * 1000.0,
+        "native_response": payload,
+    }
+
+
+def _run_native_stateful_multimodal_bundle(
+    *,
+    bundle_root: Path,
+    manifest: Mapping[str, object],
+    prompt: str | None,
+    image_files: tuple[str, ...],
+    audio_file: str | Path | None,
+    weights_dir: str | Path | None,
+    system_prompt: str | None,
+    enable_thinking: bool,
+    max_new_tokens: int | None,
+    stop_sequences: tuple[str, ...],
+) -> dict[str, object]:
+    inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+    if not isinstance(inputs_meta, Mapping):
+        inputs_meta = {}
+
+    resolved_prompt = prompt
+    if resolved_prompt is None:
+        stored_prompt = inputs_meta.get("prompt")
+        if isinstance(stored_prompt, str) and stored_prompt:
+            resolved_prompt = stored_prompt
+    if not resolved_prompt:
+        raise ValueError("provide --prompt for native Gemma4 multimodal bundle execution")
+
+    resolved_image_files: tuple[str, ...]
+    if image_files:
+        resolved_image_files = tuple(str(Path(path).expanduser().resolve()) for path in image_files)
+    else:
+        stored_images = inputs_meta.get("image_files")
+        if isinstance(stored_images, list):
+            resolved_image_files = tuple(
+                str(Path(path).expanduser().resolve())
+                for path in stored_images
+                if isinstance(path, str) and path
+            )
+        else:
+            resolved_image_files = ()
+
+    resolved_audio: str | None = None
+    if audio_file is not None:
+        resolved_audio = str(Path(audio_file).expanduser().resolve())
+    else:
+        stored_audio = inputs_meta.get("audio_file")
+        if isinstance(stored_audio, str) and stored_audio:
+            resolved_audio = str(Path(stored_audio).expanduser().resolve())
+
+    native_weights_dir = _resolve_native_stateful_weights_dir(
+        bundle_root=bundle_root,
+        manifest=manifest,
+        weights_dir=weights_dir,
+    )
+    if native_weights_dir is None:
+        raise FileNotFoundError("could not resolve a Cactus-native weights directory for Gemma4 multimodal execution")
+
+    from src.cactus import cactus_complete
+    from src.cactus import cactus_destroy
+    from src.cactus import cactus_init
+
+    if max_new_tokens is None:
+        token_budget = int(inputs_meta.get("max_new_tokens", 0) or 0)
+        if token_budget <= 0:
+            token_budget = 96
+    else:
+        token_budget = max(0, int(max_new_tokens))
+
+    messages: list[dict[str, object]] = []
+    resolved_system = system_prompt
+    if resolved_system is None:
+        stored_system = inputs_meta.get("system_prompt")
+        if isinstance(stored_system, str):
+            resolved_system = stored_system
+    if resolved_system:
+        messages.append({"role": "system", "content": resolved_system})
+    user_message: dict[str, object] = {"role": "user", "content": resolved_prompt}
+    if resolved_image_files:
+        user_message["images"] = list(resolved_image_files)
+    if resolved_audio:
+        user_message["audio"] = [resolved_audio]
+    messages.append(user_message)
+
+    options: dict[str, object] = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0,
+        "max_tokens": token_budget,
+        "auto_handoff": False,
+        "confidence_threshold": -1.0,
+        "telemetry_enabled": False,
+        "enable_thinking_if_supported": bool(enable_thinking),
+    }
+    if stop_sequences:
+        options["stop_sequences"] = list(stop_sequences)
+
+    generated_token_ids: list[int] = []
+    token_pieces: list[str] = []
+
+    def _token_callback(token: str, token_id: int) -> None:
+        token_pieces.append(str(token))
+        generated_token_ids.append(int(token_id))
+
+    start = time.perf_counter()
+    model_handle = cactus_init(str(native_weights_dir), None, False)
+    try:
+        response_json = cactus_complete(
+            model_handle,
+            json.dumps(messages),
+            json.dumps(options),
+            "",
+            _token_callback,
+            None,
+        )
+    finally:
+        cactus_destroy(model_handle)
+    end = time.perf_counter()
+
+    try:
+        payload = json.loads(response_json)
+    except Exception:
+        payload = {"success": True, "response": response_json}
+
+    total_ms = float(payload.get("total_time_ms", (end - start) * 1000.0) or 0.0)
+    return {
+        "bundle_model_id": str(manifest.get("model_id", "") or ""),
+        "family": str(manifest.get("family", "") or ""),
+        "task": str(manifest.get("task", "") or ""),
+        "component_order": list(manifest.get("component_order", [])),
+        "runtime_strategy": "native_cactus_stateful_multimodal",
+        "native_weights_dir": str(native_weights_dir),
+        "prompt": resolved_prompt,
+        "image_files": list(resolved_image_files),
+        "audio_file": resolved_audio,
+        "response": str(payload.get("response", "") or ""),
+        "generated_token_ids": generated_token_ids,
+        "token_pieces": token_pieces,
+        "decode_tokens": int(payload.get("decode_tokens", len(generated_token_ids)) or 0),
         "prefill_tokens": int(payload.get("prefill_tokens", 0) or 0),
         "total_tokens": int(payload.get("total_tokens", 0) or 0),
         "time_to_first_token_ms": float(payload.get("time_to_first_token_ms", 0.0) or 0.0),
