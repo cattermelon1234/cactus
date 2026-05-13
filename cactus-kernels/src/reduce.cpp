@@ -325,3 +325,19 @@ void cactus_max_axis_f16(const __fp16* input, __fp16* output, size_t outer_size,
         [](float16x8_t a, float16x8_t b) { return vmaxq_f16(a, b); },
         [](__fp16 a, __fp16 b) { return std::max(a, b); });
 }
+
+void cactus_cumsum_axis_f16(const __fp16* input, __fp16* output, size_t outer_size, size_t axis_size, size_t inner_size) {
+    CactusThreading::parallel_for_2d(
+        outer_size,
+        inner_size,
+        CactusThreading::Thresholds::AXIS_REDUCE,
+        [&](size_t outer, size_t inner) {
+            float running = 0.0f;
+            for (size_t a = 0; a < axis_size; ++a) {
+                const size_t idx = outer * axis_size * inner_size + a * inner_size + inner;
+                running += static_cast<float>(input[idx]);
+                output[idx] = static_cast<__fp16>(running);
+            }
+        }
+    );
+}

@@ -219,6 +219,45 @@ bool test_neon_max_axis_inner1_correctness() {
     return TestUtils::compare_arrays(output.data(), expected.data(), expected.size(), 1e-2f);
 }
 
+bool test_cumsum_axis() {
+    const size_t outer = 2;
+    const size_t axis = 4;
+    const size_t inner = 3;
+
+    std::vector<__fp16> input(outer * axis * inner);
+    auto idx = [&](size_t o, size_t a, size_t i) {
+        return o * axis * inner + a * inner + i;
+    };
+
+    for (size_t o = 0; o < outer; ++o) {
+        for (size_t a = 0; a < axis; ++a) {
+            for (size_t i = 0; i < inner; ++i) {
+                input[idx(o, a, i)] = static_cast<__fp16>(1.0f + static_cast<float>(o * 10 + a * 3 + i));
+            }
+        }
+    }
+
+    std::vector<__fp16> output(input.size(), static_cast<__fp16>(0.0f));
+    cactus_cumsum_axis_f16(input.data(), output.data(), outer, axis, inner);
+
+    for (size_t o = 0; o < outer; ++o) {
+        for (size_t i = 0; i < inner; ++i) {
+            float running = 0.0f;
+            for (size_t a = 0; a < axis; ++a) {
+                running += static_cast<float>(input[idx(o, a, i)]);
+                const float actual = static_cast<float>(output[idx(o, a, i)]);
+                if (std::abs(actual - running) > 1e-2f) {
+                    std::cerr << "  cumsum_axis mismatch [" << o << "," << a << "," << i
+                              << "]: " << actual << " vs " << running << "\n";
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 bool run_benchmarks(TestRunner& runner) {
     (void)runner;
     auto benchmark = [&](const std::string& label, size_t n, auto fn) {
@@ -300,6 +339,7 @@ int main() {
     runner.run_test("Kernel Variance Axis Non-Inner1 FP16 Correctness", test_neon_variance_axis_non_inner1_correctness());
     runner.run_test("Kernel Min Axis Inner1 FP16 Correctness", test_neon_min_axis_inner1_correctness());
     runner.run_test("Kernel Max Axis Inner1 FP16 Correctness", test_neon_max_axis_inner1_correctness());
+    runner.run_test("Kernel Cumsum Axis FP16 Correctness", test_cumsum_axis());
     runner.print_benchmarks_header();
     runner.run_bench("benchmarks", run_benchmarks(runner));
     runner.print_summary();

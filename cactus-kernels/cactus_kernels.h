@@ -154,6 +154,13 @@ void cactus_max_axis_f16(
     size_t axis_size,
     size_t inner_size);
 
+void cactus_cumsum_axis_f16(
+    const __fp16* input,
+    __fp16* output,
+    size_t outer_size,
+    size_t axis_size,
+    size_t inner_size);
+
 void cactus_transpose_2d_f16(
     const __fp16* source,
     __fp16* destination,

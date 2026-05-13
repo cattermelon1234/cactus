@@ -243,6 +243,26 @@ bool test_scalar_operations_with_pow() {
     return fixture.verify_output(pow_result, expected);
 }
 
+bool test_cumsum() {
+    TestUtils::FP16TestFixture fixture("Cumsum");
+
+    size_t input = fixture.create_input({2, 4});
+    size_t cumsum_result = fixture.graph().cumsum(input, -1);
+
+    std::vector<__fp16> data = {
+        1.0f, 2.0f, 3.0f, 4.0f,
+        2.0f, 1.0f, 0.5f, -1.0f
+    };
+    std::vector<__fp16> expected = {
+        1.0f, 3.0f, 6.0f, 10.0f,
+        2.0f, 3.0f, 3.5f, 2.5f
+    };
+
+    fixture.set_input_data(input, data);
+    fixture.execute();
+    return fixture.verify_output(cumsum_result, expected, 1e-2f);
+}
+
 bool test_gather_operation() {
     CactusGraph graph;
 
@@ -650,6 +670,7 @@ int main() {
     runner.run_test("Scalar Subtract/Divide", test_scalar_subtract_divide());
     runner.run_test("Scalar Math Functions", test_scalar_math_functions());
     runner.run_test("Scalar Operations with Pow", test_scalar_operations_with_pow());
+    runner.run_test("Cumsum Operation", test_cumsum());
     runner.run_test("Gather Operation", test_gather_operation());
     runner.run_test("Gather 1D Tensor", test_gather_1d_tensor());
     runner.run_test("Gather 3D Tensor", test_gather_3d_tensor());

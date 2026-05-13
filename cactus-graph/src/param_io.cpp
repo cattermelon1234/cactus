@@ -169,6 +169,7 @@ const Schema& op_schema(OpType op_type) {
         {OpType::VARIANCE, {{ParamField::Axis, FieldPersistence::Persistent}}},
         {OpType::MIN, {{ParamField::Axis, FieldPersistence::Persistent}}},
         {OpType::MAX, {{ParamField::Axis, FieldPersistence::Persistent}}},
+        {OpType::CUMSUM, {{ParamField::Axis, FieldPersistence::Persistent}}},
         {OpType::INDEX, {{ParamField::Axis, FieldPersistence::Persistent}, {ParamField::IndexValue, FieldPersistence::Persistent}}},
         {OpType::CONCAT, {{ParamField::Axis, FieldPersistence::Persistent}}},
         {OpType::CAT, {{ParamField::Axis, FieldPersistence::Persistent}}},

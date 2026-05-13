@@ -46,6 +46,7 @@ from src.transpile.optimize_graph import optimize_graph
 from src.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
 from src.transpile.parakeet_tdt_local import load_parakeet_tdt_local_model
 from src.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
+from src.transpile.lower import transpile_preoptimized_ir
 
 _TORCHVISION_COMPAT_LIBRARIES: list[object] = []
 
@@ -2268,67 +2269,6 @@ def _count_weight_bindings(ir_graph: IRGraph) -> int:
             count += 1
     return count
 
-
-def _lower_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
-    verify_ir(ir)
-    graph = Graph()
-    graph._transpile_materialized_constants = []  # type: ignore[attr-defined]
-    env: dict[str, Any] = {}
-    runtime_inputs = []
-    bound_constants = []
-    bound_constant_bindings = []
-
-    for value_id in ir.inputs:
-        value = ir.values[value_id]
-        tensor = _lower_input_value(graph, value)
-        env[value_id] = tensor
-        runtime_inputs.append(tensor)
-
-    for value_id, const in ir.constants.items():
-        value = ir.values[value_id]
-        binding = _lookup_weight_binding(value)
-        lowered_const = _lower_constant_value(graph, value, const)
-        env[value_id] = lowered_const
-        if hasattr(lowered_const, "g") and hasattr(lowered_const, "id"):
-            bound_constants.append(lowered_const)
-            if binding is not None:
-                bound_constant_bindings.append(
-                    {
-                        "node_id": int(lowered_const.id),
-                        "value_id": str(value_id),
-                        "path": binding.path,
-                        "kind": binding.kind,
-                        "source_name": binding.source_name,
-                    }
-                )
-
-    for node_id in ir.order:
-        node = ir.nodes[node_id]
-        outputs = _lower_ir_node(graph, node, env, ir)
-        if len(outputs) != len(node.outputs):
-            raise ValueError(
-                f"node {node.id} produced {len(outputs)} outputs, expected {len(node.outputs)}"
-            )
-        for output_id, tensor in zip(node.outputs, outputs):
-            env[output_id] = tensor
-
-    outputs = [env[value_id] for value_id in ir.outputs]
-    seen_bound_constant_ids = {int(tensor.id) for tensor in bound_constants}
-    for tensor in getattr(graph, "_transpile_materialized_constants", []):
-        tensor_id = int(tensor.id)
-        if tensor_id in seen_bound_constant_ids:
-            continue
-        bound_constants.append(tensor)
-        seen_bound_constant_ids.add(tensor_id)
-    return TranspiledGraph(
-        graph=graph,
-        runtime_inputs=runtime_inputs,
-        bound_constants=bound_constants,
-        bound_constant_bindings=bound_constant_bindings,
-        outputs=outputs,
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -2638,7 +2578,7 @@ def main() -> int:
     optimize_graph(captured.ir_graph, config=fusion_config)
     print("optimize_done=true", flush=True)
     print("lower_begin=true", flush=True)
-    tg = _lower_preoptimized_ir(captured.ir_graph)
+    tg = transpile_preoptimized_ir(captured.ir_graph)
     print("lower_done=true", flush=True)
 
     optimized_ir_graph = copy.deepcopy(captured.ir_graph)
@@ -2688,7 +2628,7 @@ def main() -> int:
     if artifact_dir is not None:
         artifact_dir.mkdir(parents=True, exist_ok=True)
         transpiled_component_graphs = {
-            component: _lower_preoptimized_ir(copy.deepcopy(component_graph))
+            component: transpile_preoptimized_ir(copy.deepcopy(component_graph))
             for component, component_graph in optimized_component_graphs.items()
         }
         _write_json(

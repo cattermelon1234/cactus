@@ -113,7 +113,8 @@ enum class OpType {
     RFFT, IRFFT, MEL_FILTER_BANK, SPECTROGRAM,
     IMAGE_PREPROCESS,
     CLAMP,
-    DENSE_MLP_TQ_FUSED
+    DENSE_MLP_TQ_FUSED,
+    CUMSUM
 };
 
 struct PrecisionTraits {
@@ -497,6 +498,7 @@ public:
     size_t variance(size_t input, int axis);
     size_t min(size_t input, int axis);
     size_t max(size_t input, int axis);
+    size_t cumsum(size_t input, int axis);
     size_t softmax(size_t input, int axis = -1);
     size_t topk(size_t input, size_t k);
 

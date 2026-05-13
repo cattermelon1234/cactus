@@ -278,6 +278,36 @@ void compute_reduce_node(GraphNode& node, const std::vector<std::unique_ptr<Grap
     }
 }
 
+void compute_cumsum_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map) {
+    const auto& input_buffer = get_input(node, 0, nodes, node_index_map);
+
+    if (input_buffer.precision != Precision::FP16) {
+        throw std::runtime_error("cumsum only supports FP16 precision");
+    }
+
+    if (input_buffer.shape.empty()) {
+        throw std::runtime_error("cumsum requires a tensor with rank >= 1");
+    }
+
+    int axis = node.params.axis;
+    const int rank = static_cast<int>(input_buffer.shape.size());
+    if (axis < 0) {
+        axis += rank;
+    }
+    if (axis < 0 || axis >= rank) {
+        throw std::runtime_error("cumsum axis out of bounds");
+    }
+
+    auto dims = AxisDims::from_shape(input_buffer.shape, static_cast<size_t>(axis));
+    cactus_cumsum_axis_f16(
+        input_buffer.data_as<__fp16>(),
+        node.output_buffer.data_as<__fp16>(),
+        dims.outer,
+        dims.axis_size,
+        dims.inner
+    );
+}
+
 void compute_reshape_node(GraphNode& node, const std::vector<std::unique_ptr<GraphNode>>& nodes, const std::unordered_map<size_t, size_t>& node_index_map) {
     const auto& input_buffer = get_input(node, 0, nodes, node_index_map);
 

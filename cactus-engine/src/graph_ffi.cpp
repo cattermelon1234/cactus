@@ -515,6 +515,17 @@ int cactus_graph_max(cactus_graph_t graph, cactus_node_t x, int32_t axis, cactus
     }
 }
 
+int cactus_graph_cumsum(cactus_graph_t graph, cactus_node_t x, int32_t axis, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_cumsum");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.cumsum(static_cast<size_t>(x), axis));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
 int cactus_graph_concat(cactus_graph_t graph, cactus_node_t a, cactus_node_t b, int32_t axis, cactus_node_t* out) {
     if (!graph || !out) {
         last_error_message = "Invalid args to cactus_graph_concat";

@@ -213,6 +213,29 @@ size_t CactusGraph::variance(size_t input, int axis) { return reduction_op(OpTyp
 size_t CactusGraph::min(size_t input, int axis) { return reduction_op(OpType::MIN, input, axis); }
 size_t CactusGraph::max(size_t input, int axis) { return reduction_op(OpType::MAX, input, axis); }
 
+size_t CactusGraph::cumsum(size_t input, int axis) {
+    const auto& buf = get_output_buffer(input);
+    const int rank = static_cast<int>(buf.shape.size());
+    if (rank == 0) {
+        throw std::runtime_error("cumsum requires a tensor with rank >= 1");
+    }
+
+    int actual_axis = axis;
+    if (actual_axis < 0) {
+        actual_axis += rank;
+    }
+    if (actual_axis < 0 || actual_axis >= rank) {
+        throw std::runtime_error("cumsum axis out of bounds");
+    }
+
+    return add_node(
+        OpType::CUMSUM,
+        {input},
+        buf.shape,
+        {.axis = actual_axis, .output_precision = buf.precision}
+    );
+}
+
 size_t CactusGraph::rms_norm(size_t input, size_t weight, float epsilon) {
     OpParams params{.epsilon = epsilon};
     return add_node(OpType::RMS_NORM, {input, weight}, {}, params);
