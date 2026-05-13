@@ -752,7 +752,6 @@ namespace GraphFile {
         size_t group_size() const { return group_size_; }
         size_t num_groups() const { return num_groups_; }
         const void* scales_data() const;
-        bool is_interleaved() const { return is_interleaved_; }
         bool is_orthogonal_rotation() const { return is_orthogonal_rotation_; }
         size_t original_N() const { return original_N_; }
         void* data();
@@ -773,7 +772,6 @@ namespace GraphFile {
         size_t scales_offset_ = 0;
         size_t scales_bytes_ = 0;
         uint32_t alignment_ = 32;
-        bool is_interleaved_ = false;
         bool is_orthogonal_rotation_ = false;
         size_t original_N_ = 0;
 

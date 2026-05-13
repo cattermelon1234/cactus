@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.graph import Graph, Tensor
+from cactus import Graph, Tensor
 
 
 class TestGraphElementwise(unittest.TestCase):

@@ -202,14 +202,16 @@ struct Config {
 
     uint32_t altup_num_inputs = 4;
     uint32_t laurel_rank = 64;
-    uint32_t hidden_size_per_layer_input = 256;
-    uint32_t num_kv_shared_layers = 0;
-    uint32_t sliding_window = 512;
-    float rope_local_base_freq = 10000.0f;
-    float final_logit_softcapping = 0.0f;
-    float global_partial_rotary_factor = 1.0f;
+    static constexpr uint32_t UNSET_U32 = UINT32_MAX;
+    static constexpr float UNSET_F32 = -1e30f;
+    uint32_t hidden_size_per_layer_input = UNSET_U32;
+    uint32_t num_kv_shared_layers = UNSET_U32;
+    uint32_t sliding_window = UNSET_U32;
+    float rope_local_base_freq = UNSET_F32;
+    float final_logit_softcapping = UNSET_F32;
+    float global_partial_rotary_factor = UNSET_F32;
     uint32_t expert_intermediate_size = 0;
-    uint32_t global_head_dim = 0;
+    uint32_t global_head_dim = UNSET_U32;
     uint32_t num_global_kv_heads = 0;
     bool attention_k_eq_v = false;
     bool enable_moe_block = false;

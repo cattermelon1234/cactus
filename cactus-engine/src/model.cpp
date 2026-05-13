@@ -829,6 +829,24 @@ bool Config::from_json(const std::string& config_path) {
         default_top_k = 20;
     }
 
+    if (model_type == ModelType::GEMMA4) {
+        auto missing_u32 = [](uint32_t v) { return v == UNSET_U32; };
+        auto missing_f32 = [](float v) { return v == UNSET_F32; };
+        std::string missing;
+        if (missing_u32(hidden_size_per_layer_input)) missing += " hidden_size_per_layer_input";
+        if (missing_u32(num_kv_shared_layers)) missing += " num_kv_shared_layers";
+        if (missing_u32(sliding_window)) missing += " sliding_window";
+        if (missing_u32(global_head_dim)) missing += " global_head_dim";
+        if (missing_f32(rope_local_base_freq)) missing += " rope_local_base_freq";
+        if (missing_f32(final_logit_softcapping)) missing += " final_logit_softcapping";
+        if (missing_f32(global_partial_rotary_factor)) missing += " global_partial_rotary_factor";
+        if (layer_types.empty()) missing += " layer_types";
+        if (!missing.empty()) {
+            CACTUS_LOG_ERROR("config", "Gemma4 config missing required fields:" << missing);
+            return false;
+        }
+    }
+
     return true;
 }
 

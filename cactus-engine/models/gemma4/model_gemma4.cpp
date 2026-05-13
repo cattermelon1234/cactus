@@ -15,7 +15,8 @@ Gemma4Model::Gemma4Model(const Config& config) : Model(config) {
 }
 
 bool Gemma4Model::is_global_layer(uint32_t idx) const {
-    return config_.layer_types[idx] == "global";
+    return idx < config_.layer_types.size() &&
+           (config_.layer_types[idx] == "global" || config_.layer_types[idx] == "full_attention");
 }
 
 std::vector<size_t> Gemma4Model::get_kv_layer_dims() const {

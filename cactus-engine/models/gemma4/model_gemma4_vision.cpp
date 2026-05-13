@@ -126,7 +126,14 @@ void Gemma4VisionModel::load_weights_to_graph(CactusGraph* gb) {
     vision_v_norm_ones_node_ = gb->input({vision_head_dim}, Precision::FP16);
     gb->set_external_input(vision_v_norm_ones_node_, vision_v_norm_ones_.data(), Precision::FP16);
 
-    vision_weights_.post_proj_norm = gb->mmap_weights(resolve("embed_vision_post_proj_norm.weights"));
+    std::string post_proj_norm_path = resolve("embed_vision_post_proj_norm.weights");
+    if (std::filesystem::exists(post_proj_norm_path)) {
+        vision_weights_.post_proj_norm = gb->mmap_weights(post_proj_norm_path);
+    } else {
+        post_proj_norm_ones_.assign(config_.hidden_dim, static_cast<__fp16>(1.0f));
+        vision_weights_.post_proj_norm = gb->input({config_.hidden_dim}, Precision::FP16);
+        gb->set_external_input(vision_weights_.post_proj_norm, post_proj_norm_ones_.data(), Precision::FP16);
+    }
 
     output_weight_node_id_ = 0;
 }

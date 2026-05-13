@@ -194,6 +194,7 @@ private:
 
     std::vector<__fp16> vision_v_norm_ones_;
     size_t vision_v_norm_ones_node_ = 0;
+    std::vector<__fp16> post_proj_norm_ones_;
 
     std::unique_ptr<npu::NPUEncoder> npu_encoder_;
     bool use_npu_encoder_ = false;
