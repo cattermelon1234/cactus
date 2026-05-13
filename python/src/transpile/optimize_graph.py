@@ -491,6 +491,8 @@ def normalize_gemma4_decoder_attention_semantics(graph: IRGraph) -> bool:
         return False
 
     changed = False
+    if _assign_gemma4_decoder_attention_hints_from_graph_meta(graph):
+        changed = True
     sliding_window = _graph_sliding_window(graph)
     for node_id in list(graph.order):
         node = graph.nodes.get(node_id)
@@ -507,8 +509,7 @@ def normalize_gemma4_decoder_attention_semantics(graph: IRGraph) -> bool:
 
             if mask_input_index is not None:
                 mask_value_id = node.inputs[mask_input_index]
-                mask_value = graph.values.get(mask_value_id)
-                if mask_value is not None and mask_value.dtype in (None, "bool"):
+                if _gemma4_can_elide_attention_mask(graph, mask_value_id):
                     del node.inputs[mask_input_index]
                     node.meta["gemma4_full_mask_elided"] = True
                     changed = True
@@ -556,8 +557,7 @@ def normalize_gemma4_decoder_attention_semantics(graph: IRGraph) -> bool:
 
         if mask_input_index is not None:
             mask_value_id = node.inputs[mask_input_index]
-            mask_value = graph.values.get(mask_value_id)
-            if mask_value is not None and mask_value.dtype in (None, "bool"):
+            if _gemma4_can_elide_attention_mask(graph, mask_value_id):
                 mask_info = _extract_sliding_window_mask(graph, mask_value_id)
                 mask_input_name = _graph_input_name(graph, mask_value_id)
                 del node.inputs[mask_input_index]
@@ -592,6 +592,78 @@ def normalize_gemma4_decoder_attention_semantics(graph: IRGraph) -> bool:
     if changed:
         rebuild_graph(graph)
     return changed
+
+
+def _assign_gemma4_decoder_attention_hints_from_graph_meta(graph: IRGraph) -> bool:
+    component = str(graph.meta.get("component", "") or "").strip().lower()
+    if component != "decoder":
+        return False
+
+    layer_types = _graph_layer_types(graph)
+    if not layer_types:
+        return False
+
+    attention_nodes: list[IRNode] = []
+    for node_id in graph.order:
+        node = graph.nodes.get(node_id)
+        if node is None or node.op not in {"attention", "scaled_dot_product_attention", "attention_block"}:
+            continue
+        attention_nodes.append(node)
+
+    if len(attention_nodes) != len(layer_types):
+        return False
+
+    changed = False
+    for layer_index, (node, layer_type) in enumerate(zip(attention_nodes, layer_types, strict=True)):
+        if "attention_layer_type" not in node.meta:
+            node.meta["attention_layer_type"] = str(layer_type)
+            changed = True
+        if "attention_layer_index" not in node.meta:
+            node.meta["attention_layer_index"] = int(layer_index)
+            changed = True
+    return changed
+
+
+def _gemma4_can_elide_attention_mask(
+    graph: IRGraph,
+    value_id: str,
+    *,
+    _visited: set[str] | None = None,
+) -> bool:
+    mask_value = graph.values.get(value_id)
+    if mask_value is None:
+        return False
+    if mask_value.dtype in (None, "bool"):
+        return True
+
+    input_name = _graph_input_name(graph, value_id)
+    if isinstance(input_name, str) and "attention_mask" in input_name:
+        return True
+
+    if _visited is None:
+        _visited = set()
+    if value_id in _visited:
+        return False
+    _visited.add(value_id)
+
+    node = producer(graph, strip_passthrough(graph, value_id))
+    if node is None:
+        return False
+    if node.op in {
+        "logical_and",
+        "logical_or",
+        "scalar_equal",
+        "scalar_not_equal",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal",
+        "aten.__and__.Tensor",
+    }:
+        return True
+    if node.op in {"precision_cast", "view", "expand", "permute", "slice", "index", "where"}:
+        return any(_gemma4_can_elide_attention_mask(graph, input_id, _visited=_visited) for input_id in node.inputs)
+    return False
 
 
 def fuse_self_attention_blocks(graph: IRGraph) -> bool:

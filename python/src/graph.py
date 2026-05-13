@@ -9,7 +9,11 @@ class Graph:
     INT8 = 0
     FP16 = 1
     FP32 = 2
-    INT4 = 3
+    CQ1 = 3
+    CQ2 = 4
+    CQ3 = 5
+    CQ4 = 6
+    INT4 = CQ1
     CPU = 0
     NPU = 1
     ACT_SILU = 0
@@ -1038,7 +1042,7 @@ class Graph:
             arr = np.ascontiguousarray(arr, dtype=np.float16)
         elif precision == self.FP32:
             arr = np.ascontiguousarray(arr, dtype=np.float32)
-        elif precision == self.INT4:
+        elif precision in (self.INT4, self.CQ2, self.CQ3, self.CQ4):
             arr = np.ascontiguousarray(arr, dtype=np.uint8)
         else:
             raise RuntimeError("unsupported precision")
@@ -1238,7 +1242,7 @@ class Tensor:
             arr = np.ctypeslib.as_array((ctypes.c_float * num_elements).from_address(out_ptr.value))
         elif precision == Graph.INT8:
             arr = np.ctypeslib.as_array((ctypes.c_int8 * num_elements).from_address(out_ptr.value))
-        elif precision == Graph.INT4:
+        elif precision in (Graph.INT4, Graph.CQ2, Graph.CQ3, Graph.CQ4):
             arr = np.ctypeslib.as_array((ctypes.c_uint8 * int(info.byte_size)).from_address(out_ptr.value))
             return arr.copy()
         else:

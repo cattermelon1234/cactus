@@ -297,10 +297,19 @@ void CactusGraph::execute(const std::string& profile_file) {
     BufferPool& pool = buffer_pool_;
     const size_t n = nodes_.size();
 
+    auto get_env_int = [](const char* name, int fallback) -> int {
+        const char* val = std::getenv(name);
+        return val ? std::atoi(val) : fallback;
+    };
+
+    bool trace_execution = get_env_int("CACTUS_TRACE_EXECUTE", 0) != 0;
     bool need_debug = !profile_file.empty();
     if (!need_debug) {
         static const bool env_debug = check_debug_env();
         need_debug = env_debug;
+    }
+    if (trace_execution) {
+        need_debug = true;
     }
 
     if (!need_debug) {
@@ -330,11 +339,6 @@ void CactusGraph::execute(const std::string& profile_file) {
             }
         }
     }
-
-    auto get_env_int = [](const char* name, int fallback) -> int {
-        const char* val = std::getenv(name);
-        return val ? std::atoi(val) : fallback;
-    };
 
     auto get_env_str = [](const char* name) -> std::string {
         const char* val = std::getenv(name);
@@ -390,11 +394,28 @@ void CactusGraph::execute(const std::string& profile_file) {
     for (size_t node_idx = 0; node_idx < n; ++node_idx) {
         auto& node = nodes_[node_idx];
 
-        if (node->op_type != OpType::INPUT) {
-            node->output_buffer.allocate_from_pool(pool);
+        if (node->op_type == OpType::INPUT) {
+            continue;
         }
 
-        if (enable_profiling && node->op_type != OpType::INPUT) {
+        node->output_buffer.allocate_from_pool(pool);
+
+        if (trace_execution) {
+            std::cerr << "[cactus:execute] begin idx=" << node_idx
+                      << " id=" << node->id
+                      << " op=" << get_op_name(node->op_type)
+                      << " shape=[";
+            for (size_t dim_idx = 0; dim_idx < node->output_buffer.shape.size(); ++dim_idx) {
+                if (dim_idx > 0) std::cerr << ",";
+                std::cerr << node->output_buffer.shape[dim_idx];
+            }
+            std::cerr << "]" << std::endl;
+        }
+
+        if (node->op_type == OpType::KV_CACHE_STATE || node->op_type == OpType::CONV_CACHE_STATE) {
+            dispatch_node(*node, nodes_, node_index_map_);
+            populated_node_ids_.insert(node->id);
+        } else if (enable_profiling) {
             auto start = std::chrono::high_resolution_clock::now();
             dispatch_node(*node, nodes_, node_index_map_);
             if (node->op_type == OpType::PERSISTENT) {
@@ -418,6 +439,13 @@ void CactusGraph::execute(const std::string& profile_file) {
             if (node->op_type == OpType::PERSISTENT) {
                 populated_node_ids_.insert(node->id);
             }
+        }
+
+        if (trace_execution) {
+            std::cerr << "[cactus:execute] done idx=" << node_idx
+                      << " id=" << node->id
+                      << " op=" << get_op_name(node->op_type)
+                      << std::endl;
         }
     }
 

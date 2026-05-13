@@ -69,7 +69,7 @@ class _OpenedTensor:
 
 def ensure_binding_compatible(binding: WeightBinding, source_tensor: object | None = None) -> WeightBinding:
     binding = ensure_embedding_binding_compatible(binding)
-    return _ensure_gemma4_weight_binding_compatible(binding, source_tensor=source_tensor)
+    return _ensure_legacy_int4_weight_binding_compatible(binding, source_tensor=source_tensor)
 
 
 def ensure_embedding_binding_compatible(binding: WeightBinding) -> WeightBinding:
@@ -107,71 +107,73 @@ def _embedding_cache_config(filename: str, *, source_name: str) -> dict[str, obj
     return {"bits": 4, "rotation": "orthogonal"}
 
 
-def _ensure_gemma4_weight_binding_compatible(
+def _ensure_legacy_int4_weight_binding_compatible(
     binding: WeightBinding,
     *,
     source_tensor: object | None,
 ) -> WeightBinding:
-    source_name = str(binding.source_name or "")
     source_path = Path(binding.path).expanduser().resolve()
-    if not _is_gemma4_legacy_int4_binding(binding, source_path=source_path):
-        return binding
-    if source_tensor is None:
-        return binding
-
     opened = _open_cactus_tensor_file(source_path)
-    if opened.precision != _INT4 or len(opened.shape) != 2:
+    if not _is_legacy_packed_int4_tensor(opened):
         return binding
 
     compat_path = source_path.with_name(source_path.stem + ".cq4.weights")
+    if compat_path.exists():
+        if _can_materialize_compat_weight(source_tensor):
+            _materialize_source_cq_weight(
+                source_tensor,
+                compat_path,
+                bits=4,
+                rotation="hadamard",
+                scale_factor=_compat_weight_scale_factor(source_path),
+                source_mtime_ns=source_path.stat().st_mtime_ns,
+            )
+        return WeightBinding(path=str(compat_path), kind=binding.kind, source_name=binding.source_name)
+
+    if not _can_materialize_compat_weight(source_tensor):
+        raise RuntimeError(
+            "legacy packed INT4 weight is not directly executable in the v2 runtime and is "
+            f"missing a CQ companion file: {source_path.name}. "
+            "Rerun `cactus transpile ...` so the transpiler can materialize the CQ weights, "
+            "or generate them through `cq_convert` first."
+        )
+
     _materialize_source_cq_weight(
         source_tensor,
         compat_path,
         bits=4,
         rotation="hadamard",
-        scale_factor=gemma4_scale_factor(source_path.name),
+        scale_factor=_compat_weight_scale_factor(source_path),
         source_mtime_ns=source_path.stat().st_mtime_ns,
     )
     return WeightBinding(path=str(compat_path), kind=binding.kind, source_name=binding.source_name)
 
 
-def _is_gemma4_legacy_int4_binding(binding: WeightBinding, *, source_path: Path) -> bool:
-    if binding.kind != "weight":
+def _is_legacy_packed_int4_tensor(opened: _OpenedTensor) -> bool:
+    if opened.precision != _INT4:
         return False
-    source_name = _normalize_gemma4_source_name(str(binding.source_name or ""))
-    gemma4_like_source = (
-        source_name.startswith("model.language_model.")
-        or source_name.startswith("model.embed_vision.")
-        or source_name.startswith("model.embed_audio.")
-        or source_name.startswith("model.vision_tower.")
-        or source_name.startswith("model.audio_tower.")
-    )
-    if not gemma4_like_source:
+    if len(opened.shape) != 2 or opened.scales is None or opened.group_size <= 0:
         return False
+    if not opened.is_interleaved:
+        return False
+    return True
+
+
+def _can_materialize_compat_weight(source_tensor: object | None) -> bool:
+    if source_tensor is None:
+        return False
+    if isinstance(source_tensor, (str, bytes, bytearray, Path)):
+        return False
+    if np.isscalar(source_tensor):
+        return False
+    return hasattr(source_tensor, "shape")
+
+
+def _compat_weight_scale_factor(source_path: Path) -> float:
     parent_name = source_path.parent.name.lower()
-    if "gemma-4" not in parent_name and "gemma4" not in parent_name:
-        return False
-    return source_path.suffix == ".weights" and not source_path.name.endswith(".cq4.weights")
-
-
-def _normalize_gemma4_source_name(source_name: str) -> str:
-    normalized = source_name.strip()
-    while True:
-        next_value = normalized
-        for prefix in ("module.", "adapter.", "model.model."):
-            if next_value.startswith(prefix):
-                next_value = next_value[len(prefix) :]
-        if next_value == normalized:
-            break
-        normalized = next_value
-    if normalized.startswith("language_model."):
-        return f"model.{normalized}"
-    if normalized.startswith("vision_tower.") or normalized.startswith("audio_tower."):
-        return f"model.{normalized}"
-    if normalized.startswith("embed_vision.") or normalized.startswith("embed_audio."):
-        return f"model.{normalized}"
-    return normalized
-
+    if "gemma-4" in parent_name or "gemma4" in parent_name:
+        return gemma4_scale_factor(source_path.name)
+    return 1.0
 
 def _cleanup_legacy_fp16_cache(source_path: Path) -> None:
     legacy = source_path.with_name(source_path.stem + ".fp16.weights")

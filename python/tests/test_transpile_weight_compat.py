@@ -78,3 +78,22 @@ def test_gemma4_per_layer_projection_binding_upgrades_legacy_int4(tmp_path: Path
     assert opened.precision == 6
     assert opened.shape == (8, 128)
     assert opened.scales is not None
+
+
+def test_decoder_binding_prefers_existing_cq4_companion(tmp_path: Path) -> None:
+    rng = np.random.default_rng(4321)
+    source = tmp_path / "layer_0_attn_q.weights"
+    tensor = rng.standard_normal((8, 128), dtype=np.float32)
+    save_tensor_with_header(tensor, source, precision="INT4", model_type="generic")
+
+    companion = tmp_path / "layer_0_attn_q.cq4.weights"
+    save_tensor_with_header(tensor, companion, precision="FP16", model_type="generic")
+
+    binding = WeightBinding(
+        path=str(source),
+        kind="weight",
+        source_name="module.backbone.layers.0.self_attn.q_proj.weight",
+    )
+    compat = ensure_binding_compatible(binding, source_tensor=0)
+
+    assert compat.path == str(companion)

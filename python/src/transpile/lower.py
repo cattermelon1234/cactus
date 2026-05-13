@@ -5,6 +5,7 @@ import math
 import os
 from typing import Any
 
+import numpy as np
 import torch
 
 from src.transpile.runtime_compat import Graph
@@ -54,6 +55,16 @@ class BroadcastAlias:
     tensor: Tensor
     logical_shape: tuple[int, ...]
     kind: str
+
+
+def _is_quantized_runtime_dtype(dtype: int) -> bool:
+    return int(dtype) in {
+        int(Graph.INT8),
+        int(getattr(Graph, "CQ1", 3)),
+        int(getattr(Graph, "CQ2", 4)),
+        int(getattr(Graph, "CQ3", 5)),
+        int(getattr(Graph, "CQ4", 6)),
+    }
 
 
 def transpile_captured(captured: CapturedModel) -> TranspiledGraph:
@@ -237,7 +248,7 @@ def _matmul_with_quantized_rhs_legalization(
     pretransposed_rhs: bool = False,
     output_dtype: int | None = None,
 ) -> Tensor:
-    if rhs.dtype in (Graph.INT8, Graph.INT4) and lhs.dtype == Graph.FP32:
+    if _is_quantized_runtime_dtype(rhs.dtype) and lhs.dtype == Graph.FP32:
         lhs = g.precision_cast(lhs, Graph.FP16)
     return g.matmul(lhs, rhs, pretransposed_rhs=pretransposed_rhs, output_dtype=output_dtype)
 
@@ -250,7 +261,7 @@ def _matmul_output_dtype(
 ) -> int | None:
     if output_dtype != Graph.FP16:
         return output_dtype
-    if rhs.dtype in (Graph.INT8, Graph.INT4):
+    if _is_quantized_runtime_dtype(rhs.dtype):
         return output_dtype
     if lhs.dtype == Graph.FP32 or rhs.dtype == Graph.FP32:
         return Graph.FP32
@@ -584,7 +595,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
                 and output_dtype == Graph.FP16
             ):
                 matmul_output_dtype = Graph.FP32
-            elif bias.dtype == Graph.FP32 and weight.dtype not in (Graph.INT8, Graph.INT4):
+            elif bias.dtype == Graph.FP32 and not _is_quantized_runtime_dtype(weight.dtype):
                 matmul_output_dtype = Graph.FP32
         out = _matmul_with_quantized_rhs_legalization(
             g,
@@ -612,7 +623,7 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         matmul_output_dtype = _matmul_output_dtype(lhs, rhs, output_dtype=output_dtype)
         if lhs.dtype == Graph.FP16 and rhs.dtype == Graph.FP16 and bias.dtype == Graph.FP16 and output_dtype == Graph.FP16:
             matmul_output_dtype = Graph.FP32
-        elif bias.dtype == Graph.FP32 and rhs.dtype not in (Graph.INT8, Graph.INT4):
+        elif bias.dtype == Graph.FP32 and not _is_quantized_runtime_dtype(rhs.dtype):
             matmul_output_dtype = Graph.FP32
         out = _matmul_with_quantized_rhs_legalization(g, lhs, rhs, output_dtype=matmul_output_dtype)
         out = _trim_padded_last_dim(g, out, output_value.shape if output_value is not None else None)
@@ -679,6 +690,8 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         return [h_new, c_new]
 
     if op in {"scaled_dot_product_attention", "attention"}:
+        if _should_lower_gemma4_decoder_attention_without_kernel(ir, node):
+            return [_lower_gemma4_decoder_attention_without_kernel(g, ir, env, node)]
         mask = node.attrs.get("mask")
         mask_tensor: Tensor | None = None
         additive_mask = bool(node.attrs.get("additive_mask", False))
@@ -2296,6 +2309,100 @@ def _lower_static_batched_matmul(
         return g.cat(pieces, axis=dim)
 
     return _build(0, ())
+
+
+def _should_lower_gemma4_decoder_attention_without_kernel(ir: IRGraph, node: IRNode) -> bool:
+    family = str(ir.meta.get("adapter_family") or ir.meta.get("family") or "").strip().lower()
+    component = str(ir.meta.get("component", "") or "").strip().lower()
+    if family != "gemma4" or component != "decoder":
+        return False
+    return node.op in {"attention", "scaled_dot_product_attention"}
+
+
+def _lower_gemma4_decoder_attention_without_kernel(
+    g: Graph,
+    ir: IRGraph,
+    env: dict[str, Any],
+    node: IRNode,
+) -> Tensor:
+    query = _attention_tensor(env, node.inputs[0])
+    key = _attention_tensor(env, node.inputs[1])
+    value = _attention_tensor(env, node.inputs[2])
+
+    key_transposed = g.permute(key, (0, 1, 3, 2))
+    scores = _lower_static_batched_matmul(g, query, key_transposed, output_dtype=Graph.FP16)
+    if scores is None:
+        raise NotImplementedError("Gemma4 decoder attention requires static batched matmul support")
+
+    scale = float(node.attrs.get("scale", 1.0))
+    if scale != 1.0:
+        scores = g.scalar_multiply(_ensure_scalar_math_tensor(g, scores), scale)
+
+    additive_mask: Tensor | None = None
+    if len(node.inputs) > 3:
+        mask_tensor = _ensure_fp16_tensor(g, _tensor(env, node.inputs[3]))
+        if bool(node.attrs.get("additive_mask", False)):
+            additive_mask = mask_tensor
+        else:
+            additive_mask = _lower_binary_op(g, mask_tensor, 1.0, "subtract")
+            additive_mask = g.scalar_multiply(_ensure_scalar_math_tensor(g, additive_mask), 1.0e4)
+    else:
+        query_shape = tuple(int(dim) for dim in query.shape)
+        key_shape = tuple(int(dim) for dim in key.shape)
+        if len(query_shape) >= 4 and len(key_shape) >= 4:
+            query_seq = int(query_shape[-2])
+            key_seq = int(key_shape[-2])
+            additive_mask = _materialize_gemma4_attention_mask(
+                g,
+                query_seq=query_seq,
+                key_seq=key_seq,
+                is_causal=bool(node.attrs.get("is_causal", False)),
+                window_size=int(node.attrs.get("window_size", 0)),
+                dtype=torch.float16,
+            )
+
+    if additive_mask is not None:
+        scores = _lower_binary_op(g, scores, additive_mask, "add")
+
+    probs = g.softmax(scores, axis=-1)
+    probs = _ensure_tensor_dtype(g, probs, value.dtype)
+    out = _lower_static_batched_matmul(g, probs, value, output_dtype=value.dtype)
+    if out is None:
+        raise NotImplementedError("Gemma4 decoder attention output requires static batched matmul support")
+
+    output_value = ir.values.get(node.outputs[0])
+    output_dtype = _map_ir_dtype(output_value.dtype) if output_value is not None and output_value.dtype is not None else out.dtype
+    if out.dtype != output_dtype:
+        out = g.precision_cast(out, output_dtype)
+    return out
+
+
+def _materialize_gemma4_attention_mask(
+    g: Graph,
+    *,
+    query_seq: int,
+    key_seq: int,
+    is_causal: bool,
+    window_size: int,
+    dtype: torch.dtype,
+) -> Tensor | None:
+    if query_seq <= 0 or key_seq <= 0:
+        return None
+    if not is_causal and window_size <= 0:
+        return None
+
+    q_index = np.arange(query_seq, dtype=np.int32)[:, None]
+    k_index = np.arange(key_seq, dtype=np.int32)[None, :]
+    allowed = np.ones((query_seq, key_seq), dtype=np.bool_)
+
+    if is_causal:
+        allowed &= k_index <= q_index
+    if window_size > 0 and window_size < key_seq:
+        allowed &= k_index >= (q_index - (window_size - 1))
+
+    mask = np.where(allowed, 0.0, -1.0e4).astype(np.float16)
+    tensor = torch.from_numpy(mask.reshape(1, 1, query_seq, key_seq)).to(dtype=dtype)
+    return _materialize_constant_tensor(g, tensor)
 
 
 def _legalize_matmul_inputs(

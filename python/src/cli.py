@@ -62,7 +62,11 @@ def _python_runtime_library_path() -> Path:
     return PROJECT_ROOT / "cactus" / "build" / f"libcactus{suffix}"
 
 
-def _ensure_python_runtime_library() -> Path:
+def _static_cactus_library_path() -> Path:
+    return PROJECT_ROOT / "cactus" / "build" / "libcactus.a"
+
+
+def _build_static_cactus_library() -> Path:
     build_script = PROJECT_ROOT / "cactus" / "build.sh"
     if not build_script.exists():
         raise RuntimeError(
@@ -70,14 +74,118 @@ def _ensure_python_runtime_library() -> Path:
             f"Expected: {build_script}"
         )
 
+    build = subprocess.run([str(build_script)], cwd=PROJECT_ROOT / "cactus")
+    if build.returncode != 0:
+        raise RuntimeError("Failed to build the Cactus static runtime")
+
+    static_library_path = _static_cactus_library_path()
+    if not static_library_path.exists():
+        raise RuntimeError(
+            "The Cactus build completed, but the static library was not produced.\n"
+            f"Expected: {static_library_path}"
+        )
+    return static_library_path
+
+
+def _public_cactus_api_symbols(static_library_path: Path) -> list[str]:
+    if platform.system() == "Darwin":
+        command = ["nm", "-gU", str(static_library_path)]
+    else:
+        command = ["nm", "-g", "--defined-only", str(static_library_path)]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to inspect the Cactus static runtime symbols.\n"
+            f"Command: {' '.join(command)}\n"
+            f"{result.stderr.strip()}"
+        )
+
+    symbols: list[str] = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        symbol = parts[-1].strip()
+        normalized = symbol[1:] if symbol.startswith("_") else symbol
+        if not normalized.startswith("cactus_"):
+            continue
+        if symbol not in symbols:
+            symbols.append(symbol)
+    if not symbols:
+        raise RuntimeError(f"Could not find any public cactus_* symbols in {static_library_path}")
+    return symbols
+
+
+def _link_python_runtime_library(*, static_library_path: Path, library_path: Path) -> None:
+    build_dir = library_path.parent
+    build_dir.mkdir(parents=True, exist_ok=True)
+    if library_path.exists():
+        library_path.unlink()
+
+    exported_symbols = _public_cactus_api_symbols(static_library_path)
+    system = platform.system()
+    if system == "Darwin":
+        compiler = shutil.which("clang++") or shutil.which("c++")
+        if not compiler:
+            raise RuntimeError("Failed to find a C++ compiler for linking libcactus.dylib")
+
+        command = [
+            compiler,
+            "-dynamiclib",
+            "-o",
+            str(library_path),
+            *[f"-Wl,-u,{symbol}" for symbol in exported_symbols],
+            str(static_library_path),
+            "-Wl,-install_name,@rpath/libcactus.dylib",
+            "-lcurl",
+            "-framework",
+            "Accelerate",
+            "-framework",
+            "CoreML",
+            "-framework",
+            "Foundation",
+            "-framework",
+            "Security",
+            "-framework",
+            "SystemConfiguration",
+            "-framework",
+            "CFNetwork",
+        ]
+    else:
+        compiler = shutil.which("g++") or shutil.which("c++")
+        if not compiler:
+            raise RuntimeError("Failed to find a C++ compiler for linking libcactus.so")
+
+        command = [
+            compiler,
+            "-shared",
+            "-o",
+            str(library_path),
+            *[f"-Wl,--undefined={symbol}" for symbol in exported_symbols],
+            str(static_library_path),
+            "-lcurl",
+            "-pthread",
+            "-ldl",
+            "-lm",
+        ]
+
+    result = subprocess.run(command, cwd=build_dir)
+    if result.returncode != 0 or not library_path.exists():
+        raise RuntimeError(
+            "Failed to link the Cactus shared runtime.\n"
+            f"Expected: {library_path}"
+        )
+
+
+def _ensure_python_runtime_library() -> Path:
     library_path = _python_runtime_library_path()
     if library_path.exists():
         return library_path
 
     print_color(YELLOW, "Building Cactus shared runtime for transpiler...")
-    build = subprocess.run([str(build_script)], cwd=PROJECT_ROOT / "cactus")
-    if build.returncode != 0:
-        raise RuntimeError("Failed to build the Cactus shared runtime")
+    static_library_path = _build_static_cactus_library()
+    _link_python_runtime_library(static_library_path=static_library_path, library_path=library_path)
     if not library_path.exists():
         raise RuntimeError(
             "The Cactus build completed, but the shared library was not produced.\n"
@@ -1073,25 +1181,10 @@ def cmd_build_python(args):
         print("  Ubuntu: sudo apt-get install cmake")
         return 1
 
-    cactus_dir = PROJECT_ROOT / "cactus"
-    build_script = cactus_dir / "build.sh"
-    if not build_script.exists():
-        print_color(RED, f"Error: build.sh not found at {build_script}")
-        return 1
-
-    result = run_command(str(build_script), cwd=cactus_dir, check=False)
-    if result.returncode != 0:
-        print_color(RED, "Build failed")
-        return 1
-
-    if platform.system() == "Darwin":
-        lib_name = "libcactus.dylib"
-    else:
-        lib_name = "libcactus.so"
-
-    lib_path = cactus_dir / "build" / lib_name
-    if not lib_path.exists():
-        print_color(RED, f"Shared library not found at {lib_path}")
+    try:
+        lib_path = _ensure_python_runtime_library()
+    except Exception as exc:
+        print_color(RED, f"Error: {exc}")
         return 1
 
     print_color(GREEN, "Python build complete!")
@@ -1186,6 +1279,8 @@ def cmd_transpile(args):
         default_weights_dir = get_weights_dir(model_id)
         if default_weights_dir.exists():
             command.extend(["--weights-dir", str(default_weights_dir)])
+    if not getattr(args, "execute_after_transpile", False) and "--skip-execute" not in extra_args:
+        command.append("--skip-execute")
     command.extend(extra_args)
     env = os.environ.copy()
     env["CACTUS_LIB_PATH"] = str(transpile_lib)
@@ -2292,6 +2387,11 @@ def create_parser():
 
     transpile_parser = subparsers.add_parser('transpile', help='Transpile a HuggingFace model into Cactus component graphs')
     transpile_parser.add_argument('model_id', help='HuggingFace model ID to transpile (aliases: gemma4, parakeet, whisper, qwen, lfm)')
+    transpile_parser.add_argument(
+        '--execute-after-transpile',
+        action='store_true',
+        help='Also run the transpiled graph immediately. By default `cactus transpile` saves the bundle and skips execution.',
+    )
 
     run_transpiled_parser = subparsers.add_parser('run-transpiled', help='Run a saved transpiled component bundle')
     run_transpiled_parser.add_argument('bundle_dir',

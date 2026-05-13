@@ -20,6 +20,10 @@ from src.transpile.audio_preprocess import generic_log_mel_features as _generic_
 from src.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
 from src.transpile.audio_preprocess import prepare_cactus_audio_features
 from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from src.transpile.gemma4_runtime import ensure_transformers_supports_gemma4
+from src.transpile.gemma4_runtime import patch_torch_flex_attention_compat
+from src.transpile.gemma4_runtime import patch_transformers_torchvision_probe
+from src.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs
 from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
@@ -40,6 +44,9 @@ _PRECISION_TO_DTYPE = {
     Graph.FP16: np.float16,
     Graph.FP32: np.float32,
     Graph.INT4: np.uint8,
+    getattr(Graph, "CQ2", 4): np.uint8,
+    getattr(Graph, "CQ3", 5): np.uint8,
+    getattr(Graph, "CQ4", 6): np.uint8,
 }
 
 
@@ -176,6 +183,11 @@ def _load_component_graph_from_ir(
     if use_raw_ir:
         canonicalize_exported_graph(ir_graph)
         optimize_graph(ir_graph)
+    else:
+        family = str(ir_graph.meta.get("adapter_family") or ir_graph.meta.get("family") or "").strip().lower()
+        component = str(ir_graph.meta.get("component", "") or component_entry.get("component", "") or "").strip().lower()
+        if family == "gemma4" and component == "decoder":
+            optimize_graph(ir_graph)
     transpiled = transpile_preoptimized_ir(ir_graph)
     return LoadedComponentGraph(
         component=str(component_entry.get("component", "unknown")),
@@ -410,7 +422,7 @@ def _deserialize_saved_ir_constant(
                 weights_dir=weights_dir,
             )
             array = np.load(tensor_path, mmap_mode="r")
-            return torch.from_numpy(np.asarray(array))
+            return torch.from_numpy(np.array(array, copy=True))
 
     if isinstance(serialized, (str, int, float, bool)) or serialized is None:
         return serialized
@@ -622,12 +634,14 @@ def _run_multimodal_causal_lm_bundle(
         if isinstance(stored_audio, str) and stored_audio:
             resolved_audio = str(Path(stored_audio).expanduser().resolve())
 
-    from examples.transpile_hf_model import _patch_torch_flex_attention_compat
-    from examples.transpile_hf_model import _patch_transformers_torchvision_probe
-    from examples.transpile_hf_model import _prepare_gemma4_multimodal_inputs
-
-    _patch_transformers_torchvision_probe()
-    _patch_torch_flex_attention_compat()
+    external_transformers_site_packages = ensure_transformers_supports_gemma4()
+    if external_transformers_site_packages:
+        print(
+            "note=using external transformers install for gemma4 runtime: "
+            f"{external_transformers_site_packages}"
+        )
+    patch_transformers_torchvision_probe()
+    patch_torch_flex_attention_compat()
 
     from transformers import AutoProcessor
 
@@ -640,7 +654,7 @@ def _run_multimodal_causal_lm_bundle(
         local_files_only=Path(model_source).exists(),
         trust_remote_code=True,
     )
-    prepared = _prepare_gemma4_multimodal_inputs(
+    prepared = prepare_gemma4_multimodal_inputs(
         processor,
         prompt=resolved_prompt,
         image_files=resolved_image_files,
