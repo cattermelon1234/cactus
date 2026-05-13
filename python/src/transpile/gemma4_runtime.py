@@ -396,6 +396,107 @@ def _prepare_gemma4_native_image_tensors(
     )
 
 
+def _gemma4_image_soft_token_counts(
+    pixel_position_ids: torch.Tensor,
+    *,
+    pooling_kernel_size: int,
+) -> list[int]:
+    counts: list[int] = []
+    for positions in pixel_position_ids:
+        valid = positions[(positions != -1).any(dim=-1)]
+        if valid.numel() == 0:
+            counts.append(0)
+            continue
+        max_x = int(valid[:, 0].max().item()) + 1
+        max_y = int(valid[:, 1].max().item()) + 1
+        counts.append((max_x // pooling_kernel_size) * (max_y // pooling_kernel_size))
+    return counts
+
+
+def _gemma4_audio_soft_token_count(num_frames: int) -> int:
+    after_stage1 = (int(num_frames) + 1) // 2
+    return (after_stage1 + 1) // 2
+
+
+def _resolve_gemma4_audio_mels(processor: object, default: int = 128) -> int:
+    for child_name in ("feature_extractor", "audio_processor", "audio_feature_extractor"):
+        child = getattr(processor, child_name, None)
+        if child is None:
+            continue
+        for attr_name in ("feature_size", "num_mel_bins", "n_mels", "input_feat_size"):
+            value = getattr(child, attr_name, None)
+            if isinstance(value, int) and value > 0:
+                return int(value)
+    for attr_name in ("feature_size", "num_mel_bins", "n_mels", "input_feat_size"):
+        value = getattr(processor, attr_name, None)
+        if isinstance(value, int) and value > 0:
+            return int(value)
+    return default
+
+
+def _build_gemma4_native_chat_prompt(
+    *,
+    prompt: str,
+    image_soft_token_counts: tuple[int, ...],
+    audio_soft_token_count: int,
+    system_prompt: str = "",
+    enable_thinking_if_supported: bool = False,
+) -> str:
+    result = "<bos>"
+    normalized_system = system_prompt.strip()
+    if enable_thinking_if_supported or normalized_system:
+        result += "<|turn>system\n"
+        if enable_thinking_if_supported:
+            result += "<|think|>"
+        result += normalized_system
+        result += "<turn|>\n"
+
+    result += "<|turn>user\n"
+    for count in image_soft_token_counts:
+        if count > 0:
+            result += "\n\n<|image>"
+            result += "<|image|>" * int(count)
+            result += "<image|>\n\n"
+    result += prompt
+    if audio_soft_token_count > 0:
+        result += "<|audio>"
+        result += "<|audio|>" * int(audio_soft_token_count)
+        result += "<audio|>"
+    result += "<turn|>\n"
+    result += "<|turn>model\n"
+    return result
+
+
+def _tokenize_gemma4_native_prompt(
+    processor: object,
+    prompt: str,
+    *,
+    image_token: str | None,
+    audio_token: str | None,
+) -> dict[str, torch.Tensor]:
+    tokenizer = getattr(processor, "tokenizer", processor)
+    if not callable(tokenizer):
+        raise RuntimeError("Gemma4 native prompt path requires a tokenizer")
+    batch = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+    input_ids = batch["input_ids"]
+    if "attention_mask" not in batch:
+        batch["attention_mask"] = torch.ones_like(input_ids)
+
+    token_type_ids = torch.zeros_like(input_ids)
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert):
+        if image_token:
+            image_id = convert(image_token)
+            if isinstance(image_id, int) and image_id >= 0:
+                token_type_ids = torch.where(input_ids == image_id, torch.ones_like(token_type_ids), token_type_ids)
+        if audio_token:
+            audio_id = convert(audio_token)
+            if isinstance(audio_id, int) and audio_id >= 0:
+                token_type_ids = torch.where(input_ids == audio_id, torch.full_like(token_type_ids, 2), token_type_ids)
+    batch["token_type_ids"] = token_type_ids
+    return {key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}
+
+
 def prepare_gemma4_multimodal_inputs(
     processor: object | None,
     *,
@@ -431,30 +532,12 @@ def prepare_gemma4_multimodal_inputs(
     normalized_prompt = processor_prompt
     if use_gemma4_chat_template:
         normalized_prompt = prompt.strip()
-        processor_prompt = _build_gemma4_chat_prompt(
-            prompt=normalized_prompt,
-            image_token=image_token if isinstance(image_token, str) else None,
-            num_images=len(images),
-            audio_token=audio_token if isinstance(audio_token, str) else None,
-            num_audio_segments=len(audio_waveforms),
-            system_prompt=system_prompt,
-            enable_thinking_if_supported=enable_thinking_if_supported,
-        )
-
-    batch = processor(
-        text=processor_prompt,
-        images=images or None,
-        audio=audio_waveforms or None,
-        return_tensors="pt",
-    )
-    if use_gemma4_chat_template:
-        _gemma4_split_cactus_newline_token_merges(batch)
         native_image_tensors = _prepare_gemma4_native_image_tensors(processor, image_files)
-        if native_image_tensors is not None:
-            batch["pixel_values"], batch["pixel_position_ids"] = native_image_tensors
-        if audio_file and isinstance(batch.get("input_features"), torch.Tensor):
-            feature_tensor = batch["input_features"]
-            expected_mels = int(feature_tensor.shape[-1])
+        native_audio: torch.Tensor | None = None
+        native_audio_mask: torch.Tensor | None = None
+        native_audio_frames: int | None = None
+        if audio_file:
+            expected_mels = _resolve_gemma4_audio_mels(processor)
             try:
                 native_audio, native_audio_mask, native_audio_frames = prepare_native_gemma4_audio_features(
                     audio_file,
@@ -463,22 +546,65 @@ def prepare_gemma4_multimodal_inputs(
                 )
             except Exception as exc:
                 print(f"note=falling back to processor gemma4 audio features: {exc}")
-                batch["input_features"] = feature_tensor.to(dtype=torch_dtype)
-                fallback_mask = batch.get("input_features_mask")
-                if isinstance(fallback_mask, torch.Tensor):
-                    batch["input_features_mask"] = fallback_mask.to(dtype=torch.bool)
-                    native_audio_frames = int(fallback_mask.to(dtype=torch.int32).sum().item())
-                else:
-                    native_audio_frames = int(feature_tensor.shape[1])
-                    batch["input_features_mask"] = torch.ones(
-                        (int(feature_tensor.shape[0]), native_audio_frames),
-                        dtype=torch.bool,
-                    )
-                batch["native_audio_frames"] = native_audio_frames
-            else:
+                native_audio = None
+                native_audio_mask = None
+                native_audio_frames = None
+
+        if native_image_tensors is not None and (not audio_file or native_audio is not None):
+            pixel_values, pixel_position_ids = native_image_tensors
+            pooling_kernel_size = int(_get_processor_image_attr(processor, "pooling_kernel_size", 3))
+            image_soft_counts = tuple(
+                _gemma4_image_soft_token_counts(
+                    pixel_position_ids,
+                    pooling_kernel_size=pooling_kernel_size,
+                )
+            )
+            audio_soft_count = _gemma4_audio_soft_token_count(native_audio_frames or 0) if audio_file else 0
+            processor_prompt = _build_gemma4_native_chat_prompt(
+                prompt=normalized_prompt,
+                image_soft_token_counts=image_soft_counts,
+                audio_soft_token_count=audio_soft_count,
+                system_prompt=system_prompt,
+                enable_thinking_if_supported=enable_thinking_if_supported,
+            )
+            batch = _tokenize_gemma4_native_prompt(
+                processor,
+                processor_prompt,
+                image_token=image_token if isinstance(image_token, str) else None,
+                audio_token=audio_token if isinstance(audio_token, str) else None,
+            )
+            batch["pixel_values"] = pixel_values
+            batch["pixel_position_ids"] = pixel_position_ids
+            if native_audio is not None and native_audio_mask is not None:
                 batch["input_features"] = native_audio
                 batch["input_features_mask"] = native_audio_mask
-                batch["native_audio_frames"] = native_audio_frames
+                batch["native_audio_frames"] = int(native_audio_frames or native_audio.shape[1])
+        else:
+            processor_prompt = _build_gemma4_chat_prompt(
+                prompt=normalized_prompt,
+                image_token=image_token if isinstance(image_token, str) else None,
+                num_images=len(images),
+                audio_token=audio_token if isinstance(audio_token, str) else None,
+                num_audio_segments=len(audio_waveforms),
+                system_prompt=system_prompt,
+                enable_thinking_if_supported=enable_thinking_if_supported,
+            )
+            batch = processor(
+                text=processor_prompt,
+                images=images or None,
+                audio=audio_waveforms or None,
+                return_tensors="pt",
+            )
+            _gemma4_split_cactus_newline_token_merges(batch)
+            if native_image_tensors is not None:
+                batch["pixel_values"], batch["pixel_position_ids"] = native_image_tensors
+    else:
+        batch = processor(
+            text=processor_prompt,
+            images=images or None,
+            audio=audio_waveforms or None,
+            return_tensors="pt",
+        )
 
     ordered_keys = [
         key

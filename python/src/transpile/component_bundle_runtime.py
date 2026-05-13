@@ -713,9 +713,12 @@ def _prepare_native_cq_weight_view(source_dir: Path, bundle_root: Path) -> Path:
         target_name: str | None = None
         if source.name.endswith(".cq4.weights"):
             target_name = source.name.replace(".cq4.weights", ".weights")
+        elif source.name.endswith(".cq2.weights"):
+            target_name = source.name.replace(".cq2.weights", ".weights")
         elif source.name.endswith(".weights"):
             cq4_sibling = source_dir / f"{source.name[:-len('.weights')]}.cq4.weights"
-            if not cq4_sibling.exists():
+            cq2_sibling = source_dir / f"{source.name[:-len('.weights')]}.cq2.weights"
+            if not cq4_sibling.exists() and not cq2_sibling.exists():
                 target_name = source.name
         elif source.suffix in {".txt", ".json", ".model", ".jinja2", ".tiktoken", ".bias"}:
             target_name = source.name

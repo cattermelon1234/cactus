@@ -4,12 +4,104 @@
 #include "wav.h"
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstring>
 #include <mutex>
 
 using namespace cactus::ffi;
 
 extern "C" {
+
+int cactus_preprocess_audio_features(
+    const char* audio_file_path,
+    const char* model_type,
+    size_t mel_bins,
+    float* features_buffer,
+    size_t buffer_size,
+    size_t* feature_count,
+    size_t* out_mel_bins,
+    size_t* out_frames
+) {
+    if (!audio_file_path || !model_type || !features_buffer || !feature_count || !out_mel_bins || !out_frames) {
+        last_error_message = "Invalid parameters for audio feature preprocessing";
+        CACTUS_LOG_ERROR("audio_preprocess", last_error_message);
+        return -1;
+    }
+
+    try {
+        AudioFP32 audio = load_wav(audio_file_path);
+        std::vector<float> audio_samples = resample_to_16k_fp32(audio.samples, audio.sample_rate);
+        if (audio_samples.empty()) {
+            last_error_message = "No audio samples available for preprocessing";
+            CACTUS_LOG_ERROR("audio_preprocess", last_error_message);
+            return -1;
+        }
+
+        const size_t bins = std::max<size_t>(1, mel_bins);
+        std::string lowered(model_type);
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+
+        std::vector<float> features;
+        size_t frames = 0;
+
+        if (lowered.find("gemma4") != std::string::npos || lowered.find("gemma-4") != std::string::npos) {
+            cactus::engine::Config cfg;
+            cfg.model_type = cactus::engine::Config::ModelType::GEMMA4;
+            cfg.audio_input_feat_size = static_cast<uint32_t>(bins);
+            cfg.audio_soft_tokens = 188;
+            cfg.audio_fft_length = 512;
+            auto prepared = cactus::audio::preprocess_audio_for_gemma4(std::move(audio_samples), cfg);
+            features = std::move(prepared.features);
+            frames = prepared.num_frames;
+        } else if (lowered.find("parakeet") != std::string::npos) {
+            auto cfg = cactus::audio::get_parakeet_spectrogram_config();
+            const size_t waveform_samples = audio_samples.size();
+            cactus::audio::apply_preemphasis(audio_samples, 0.97f);
+            features = cactus::audio::compute_spectrogram_graph(
+                audio_samples, cfg, bins, 0.0f, 8000.0f,
+                cactus::audio::WHISPER_SAMPLE_RATE, 0, 0);
+            cactus::audio::normalize_parakeet_log_mel(features, bins);
+            size_t valid_frames = waveform_samples / cfg.hop_length;
+            if (valid_frames == 0) valid_frames = 1;
+            cactus::audio::trim_mel_frames(features, bins, valid_frames);
+            frames = features.size() / bins;
+        } else {
+            auto cfg = cactus::audio::get_whisper_spectrogram_config();
+            const bool is_whisper_v3 = bins > 80;
+            if (is_whisper_v3) cactus::audio::apply_whisper_v3_overrides(cfg);
+            int norm_type = is_whisper_v3 ? 1 : 0;
+            int scale_type = is_whisper_v3 ? 1 : 0;
+            std::vector<float> mel = cactus::audio::compute_spectrogram_graph(
+                audio_samples, cfg, bins, 0.0f, 8000.0f,
+                cactus::audio::WHISPER_SAMPLE_RATE, norm_type, scale_type);
+            features = cactus::audio::normalize_whisper_mel(mel, bins, is_whisper_v3);
+            frames = features.size() / bins;
+        }
+
+        const size_t bytes_needed = features.size() * sizeof(float);
+        if (bytes_needed > buffer_size) {
+            last_error_message = "Audio feature output buffer too small";
+            CACTUS_LOG_ERROR("audio_preprocess", last_error_message);
+            return -2;
+        }
+
+        std::memcpy(features_buffer, features.data(), bytes_needed);
+        *feature_count = features.size();
+        *out_mel_bins = bins;
+        *out_frames = frames;
+        return static_cast<int>(features.size());
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        CACTUS_LOG_ERROR("audio_preprocess", last_error_message);
+        return -1;
+    } catch (...) {
+        last_error_message = "Unknown error during audio feature preprocessing";
+        CACTUS_LOG_ERROR("audio_preprocess", last_error_message);
+        return -1;
+    }
+}
 
 int cactus_transcribe(
     cactus_model_t model,

@@ -33,6 +33,7 @@ from src.transpile.component_partition import extract_component_subgraphs
 from src.transpile.component_partition import summarize_ir_components
 from src.transpile.component_pipeline import capture_component_spec
 from src.transpile.component_pipeline import execute_component_pipeline
+from src.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs as _shared_prepare_gemma4_multimodal_inputs
 from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import verify_ir
 from src.transpile.lower import TranspiledGraph
@@ -2103,6 +2104,21 @@ def _prepare_gemma4_multimodal_inputs(
 ) -> PreparedInputs:
     if processor is None:
         raise RuntimeError("multimodal Gemma4 transpile requires an AutoProcessor with image and audio support")
+    shared = _shared_prepare_gemma4_multimodal_inputs(
+        processor,
+        prompt=prompt,
+        image_files=image_files,
+        audio_file=audio_file,
+        torch_dtype=torch_dtype,
+        system_prompt=system_prompt,
+        enable_thinking_if_supported=enable_thinking_if_supported,
+        use_gemma4_chat_template=use_gemma4_chat_template,
+    )
+    return PreparedInputs(
+        names=shared.names,
+        tensors=shared.tensors,
+        metadata=shared.metadata,
+    )
 
     images = _load_image_inputs(image_files)
     audio_waveforms: list[np.ndarray] = []

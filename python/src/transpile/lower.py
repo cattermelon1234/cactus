@@ -1890,6 +1890,17 @@ def _static_shape(shape: Any) -> tuple[int, ...] | None:
     return tuple(dims)
 
 
+def _ir_value_dtype(ir: IRGraph, value_id: str) -> str | None:
+    value = ir.values.get(value_id)
+    if value is None or value.dtype is None:
+        return None
+    return str(value.dtype).strip().lower()
+
+
+def _is_integer_index_dtype(dtype: str | None) -> bool:
+    return dtype in {"uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64"}
+
+
 def _constant_tensor_from_ir(ir: IRGraph, value_id: str) -> torch.Tensor | None:
     const = ir.constants.get(value_id)
     if isinstance(const, torch.nn.Parameter):
@@ -1947,6 +1958,8 @@ def _try_lower_embedding_advanced_index(
 ) -> Tensor | None:
     if len(node.inputs) != 2:
         return None
+    if not _is_integer_index_dtype(_ir_value_dtype(ir, node.inputs[1])):
+        return None
 
     source = _tensor(env, node.inputs[0])
     indices = _tensor(env, node.inputs[1])
@@ -1968,6 +1981,8 @@ def _try_lower_prefix_mask_advanced_index(
     ir: IRGraph,
 ) -> Tensor | None:
     if len(node.inputs) != 2:
+        return None
+    if _is_integer_index_dtype(_ir_value_dtype(ir, node.inputs[1])):
         return None
 
     source = _tensor(env, node.inputs[0])
@@ -2011,13 +2026,13 @@ def _try_lower_advanced_index(
     env: dict[str, Any],
     ir: IRGraph,
 ) -> Tensor | None:
-    lowered = _try_lower_embedding_advanced_index(g, node, env, ir)
-    if lowered is not None:
-        return lowered
     lowered = _try_lower_identity_broadcast_advanced_index(g, node, env, ir)
     if lowered is not None:
         return lowered
-    return _try_lower_prefix_mask_advanced_index(g, node, env, ir)
+    lowered = _try_lower_prefix_mask_advanced_index(g, node, env, ir)
+    if lowered is not None:
+        return lowered
+    return _try_lower_embedding_advanced_index(g, node, env, ir)
 
 
 def _normalize_slice_end(end: int, dim_size: int) -> int:

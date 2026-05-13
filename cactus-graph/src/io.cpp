@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cmath>
+#include <filesystem>
 
 namespace {
     constexpr uint32_t fourcc(char a, char b, char c, char d) {
@@ -28,6 +29,25 @@ namespace {
         size_t remainder = offset % alignment;
         if (remainder == 0) return offset;
         return offset + (alignment - remainder);
+    }
+
+    std::string resolve_quantized_weight_file(const std::string& filename) {
+        constexpr const char* suffix = ".weights";
+        if (filename.size() <= std::strlen(suffix) ||
+            filename.compare(filename.size() - std::strlen(suffix), std::strlen(suffix), suffix) != 0) {
+            return filename;
+        }
+
+        const std::string stem = filename.substr(0, filename.size() - std::strlen(suffix));
+        const std::string cq4 = stem + ".cq4.weights";
+        if (std::filesystem::exists(cq4)) {
+            return cq4;
+        }
+        const std::string cq2 = stem + ".cq2.weights";
+        if (std::filesystem::exists(cq2)) {
+            return cq2;
+        }
+        return filename;
     }
 
     inline void write_u32(std::ostream& out, uint32_t v) {
@@ -264,7 +284,8 @@ CactusGraph CactusGraph::load(const std::string& path) {
 }
 
 size_t CactusGraph::mmap_embeddings(const std::string& filename) {
-    auto mapped_file = std::make_unique<GraphFile::MappedFile>(filename);
+    const std::string resolved_filename = resolve_quantized_weight_file(filename);
+    auto mapped_file = std::make_unique<GraphFile::MappedFile>(resolved_filename);
 
     const auto& shape = mapped_file->shape();
     if (shape.size() != 2) {
@@ -323,12 +344,13 @@ size_t CactusGraph::mmap_embeddings(const std::string& filename) {
 }
 
 size_t CactusGraph::mmap_weights(const std::string& filename) {
-    auto it = weight_cache_.find(filename);
+    const std::string resolved_filename = resolve_quantized_weight_file(filename);
+    auto it = weight_cache_.find(resolved_filename);
     if (it != weight_cache_.end()) {
         return it->second;
     }
 
-    auto mapped_file = std::make_unique<GraphFile::MappedFile>(filename);
+    auto mapped_file = std::make_unique<GraphFile::MappedFile>(resolved_filename);
 
     const auto& shape = mapped_file->shape();
     Precision precision = mapped_file->precision();
@@ -375,7 +397,7 @@ size_t CactusGraph::mmap_weights(const std::string& filename) {
     size_t file_idx = mapped_files_.size();
     mapped_files_.push_back(std::move(mapped_file));
     node_to_mapped_file_[node_id] = file_idx;
-    weight_cache_[filename] = node_id;
+    weight_cache_[resolved_filename] = node_id;
     return node_id;
 }
 
