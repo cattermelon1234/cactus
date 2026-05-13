@@ -15,12 +15,11 @@ import numpy as np
 import torch
 from scipy.io import wavfile
 
-EXAMPLES_DIR = Path(__file__).resolve().parent
-PYTHON_ROOT = EXAMPLES_DIR.parent
+TOOLS_DIR = Path(__file__).resolve().parent
+PYTHON_ROOT = TOOLS_DIR.parents[2]
 PROJECT_ROOT = PYTHON_ROOT.parent
 
 sys.path.insert(0, str(PYTHON_ROOT))
-sys.path.insert(0, str(EXAMPLES_DIR))
 
 from src.cactus import cactus_destroy
 from src.cactus import cactus_init
@@ -30,17 +29,17 @@ from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.model_adapters import canonicalize_model_interface
 from src.transpile.optimize_graph import FusionConfig
 from src.transpile.optimize_graph import optimize_graph
-from transpile_hf_model import TranspileWrapper
-from transpile_hf_model import _ctc_greedy_decode_token_ids
-from transpile_hf_model import _decode_token_ids
-from transpile_hf_model import _infer_task_from_config
-from transpile_hf_model import _load_optional_json
-from transpile_hf_model import _load_optional_tokenizer
-from transpile_hf_model import _load_transformers_bundle
-from transpile_hf_model import _lower_preoptimized_ir
-from transpile_hf_model import _parse_dtype
-from transpile_hf_model import _prepare_audio_inputs
-from transpile_hf_model import _validate_weights_dir
+from cactus.transpile.hf_model import TranspileWrapper
+from cactus.transpile.hf_model import _ctc_greedy_decode_token_ids
+from cactus.transpile.hf_model import _decode_token_ids
+from cactus.transpile.hf_model import _infer_task_from_config
+from cactus.transpile.hf_model import _load_optional_json
+from cactus.transpile.hf_model import _load_optional_tokenizer
+from cactus.transpile.hf_model import _load_transformers_bundle
+from cactus.transpile.hf_model import _lower_preoptimized_ir
+from cactus.transpile.hf_model import _parse_dtype
+from cactus.transpile.hf_model import _prepare_audio_inputs
+from cactus.transpile.hf_model import _validate_weights_dir
 
 
 @dataclass

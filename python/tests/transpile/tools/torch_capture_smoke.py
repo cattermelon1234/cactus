@@ -1,5 +1,14 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
 import torch
 import torch.nn as nn
+
+PYTHON_ROOT = Path(__file__).resolve().parents[3]
+if str(PYTHON_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_ROOT))
 
 from src.transpile.capture_pytorch import (
     capture_model_with_fallback,

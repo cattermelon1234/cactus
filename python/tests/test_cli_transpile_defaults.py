@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src import cli
+from cactus import cli
+from cactus.cli import transpile as transpile_cli
 
 
 def _fake_completed_process(returncode: int = 0):
@@ -19,28 +20,29 @@ def test_cmd_transpile_defaults_to_skip_execute(monkeypatch) -> None:
 
     captured: list[tuple[list[str], Path, dict[str, str]]] = []
 
-    monkeypatch.setattr(cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
+    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
+    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
 
     def _fake_run(command, cwd=None, env=None):
         captured.append((list(command), Path(cwd), dict(env or {})))
         return _fake_completed_process(0)
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
 
-    rc = cli.cmd_transpile(args)
+    rc = transpile_cli.cmd_transpile(args)
 
     assert rc == 0
     assert captured
     command, cwd, env = captured[0]
-    assert command[:4] == [
-        cli.sys.executable,
-        str(cli.PROJECT_ROOT / "python" / "examples" / "transpile_hf_model.py"),
+    assert command[:5] == [
+        transpile_cli.sys.executable,
+        "-m",
+        "cactus.transpile.hf_model",
         "--model-id",
-        cli.DEFAULT_MODEL_ID,
+        transpile_cli.DEFAULT_MODEL_ID,
     ]
     assert "--skip-execute" in command
-    assert cwd == cli.PROJECT_ROOT
+    assert cwd == transpile_cli.PROJECT_ROOT
     assert env["CACTUS_LIB_PATH"] == "/tmp/libcactus.dylib"
 
 
@@ -53,16 +55,16 @@ def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch) -> No
 
     captured: list[list[str]] = []
 
-    monkeypatch.setattr(cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
+    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
+    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
 
     def _fake_run(command, cwd=None, env=None):
         captured.append(list(command))
         return _fake_completed_process(0)
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
 
-    rc = cli.cmd_transpile(args)
+    rc = transpile_cli.cmd_transpile(args)
 
     assert rc == 0
     assert captured
@@ -81,16 +83,16 @@ def test_cmd_transpile_skips_empty_default_weights_dir(monkeypatch, tmp_path: Pa
 
     captured: list[list[str]] = []
 
-    monkeypatch.setattr(cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(cli, "get_weights_dir", lambda model_id: empty_weights_dir)
+    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
+    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: empty_weights_dir)
 
     def _fake_run(command, cwd=None, env=None):
         captured.append(list(command))
         return _fake_completed_process(0)
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
 
-    rc = cli.cmd_transpile(args)
+    rc = transpile_cli.cmd_transpile(args)
 
     assert rc == 0
     assert captured
@@ -108,16 +110,16 @@ def test_cmd_transpile_uses_ready_default_weights_dir(monkeypatch, tmp_path: Pat
 
     captured: list[list[str]] = []
 
-    monkeypatch.setattr(cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(cli, "get_weights_dir", lambda model_id: ready_weights_dir)
+    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
+    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: ready_weights_dir)
 
     def _fake_run(command, cwd=None, env=None):
         captured.append(list(command))
         return _fake_completed_process(0)
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
 
-    rc = cli.cmd_transpile(args)
+    rc = transpile_cli.cmd_transpile(args)
 
     assert rc == 0
     assert captured
@@ -127,4 +129,4 @@ def test_cmd_transpile_uses_ready_default_weights_dir(monkeypatch, tmp_path: Pat
 
 
 def test_lfm_alias_points_to_vl_450m() -> None:
-    assert cli.MODEL_ID_ALIASES["lfm"] == "LiquidAI/LFM2-VL-450M"
+    assert transpile_cli.MODEL_ID_ALIASES["lfm"] == "LiquidAI/LFM2-VL-450M"

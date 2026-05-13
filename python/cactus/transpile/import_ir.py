@@ -7,7 +7,6 @@ import torch
 from torch.export.graph_signature import ConstantArgument
 from torch.export.graph_signature import InputKind
 
-<<<<<<<< HEAD:python/cactus/transpile/import_ir.py
 from src.transpile.capture_pytorch import format_target
 from src.transpile.capture_pytorch import get_dtype
 from src.transpile.capture_pytorch import get_shape
@@ -26,25 +25,6 @@ from src.transpile.normalize import dtype_to_ir
 from src.transpile.import_semantics import apply_import_semantics
 from src.transpile.weight_binding import resolve_transpile_weights_dir
 from src.transpile.weight_binding import resolve_weight_binding
-========
-from cactus.transpile.capture.capture_pytorch import format_target
-from cactus.transpile.capture.capture_pytorch import get_dtype
-from cactus.transpile.capture.capture_pytorch import get_shape
-from cactus.transpile.capture.capture_pytorch import resolve_attr
-from cactus.transpile.capture.graph_ir import IRGraph
-from cactus.transpile.capture.graph_ir import verify_ir
-from cactus.transpile.capture.importers import extract_literals
-from cactus.transpile.capture.importers import ImportContext
-from cactus.transpile.capture.importers import import_call_function
-from cactus.transpile.capture.importers import import_get_attr
-from cactus.transpile.capture.importers import import_output
-from cactus.transpile.capture.importers import import_placeholder
-from cactus.transpile.capture.importers import value_id
-from cactus.transpile.capture.normalize import dtype_to_ir
-from cactus.transpile.capture.import_semantics import apply_import_semantics
-from cactus.transpile.capture.weight_binding import resolve_transpile_weights_dir
-from cactus.transpile.capture.weight_binding import resolve_weight_binding
->>>>>>>> v2:python/cactus/transpile/capture/import_ir.py
 
 
 def import_captured_to_ir(captured: Any, *, strict: bool = True) -> IRGraph:

@@ -14,6 +14,17 @@ from .download import cmd_download
 
 def cmd_run(args):
     """Download model if needed and start interactive chat."""
+    model_id = args.model_id
+
+    from .transpile import _resolve_transpiled_manifest, cmd_run_transpiled
+
+    manifest_path = _resolve_transpiled_manifest(model_id)
+    if manifest_path is not None:
+        args.bundle_dir = str(
+            manifest_path.parent.parent if manifest_path.parent.name == "components" else manifest_path.parent
+        )
+        return cmd_run_transpiled(args)
+
     from .config_utils import CactusConfig
     from .common import prompt_for_api_key
 
@@ -22,8 +33,6 @@ def cmd_run(args):
 
     if api_key:
         os.environ["CACTUS_CLOUD_KEY"] = api_key
-
-    model_id = args.model_id
 
     if getattr(args, 'no_cloud_tele', False):
         os.environ["CACTUS_NO_CLOUD_TELE"] = "1"

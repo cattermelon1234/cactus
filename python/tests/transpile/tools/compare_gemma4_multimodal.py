@@ -15,12 +15,11 @@ from typing import Any
 import numpy as np
 import torch
 
-EXAMPLES_DIR = Path(__file__).resolve().parent
-PYTHON_ROOT = EXAMPLES_DIR.parent
+TOOLS_DIR = Path(__file__).resolve().parent
+PYTHON_ROOT = TOOLS_DIR.parents[2]
 PROJECT_ROOT = PYTHON_ROOT.parent
 
 sys.path.insert(0, str(PYTHON_ROOT))
-sys.path.insert(0, str(EXAMPLES_DIR))
 
 from src.cactus import cactus_complete
 from src.cactus import cactus_destroy
@@ -31,15 +30,15 @@ from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from src.transpile.model_adapters import canonicalize_model_interface
 from src.transpile.optimize_graph import FusionConfig
 from src.transpile.optimize_graph import optimize_graph
-from transpile_hf_model import TranspileWrapper
-from transpile_hf_model import _graph_to_dict
-from transpile_hf_model import _load_transformers_bundle
-from transpile_hf_model import _lower_preoptimized_ir
-from transpile_hf_model import _parse_dtype
-from transpile_hf_model import _prepare_gemma4_multimodal_inputs
-from transpile_hf_model import _serialize_json_compatible
-from transpile_hf_model import _validate_weights_dir
-from transpile_hf_model import _write_json
+from cactus.transpile.hf_model import TranspileWrapper
+from cactus.transpile.hf_model import _graph_to_dict
+from cactus.transpile.hf_model import _load_transformers_bundle
+from cactus.transpile.hf_model import _lower_preoptimized_ir
+from cactus.transpile.hf_model import _parse_dtype
+from cactus.transpile.hf_model import _prepare_gemma4_multimodal_inputs
+from cactus.transpile.hf_model import _serialize_json_compatible
+from cactus.transpile.hf_model import _validate_weights_dir
+from cactus.transpile.hf_model import _write_json
 
 
 _DEFAULT_STOP_SEQUENCES = ("<turn|>", "<eos>", "<end_of_turn>", "<|im_end|>")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from examples import transpile_hf_model
+from cactus.transpile import hf_model
 from src.transpile import component_bundle_runtime
 from src.transpile import model_adapters
 
@@ -62,11 +62,11 @@ class _FakeTokenizer:
 
 def test_infer_task_from_config_prefers_whisper_seq2seq(monkeypatch) -> None:
     monkeypatch.setattr(
-        transpile_hf_model,
+        hf_model,
         "_load_config_json",
         lambda _: {"model_type": "whisper", "architectures": ["WhisperForConditionalGeneration"]},
     )
-    assert transpile_hf_model._infer_task_from_config("openai/whisper-small") == "seq2seq_transcription"
+    assert hf_model._infer_task_from_config("openai/whisper-small") == "seq2seq_transcription"
 
 
 def test_run_seq2seq_transcription_bundle_decodes_until_eos(monkeypatch) -> None:
@@ -159,7 +159,7 @@ def test_resolve_whisper_decoder_prompt_token_ids_prefers_forced_decoder_ids() -
             }
             return list(mapping.get(text, []))
 
-    prompt_ids = transpile_hf_model._resolve_whisper_decoder_prompt_token_ids(
+    prompt_ids = hf_model._resolve_whisper_decoder_prompt_token_ids(
         _Tokenizer(),
         prompt=None,
         decoder_start_token_id=50258,

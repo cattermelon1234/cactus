@@ -7,11 +7,7 @@ import torch
 from torch.export import export
 from torch.fx.passes.shape_prop import ShapeProp
 
-<<<<<<<< HEAD:python/cactus/transpile/capture_pytorch.py
 from src.transpile.graph_ir import IRGraph
-========
-from cactus.transpile.capture.graph_ir import IRGraph
->>>>>>>> v2:python/cactus/transpile/capture/capture_pytorch.py
 
 
 class CapturePhaseError(RuntimeError):
@@ -208,13 +204,9 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
             f"torch.export failed for model={type(model).__name__} strict={strict}: {exc}",
             cause=exc,
         ) from exc
-<<<<<<<< HEAD:python/cactus/transpile/capture_pytorch.py
     from src.transpile.import_ir import import_captured_to_ir
 
     import_graph_module = _prepare_import_graph_module(ep, example_args, example_kwargs)
-========
-    from cactus.transpile.capture.import_ir import import_captured_to_ir
->>>>>>>> v2:python/cactus/transpile/capture/capture_pytorch.py
 
     raw_captured = CapturedModel(
         exported_program=ep,

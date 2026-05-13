@@ -8,19 +8,11 @@ from typing import Any
 
 import torch
 
-<<<<<<<< HEAD:python/cactus/transpile/importers.py
 from src.transpile.graph_ir import IRGraph
 from src.transpile.graph_ir import IRNode
 from src.transpile.graph_ir import IRValue
 from src.transpile.normalize import dtype_to_ir
 from src.transpile.normalize import normalize_target
-========
-from cactus.transpile.capture.graph_ir import IRGraph
-from cactus.transpile.capture.graph_ir import IRNode
-from cactus.transpile.capture.graph_ir import IRValue
-from cactus.transpile.capture.normalize import dtype_to_ir
-from cactus.transpile.capture.normalize import normalize_target
->>>>>>>> v2:python/cactus/transpile/capture/importers.py
 
 
 class UnsupportedImportError(NotImplementedError):

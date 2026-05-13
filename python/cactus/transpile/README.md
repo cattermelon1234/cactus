@@ -19,26 +19,25 @@ This README is a code-first walkthrough of the actual flow in the repo today.
 These files are outside `python/src/transpile`, but they are the public top-level
 entry points for the transpiler:
 
-- `python/src/cli.py`
-- `python/examples/transpile_hf_model.py`
+- `python/cactus/cli/transpile.py`
+- `python/cactus/transpile/hf_model.py`
 
-`cactus transpile` is a thin CLI wrapper around `python/examples/transpile_hf_model.py`.
-The example script is the real top-level transpile program.
+`cactus transpile` is a thin CLI wrapper around `python/cactus/transpile/hf_model.py`.
+The packaged module is the real top-level transpile program.
 
 ## CLI Entry Flow
 
 ### `cactus transpile`
 
-`python/src/cli.py` resolves the transpiler script, ensures the Python runtime
-library is available, and forwards most arguments to the example script:
+`python/cactus/cli/transpile.py` resolves the transpiler module, ensures the Python runtime
+library is available, and forwards most arguments to the transpiler:
 
 ```python
 def cmd_transpile(args):
-    script_path = PROJECT_ROOT / "python" / "examples" / "transpile_hf_model.py"
     transpile_lib = _ensure_python_runtime_library()
     model_id = resolve_model_id_alias(args.model_id)
     extra_args = list(getattr(args, "extra_args", []) or [])
-    command = [sys.executable, str(script_path), "--model-id", model_id]
+    command = [sys.executable, "-m", "cactus.transpile.hf_model", "--model-id", model_id]
     if "--weights-dir" not in extra_args:
         default_weights_dir = get_weights_dir(model_id)
         if default_weights_dir.exists():
@@ -52,11 +51,11 @@ Two important details:
 
 - `cactus transpile` saves artifacts and skips execution by default.
 - The CLI only has an explicit `--execute-after-transpile` flag; most other
-  transpile options are forwarded as unknown args to `transpile_hf_model.py`.
+  transpile options are forwarded as unknown args to `hf_model.py`.
 
 ### `cactus run-transpiled`
 
-Saved bundles are executed through `cmd_run_transpiled()` in `python/src/cli.py`:
+Saved bundles are executed through `cmd_run_transpiled()` in `python/cactus/cli/transpile.py`:
 
 ```python
 def cmd_run_transpiled(args):
@@ -83,7 +82,7 @@ def cmd_run_transpiled(args):
 
 ## 1. Parse Args, Infer Task, Load Model Bundle
 
-The real transpile program lives in `python/examples/transpile_hf_model.py`.
+The real transpile program lives in `python/cactus/transpile/hf_model.py`.
 Its `main()` function decides what kind of model/task it is dealing with, validates
 optional converted weights, and loads the HF model plus tokenizer/processor:
 
@@ -218,7 +217,7 @@ takes the component path. Otherwise it captures a single wrapped model graph.
 ## 5A. Component Pipeline Path
 
 The component path is driven by `_run_component_pipeline_transpile()` in
-`python/examples/transpile_hf_model.py`:
+`python/cactus/transpile/hf_model.py`:
 
 ```python
 for spec in component_specs:
@@ -575,7 +574,7 @@ compatibility constraints that are easier to control in lowered graph code.
 
 ## 13. Save Artifacts
 
-After lowering, `transpile_hf_model.py` writes the IR and bundle artifacts.
+After lowering, `hf_model.py` writes the IR and bundle artifacts.
 
 For the monolithic path it saves:
 
@@ -622,7 +621,7 @@ bindings need to be reattached later. The manifests carry:
 
 ## 14. Optional Execution And Reference Compare
 
-If execution is enabled, the example script will run the lowered graph immediately.
+If execution is enabled, the transpiler module will run the lowered graph immediately.
 
 By task:
 
@@ -699,7 +698,7 @@ This keeps the capture boundary tensor-only.
 
 ### Weights directory exists but has no manifest
 
-`transpile_hf_model.py` allows a filename-based fallback:
+`hf_model.py` allows a filename-based fallback:
 
 ```python
 if not manifest_path.exists():
@@ -723,7 +722,7 @@ The transpile script fails hard and suggests re-running conversion:
 
 ### Gemma4 transformers support is missing locally
 
-`transpile_hf_model.py` and `gemma4_runtime.py` search alternate site-packages and
+`hf_model.py` and `gemma4_runtime.py` search alternate site-packages and
 patch import compatibility for:
 
 - missing `transformers.models.gemma4`
@@ -870,7 +869,7 @@ cactus transpile <hf-model-id>
 By default this:
 
 - resolves the runtime library
-- launches `python/examples/transpile_hf_model.py`
+- launches `python/cactus/transpile/hf_model.py`
 - saves artifacts under `./transpiled/<model-id>/`
 - adds `--skip-execute`, so it does not run the graph unless you ask
 
@@ -882,7 +881,7 @@ cactus transpile <hf-model-id> --execute-after-transpile
 
 ## 2. Forwarded Transpile Options
 
-Most useful transpile options are parsed by `python/examples/transpile_hf_model.py`
+Most useful transpile options are parsed by `python/cactus/transpile/hf_model.py`
 and simply forwarded through `cactus transpile`.
 
 Common ones:
@@ -950,7 +949,7 @@ cactus transpile <parakeet-tdt-model-id> \
 If you want the full direct script help:
 
 ```bash
-python python/examples/transpile_hf_model.py --help
+python -m cactus.transpile.hf_model --help
 ```
 
 ## 3. Run A Saved Transpiled Bundle
@@ -1056,7 +1055,7 @@ As of the current code:
 
 If you only want the high-level lifecycle, it is:
 
-1. `cactus transpile` launches `python/examples/transpile_hf_model.py`.
+1. `cactus transpile` launches `python/cactus/transpile/hf_model.py`.
 2. The script infers a task, loads the HF model, and creates one example input batch.
 3. `model_adapters.py` wraps the model into a smaller canonical task interface.
 4. `capture_pytorch.py` runs `torch.export`.

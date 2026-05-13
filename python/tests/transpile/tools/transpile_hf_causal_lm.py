@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-import runpy
 import sys
 from pathlib import Path
+
+PYTHON_ROOT = Path(__file__).resolve().parents[3]
+if str(PYTHON_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_ROOT))
+
+from cactus.transpile.hf_model import main as transpile_main
 
 
 def main() -> int:
     if "--task" not in sys.argv[1:]:
         sys.argv[1:1] = ["--task", "causal_lm_logits"]
-    script_path = Path(__file__).with_name("transpile_hf_model.py")
-    runpy.run_path(str(script_path), run_name="__main__")
-    return 0
+    return transpile_main()
 
 
 if __name__ == "__main__":

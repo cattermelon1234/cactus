@@ -10,9 +10,9 @@ import torch
 from transformers import AutoModelForCausalLM
 from transformers import AutoTokenizer
 
-from cactus.transpile.capture.capture_pytorch import capture_model_with_fallback
-from cactus.transpile.capture.capture_pytorch import dump_graph
-from cactus.transpile.capture.graph_ir import verify_ir
+from cactus.transpile.capture_pytorch import capture_model_with_fallback
+from cactus.transpile.capture_pytorch import dump_graph
+from cactus.transpile.graph_ir import verify_ir
 
 
 MODELS = (
