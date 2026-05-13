@@ -118,6 +118,7 @@ static bool init_dispatch() {
     dispatch_flat[static_cast<int>(OpType::VARIANCE)] = compute_reduce_node;
     dispatch_flat[static_cast<int>(OpType::MIN)] = compute_reduce_node;
     dispatch_flat[static_cast<int>(OpType::MAX)] = compute_reduce_node;
+    dispatch_flat[static_cast<int>(OpType::CUMSUM)] = compute_reduce_node;
     dispatch_flat[static_cast<int>(OpType::FLATTEN)] = compute_reshape_node;
     dispatch_flat[static_cast<int>(OpType::VIEW)] = compute_reshape_node;
     dispatch_flat[static_cast<int>(OpType::RESHAPE)] = compute_reshape_node;
@@ -200,7 +201,7 @@ static const char* op_type_names[] = {
     "ABS", "POW", "FLATTEN", "VIEW",
     "MATMUL", "TRANSPOSE", "RESHAPE", "SLICE", "GATHER", "EMBEDDING",
     "BILINEAR_INTERPOLATION",
-    "SUM", "MEAN", "VARIANCE", "MIN", "MAX",
+    "SUM", "MEAN", "VARIANCE", "MIN", "MAX", "CUMSUM",
     "RMS_NORM", "ROPE", "ROPE_GPTJ", "SOFTMAX",
     "ATTENTION", "ATTENTION_INT8_HYBRID", "REL_POS_BIAS",
     "CONV1D_CAUSAL", "CONV1D_K3", "CONV1D_K7S3", "CONV1D",

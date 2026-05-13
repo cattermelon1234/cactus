@@ -23,6 +23,16 @@ if not _LIB_PATH.exists():
 
 _lib = ctypes.CDLL(str(_LIB_PATH))
 
+
+def _bind_optional(name, argtypes, restype):
+    try:
+        fn = getattr(_lib, name)
+    except AttributeError:
+        return None
+    fn.argtypes = argtypes
+    fn.restype = restype
+    return fn
+
 cactus_graph_t = ctypes.c_void_p
 cactus_node_t = ctypes.c_uint64
 
@@ -92,19 +102,21 @@ _lib.cactus_graph_divide.argtypes = [
     cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_divide.restype = ctypes.c_int
-_lib.cactus_graph_not_equal.argtypes = [
-    cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_not_equal.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_not_equal",
+    [cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
 
 _lib.cactus_graph_precision_cast.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.c_int32, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_precision_cast.restype = ctypes.c_int
-_lib.cactus_graph_quantize_activations.argtypes = [
-    cactus_graph_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_quantize_activations.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_quantize_activations",
+    [cactus_graph_t, cactus_node_t, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
 
 _lib.cactus_graph_scalar_add.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.POINTER(cactus_node_t)
@@ -122,14 +134,16 @@ _lib.cactus_graph_scalar_divide.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_scalar_divide.restype = ctypes.c_int
-_lib.cactus_graph_scalar_floor_divide.argtypes = [
-    cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_scalar_floor_divide.restype = ctypes.c_int
-_lib.cactus_graph_scalar_not_equal.argtypes = [
-    cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_scalar_not_equal.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_scalar_floor_divide",
+    [cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
+_bind_optional(
+    "cactus_graph_scalar_not_equal",
+    [cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
 _lib.cactus_graph_scalar_exp.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
 ]
@@ -150,14 +164,16 @@ _lib.cactus_graph_scalar_log.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_scalar_log.restype = ctypes.c_int
-_lib.cactus_graph_masked_select_prefix.argtypes = [
-    cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_masked_select_prefix.restype = ctypes.c_int
-_lib.cactus_graph_masked_scatter.argtypes = [
-    cactus_graph_t, cactus_node_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_masked_scatter.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_masked_select_prefix",
+    [cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
+_bind_optional(
+    "cactus_graph_masked_scatter",
+    [cactus_graph_t, cactus_node_t, cactus_node_t, cactus_node_t, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
 
 _lib.cactus_graph_abs.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.POINTER(cactus_node_t)
@@ -183,10 +199,11 @@ _lib.cactus_graph_reshape.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_reshape.restype = ctypes.c_int
-_lib.cactus_graph_expand.argtypes = [
-    cactus_graph_t, cactus_node_t, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_expand.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_expand",
+    [cactus_graph_t, cactus_node_t, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
 _lib.cactus_graph_transpose.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.c_int32, ctypes.POINTER(cactus_node_t)
 ]
@@ -242,14 +259,16 @@ _lib.cactus_graph_bilinear_interpolation.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_bilinear_interpolation.restype = ctypes.c_int
-_lib.cactus_graph_set_grouped_scales.argtypes = [
-    cactus_graph_t, cactus_node_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p
-]
-_lib.cactus_graph_set_grouped_scales.restype = ctypes.c_int
-_lib.cactus_graph_set_interleaved.argtypes = [
-    cactus_graph_t, cactus_node_t, ctypes.c_bool, ctypes.c_size_t
-]
-_lib.cactus_graph_set_interleaved.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_set_grouped_scales",
+    [cactus_graph_t, cactus_node_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p],
+    ctypes.c_int,
+)
+_bind_optional(
+    "cactus_graph_set_interleaved",
+    [cactus_graph_t, cactus_node_t, ctypes.c_bool, ctypes.c_size_t],
+    ctypes.c_int,
+)
 _lib.cactus_graph_release_weight_pages.argtypes = [cactus_graph_t, cactus_node_t]
 _lib.cactus_graph_release_weight_pages.restype = ctypes.c_int
 _lib.cactus_graph_prefetch_weight_pages.argtypes = [cactus_graph_t, cactus_node_t]
@@ -396,10 +415,11 @@ _lib.cactus_graph_conv2d_pointwise_1x1.argtypes = [
     cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.c_bool, cactus_node_t, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_conv2d_pointwise_1x1.restype = ctypes.c_int
-_lib.cactus_graph_conv2d_k3s1p1.argtypes = [
-    cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.c_bool, cactus_node_t, ctypes.POINTER(cactus_node_t)
-]
-_lib.cactus_graph_conv2d_k3s1p1.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_conv2d_k3s1p1",
+    [cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.c_bool, cactus_node_t, ctypes.POINTER(cactus_node_t)],
+    ctypes.c_int,
+)
 _lib.cactus_graph_conv2d.argtypes = [
     cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.c_bool, cactus_node_t,
     ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(cactus_node_t)
@@ -497,11 +517,14 @@ _lib.cactus_transcribe.argtypes = [
 ]
 _lib.cactus_transcribe.restype = ctypes.c_int
 
-_lib.cactus_detect_language.argtypes = [
-    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
-    ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t
-]
-_lib.cactus_detect_language.restype = ctypes.c_int
+_bind_optional(
+    "cactus_detect_language",
+    [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ],
+    ctypes.c_int,
+)
 
 _lib.cactus_embed.argtypes = [
     ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_float),
@@ -532,24 +555,33 @@ try:
 except AttributeError:
     pass
 
-_lib.cactus_vad.argtypes = [
-    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
-    ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t
-]
-_lib.cactus_vad.restype = ctypes.c_int
+_bind_optional(
+    "cactus_vad",
+    [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ],
+    ctypes.c_int,
+)
 
-_lib.cactus_diarize.argtypes = [
-    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
-    ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t
-]
-_lib.cactus_diarize.restype = ctypes.c_int
+_bind_optional(
+    "cactus_diarize",
+    [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ],
+    ctypes.c_int,
+)
 
-_lib.cactus_embed_speaker.argtypes = [
-    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
-    ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
-    ctypes.POINTER(ctypes.c_float), ctypes.c_size_t
-]
-_lib.cactus_embed_speaker.restype = ctypes.c_int
+_bind_optional(
+    "cactus_embed_speaker",
+    [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_float), ctypes.c_size_t,
+    ],
+    ctypes.c_int,
+)
 
 _lib.cactus_reset.argtypes = [ctypes.c_void_p]
 _lib.cactus_reset.restype = None
@@ -572,16 +604,19 @@ _lib.cactus_tokenize.argtypes = [
 ]
 _lib.cactus_tokenize.restype = ctypes.c_int
 
-_lib.cactus_decode_tokens.argtypes = [
-    ctypes.c_void_p,
-    ctypes.POINTER(ctypes.c_uint32),
-    ctypes.c_size_t,
-    ctypes.c_float,
-    ctypes.c_float,
-    ctypes.c_size_t,
-    ctypes.POINTER(ctypes.c_uint32),
-]
-_lib.cactus_decode_tokens.restype = ctypes.c_int
+_bind_optional(
+    "cactus_decode_tokens",
+    [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_size_t,
+        ctypes.c_float,
+        ctypes.c_float,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_uint32),
+    ],
+    ctypes.c_int,
+)
 
 _lib.cactus_score_window.argtypes = [
     ctypes.c_void_p,
@@ -601,19 +636,22 @@ _lib.cactus_rag_query.argtypes = [
 ]
 _lib.cactus_rag_query.restype = ctypes.c_int
 
-_lib.cactus_stream_transcribe_start.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-_lib.cactus_stream_transcribe_start.restype = ctypes.c_void_p
+_bind_optional("cactus_stream_transcribe_start", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_void_p)
 
-_lib.cactus_stream_transcribe_process.argtypes = [
-    ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
-    ctypes.c_char_p, ctypes.c_size_t
-]
-_lib.cactus_stream_transcribe_process.restype = ctypes.c_int
+_bind_optional(
+    "cactus_stream_transcribe_process",
+    [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+        ctypes.c_char_p, ctypes.c_size_t,
+    ],
+    ctypes.c_int,
+)
 
-_lib.cactus_stream_transcribe_stop.argtypes = [
-    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t
-]
-_lib.cactus_stream_transcribe_stop.restype = ctypes.c_int
+_bind_optional(
+    "cactus_stream_transcribe_stop",
+    [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t],
+    ctypes.c_int,
+)
 
 _lib.cactus_index_init.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
 _lib.cactus_index_init.restype = ctypes.c_void_p

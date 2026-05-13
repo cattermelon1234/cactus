@@ -109,6 +109,52 @@ _PARAKEET_LAYER_FILENAMES: dict[str, str] = {
     "norm_out.bias": "norm_out.bias",
 }
 
+_WHISPER_GLOBAL_FILENAMES: dict[str, tuple[str, str]] = {
+    "decoder.embed_tokens.weight": ("decoder_token_embeddings.weights", "embedding"),
+    "decoder.embed_positions.weight": ("decoder_position_embeddings.weights", "embedding"),
+    "decoder.layer_norm.weight": ("decoder_norm.weights", "weight"),
+    "decoder.layer_norm.bias": ("decoder_norm.bias", "weight"),
+    "proj_out.weight": ("output_weight.weights", "weight"),
+    "encoder.embed_positions.weight": ("encoder_position_embeddings.weights", "embedding"),
+    "encoder.conv1.bias": ("encoder_conv1_bias.bias", "weight"),
+    "encoder.conv1.weight": ("encoder_conv1_weight.weights", "weight"),
+    "encoder.conv2.bias": ("encoder_conv2_bias.bias", "weight"),
+    "encoder.conv2.weight": ("encoder_conv2_weight.weights", "weight"),
+    "encoder.layer_norm.bias": ("encoder_norm_bias.bias", "weight"),
+    "encoder.layer_norm.weight": ("encoder_norm_weight.weights", "weight"),
+}
+
+_WHISPER_LAYER_FILENAMES: dict[str, str] = {
+    "self_attn.q_proj.weight": "self_attn_q.weights",
+    "self_attn.k_proj.weight": "self_attn_k.weights",
+    "self_attn.v_proj.weight": "self_attn_v.weights",
+    "self_attn.q_proj.bias": "self_attn_q.bias",
+    "self_attn.v_proj.bias": "self_attn_v.bias",
+    "self_attn.out_proj.weight": "self_attn_output.weights",
+    "self_attn.out_proj.bias": "self_attn_output.bias",
+    "self_attn_layer_norm.weight": "self_attn_norm.weights",
+    "self_attn_layer_norm.bias": "self_attn_norm.bias",
+    "encoder_attn.q_proj.weight": "encoder_attn_q.weights",
+    "encoder_attn.k_proj.weight": "encoder_attn_k.weights",
+    "encoder_attn.v_proj.weight": "encoder_attn_v.weights",
+    "encoder_attn.out_proj.weight": "encoder_attn_output.weights",
+    "encoder_attn.o_proj.weight": "encoder_attn_output.weights",
+    "encoder_attn.q_proj.bias": "encoder_attn_q.bias",
+    "encoder_attn.v_proj.bias": "encoder_attn_v.bias",
+    "encoder_attn.out_proj.bias": "encoder_attn_output.bias",
+    "encoder_attn.o_proj.bias": "encoder_attn_output.bias",
+    "encoder_attn_layer_norm.weight": "encoder_attn_norm.weights",
+    "encoder_attn_layer_norm.bias": "encoder_attn_norm.bias",
+    "fc1.weight": "mlp_fc1.weights",
+    "fc1.bias": "mlp_fc1.bias",
+    "fc2.weight": "mlp_fc2.weights",
+    "fc2.bias": "mlp_fc2.bias",
+    "final_layer_norm.weight": "final_norm.weights",
+    "final_layernorm.weight": "final_norm.weights",
+    "final_layer_norm.bias": "final_norm.bias",
+    "final_layernorm.bias": "final_norm.bias",
+}
+
 _GEMMA3N_VISION_TOWER_PREFIX = "model.vision_tower.timm_model."
 _GEMMA3N_AUDIO_TOWER_PREFIX = "model.audio_tower."
 _GEMMA4_VISION_TOWER_PREFIX = "model.vision_tower."
@@ -387,6 +433,9 @@ def _fallback_filename_candidates(source_name: str) -> list[tuple[str, str]]:
 
     for candidate in _normalized_source_candidates(source_name):
         _add(_PARAKEET_GLOBAL_FILENAMES.get(candidate))
+        whisper_global = _WHISPER_GLOBAL_FILENAMES.get(candidate)
+        if whisper_global is not None:
+            _add(whisper_global[0], kind=whisper_global[1])
         gemma_global = _GEMMA_GLOBAL_FILENAMES.get(candidate)
         if gemma_global is not None:
             _add(gemma_global[0], kind=gemma_global[1])
@@ -431,6 +480,15 @@ def _fallback_filename_candidates(source_name: str) -> list[tuple[str, str]]:
             mapped = _PARAKEET_LAYER_FILENAMES.get(suffix)
             if mapped is not None:
                 _add(f"layer_{layer_index}_{mapped}")
+
+        whisper_layer_match = re.match(r"^(encoder|decoder)\.layers\.(\d+)\.(.+)$", candidate)
+        if whisper_layer_match:
+            block = whisper_layer_match.group(1)
+            layer_index = int(whisper_layer_match.group(2))
+            suffix = whisper_layer_match.group(3)
+            mapped = _WHISPER_LAYER_FILENAMES.get(suffix)
+            if mapped is not None:
+                _add(f"{block}.layer_{layer_index}_{mapped}")
 
         gemma_layer_match = re.match(
             r"^(?:model(?:\.language_model)?\.)?layers\.(\d+)\.(.+)$",

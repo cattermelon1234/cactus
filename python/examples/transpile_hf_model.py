@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Mapping
 from collections import Counter
 from dataclasses import dataclass
 from dataclasses import fields
@@ -46,6 +47,7 @@ from src.transpile.optimize_graph import optimize_graph
 from src.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
 from src.transpile.parakeet_tdt_local import load_parakeet_tdt_local_model
 from src.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
+from src.transpile.weight_compat import ensure_binding_compatible
 
 _TORCHVISION_COMPAT_LIBRARIES: list[object] = []
 
@@ -1601,6 +1603,28 @@ def _prepare_audio_inputs(
     )
 
 
+def _tokenize_text_prompt(tokenizer: object, prompt: str) -> torch.Tensor:
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if callable(apply_chat_template):
+        try:
+            encoded = apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt",
+            )
+            if isinstance(encoded, torch.Tensor) and encoded.ndim == 2:
+                return encoded.to(dtype=torch.long)
+            if isinstance(encoded, Mapping):
+                input_ids = encoded.get("input_ids")
+                if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
+                    return input_ids.to(dtype=torch.long)
+        except Exception:
+            pass
+    encoded = tokenizer(prompt, return_tensors="pt")
+    return encoded["input_ids"].to(dtype=torch.long)
+
+
 def _prepare_text_inputs(tokenizer: object, *, prompt: str, input_ids_text: str | None) -> PreparedInputs:
     if input_ids_text:
         token_ids = [int(part.strip()) for part in input_ids_text.split(",") if part.strip()]
@@ -1608,7 +1632,7 @@ def _prepare_text_inputs(tokenizer: object, *, prompt: str, input_ids_text: str 
             raise ValueError("--input-ids was provided but no ids were parsed")
         input_ids = torch.tensor([token_ids], dtype=torch.long)
     else:
-        input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
+        input_ids = _tokenize_text_prompt(tokenizer, prompt)
     return PreparedInputs(
         names=("input_ids",),
         tensors=(input_ids,),
@@ -2277,6 +2301,7 @@ def _lower_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
     runtime_inputs = []
     bound_constants = []
     bound_constant_bindings = []
+    bound_constant_value_ids: dict[int, str] = {}
 
     for value_id in ir.inputs:
         value = ir.values[value_id]
@@ -2287,10 +2312,13 @@ def _lower_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
     for value_id, const in ir.constants.items():
         value = ir.values[value_id]
         binding = _lookup_weight_binding(value)
-        lowered_const = _lower_constant_value(graph, value, const)
+        if binding is not None:
+            binding = ensure_binding_compatible(binding, source_tensor=const)
+        lowered_const = _lower_constant_value(graph, value, const, binding=binding)
         env[value_id] = lowered_const
         if hasattr(lowered_const, "g") and hasattr(lowered_const, "id"):
             bound_constants.append(lowered_const)
+            bound_constant_value_ids[int(lowered_const.id)] = str(value_id)
             if binding is not None:
                 bound_constant_bindings.append(
                     {
@@ -2325,6 +2353,7 @@ def _lower_preoptimized_ir(ir: IRGraph) -> TranspiledGraph:
         runtime_inputs=runtime_inputs,
         bound_constants=bound_constants,
         bound_constant_bindings=bound_constant_bindings,
+        bound_constant_value_ids=bound_constant_value_ids,
         outputs=outputs,
     )
 

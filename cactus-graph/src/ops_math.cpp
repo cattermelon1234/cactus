@@ -220,6 +220,28 @@ void compute_reduce_node(GraphNode& node, const std::vector<std::unique_ptr<Grap
         throw std::runtime_error("Reduction operations only support FP16 precision");
     }
 
+    if (node.op_type == OpType::CUMSUM) {
+        if (axis < 0 || static_cast<size_t>(axis) >= input_buffer.shape.size()) {
+            throw std::runtime_error("Cumsum axis out of range");
+        }
+
+        auto dims = AxisDims::from_shape(input_buffer.shape, static_cast<size_t>(axis));
+        const __fp16* input = input_buffer.data_as<__fp16>();
+        __fp16* output = node.output_buffer.data_as<__fp16>();
+
+        for (size_t outer = 0; outer < dims.outer; ++outer) {
+            for (size_t inner = 0; inner < dims.inner; ++inner) {
+                float running = 0.0f;
+                for (size_t axis_index = 0; axis_index < dims.axis_size; ++axis_index) {
+                    size_t flat_index = ((outer * dims.axis_size) + axis_index) * dims.inner + inner;
+                    running += static_cast<float>(input[flat_index]);
+                    output[flat_index] = static_cast<__fp16>(running);
+                }
+            }
+        }
+        return;
+    }
+
     if (axis == -1) {
         switch (node.op_type) {
             case OpType::SUM: {

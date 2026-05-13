@@ -91,7 +91,7 @@ enum class OpType {
     ABS, POW, FLATTEN, VIEW,
     MATMUL, TRANSPOSE, RESHAPE, SLICE, GATHER, EMBEDDING,
     BILINEAR_INTERPOLATION,
-    SUM, MEAN, VARIANCE, MIN, MAX,
+    SUM, MEAN, VARIANCE, MIN, MAX, CUMSUM,
     RMS_NORM, ROPE, ROPE_GPTJ, SOFTMAX,
     ATTENTION, ATTENTION_INT8_HYBRID, REL_POS_BIAS,
     CONV1D_CAUSAL, CONV1D_K3, CONV1D_K7S3, CONV1D,
@@ -497,6 +497,7 @@ public:
     size_t variance(size_t input, int axis);
     size_t min(size_t input, int axis);
     size_t max(size_t input, int axis);
+    size_t cumsum(size_t input, int axis);
     size_t softmax(size_t input, int axis = -1);
     size_t topk(size_t input, size_t k);
 
