@@ -66,6 +66,8 @@ def normalize_target(target: str) -> str:
         return "masked_fill"
     if target.startswith("aten.expand"):
         return "expand"
+    if target.startswith("aten.repeat"):
+        return "repeat"
     if target.startswith("aten.exp"):
         return "scalar_exp"
     if target.startswith("aten.sqrt"):

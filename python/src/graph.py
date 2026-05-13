@@ -660,6 +660,98 @@ class Graph:
             raise RuntimeError("graph_attention failed")
         return self._tensor_from_node(out.value)
 
+    def kv_cache_state(self, max_seq_len, num_kv_heads, head_dim, window_size=0, sink_size=0):
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_kv_cache_state(
+            self.h,
+            ctypes.c_size_t(int(max_seq_len)),
+            ctypes.c_size_t(int(num_kv_heads)),
+            ctypes.c_size_t(int(head_dim)),
+            ctypes.c_size_t(int(window_size)),
+            ctypes.c_size_t(int(sink_size)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_kv_cache_state failed"))
+        return self._tensor_from_node(out.value)
+
+    def kv_cache_append(self, new_kv, cache_state, window_size=0, sink_size=0):
+        new_kv = self._ensure_tensor(new_kv)
+        cache_state = self._ensure_tensor(cache_state)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_kv_cache_append(
+            self.h,
+            cactus_node_t(new_kv.id),
+            cactus_node_t(cache_state.id),
+            ctypes.c_size_t(int(window_size)),
+            ctypes.c_size_t(int(sink_size)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_kv_cache_append failed"))
+        return self._tensor_from_node(out.value)
+
+    def attention_cached(
+        self,
+        query,
+        key_new,
+        value_new,
+        k_cache_state,
+        v_cache_state,
+        scale,
+        position_offset=0,
+        window_size=0,
+        v_head_dim=0,
+    ):
+        query = self._ensure_tensor(query)
+        key_new = self._ensure_tensor(key_new)
+        value_new = self._ensure_tensor(value_new)
+        k_cache_state = self._ensure_tensor(k_cache_state)
+        v_cache_state = self._ensure_tensor(v_cache_state)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_attention_cached(
+            self.h,
+            cactus_node_t(query.id),
+            cactus_node_t(key_new.id),
+            cactus_node_t(value_new.id),
+            cactus_node_t(k_cache_state.id),
+            cactus_node_t(v_cache_state.id),
+            ctypes.c_float(float(scale)),
+            ctypes.c_size_t(int(position_offset)),
+            ctypes.c_size_t(int(window_size)),
+            ctypes.c_size_t(int(v_head_dim)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_attention_cached failed"))
+        return self._tensor_from_node(out.value)
+
+    def conv_cache_state(self, window_size, hidden_dim):
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_conv_cache_state(
+            self.h,
+            ctypes.c_size_t(int(window_size)),
+            ctypes.c_size_t(int(hidden_dim)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_conv_cache_state failed"))
+        return self._tensor_from_node(out.value)
+
+    def conv_cache_append(self, new_data, cache_state):
+        new_data = self._ensure_tensor(new_data)
+        cache_state = self._ensure_tensor(cache_state)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_conv_cache_append(
+            self.h,
+            cactus_node_t(new_data.id),
+            cactus_node_t(cache_state.id),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_conv_cache_append failed"))
+        return self._tensor_from_node(out.value)
+
     def rel_pos_bias(self, query, relative_key, scale):
         query = self._ensure_tensor(query)
         relative_key = self._ensure_tensor(relative_key)

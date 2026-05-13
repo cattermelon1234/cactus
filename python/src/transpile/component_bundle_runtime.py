@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 import ctypes
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 import re
@@ -71,6 +73,7 @@ class LoadedComponentGraph:
     outputs: list[Tensor]
     bound_constant_bindings: list[dict[str, object]]
     bound_tensor_files: list[object]
+    external_input_refs: dict[int, np.ndarray] = field(default_factory=dict)
 
     def set_input(self, index: int, data: Any, *, dtype: int | None = None) -> None:
         if index < 0 or index >= len(self.runtime_inputs):
@@ -86,6 +89,28 @@ class LoadedComponentGraph:
             )
         for index, value in enumerate(inputs):
             self.set_input(index, value)
+
+    def set_external_input(self, index: int, data: Any, *, dtype: int | None = None) -> np.ndarray:
+        if index < 0 or index >= len(self.runtime_inputs):
+            raise IndexError(
+                f"runtime input index out of range: {index} (have {len(self.runtime_inputs)})"
+            )
+        tensor = self.runtime_inputs[index]
+        target_dtype = int(tensor.dtype if dtype is None else dtype)
+        array = self.graph._coerce_input_array(data, target_dtype)
+        self.graph.set_external_input(tensor, int(array.ctypes.data), dtype=target_dtype)
+        self.external_input_refs[index] = array
+        return array
+
+    def set_external_inputs(self, inputs: list[Any] | tuple[Any, ...]) -> list[np.ndarray]:
+        if len(inputs) != len(self.runtime_inputs):
+            raise ValueError(
+                f"expected {len(self.runtime_inputs)} runtime inputs, got {len(inputs)}"
+            )
+        bound: list[np.ndarray] = []
+        for index, value in enumerate(inputs):
+            bound.append(self.set_external_input(index, value))
+        return bound
 
     def execute(self) -> list[Tensor]:
         self.graph.execute()
@@ -113,6 +138,49 @@ def load_saved_component_graph(
     weights_dir: str | Path | None = None,
 ) -> LoadedComponentGraph:
     root = Path(bundle_root).expanduser().resolve()
+    graph_relpath = component_entry.get("graph")
+    has_graph = isinstance(graph_relpath, str) and bool(graph_relpath)
+    graph_path = (root / str(graph_relpath)).resolve() if has_graph else None
+    prefer_saved_graph = os.environ.get("CACTUS_TRANSPILER_PREFER_SAVED_GRAPH") == "1"
+    if prefer_saved_graph and graph_path is not None and graph_path.exists():
+        try:
+            graph = Graph.load(graph_path)
+
+            runtime_inputs = [
+                graph._tensor_from_node(int(node_id))
+                for node_id in component_entry.get("runtime_input_node_ids", [])
+            ]
+            outputs = [
+                graph._tensor_from_node(int(node_id))
+                for node_id in component_entry.get("output_node_ids", [])
+            ]
+            bound_constant_bindings = list(component_entry.get("bound_constant_bindings") or [])
+            bound_tensor_files = _rebind_bound_constants(
+                graph=graph,
+                bundle_root=root,
+                bindings=bound_constant_bindings,
+                weights_dir=weights_dir,
+            )
+            return LoadedComponentGraph(
+                component=str(component_entry.get("component", "unknown")),
+                graph=graph,
+                runtime_inputs=runtime_inputs,
+                outputs=outputs,
+                bound_constant_bindings=bound_constant_bindings,
+                bound_tensor_files=bound_tensor_files,
+            )
+        except Exception as exc:
+            if not (
+                isinstance(component_entry.get("raw_ir"), str)
+                or isinstance(component_entry.get("optimized_ir"), str)
+            ):
+                raise
+            print(
+                f"note=component_graph_load_failed component={component_entry.get('component', 'unknown')} "
+                f"path={graph_path} fallback=ir reason={exc}",
+                flush=True,
+            )
+
     raw_ir_relpath = component_entry.get("raw_ir")
     optimized_ir_relpath = component_entry.get("optimized_ir")
     has_raw_ir = isinstance(raw_ir_relpath, str) and bool(raw_ir_relpath)
@@ -124,7 +192,6 @@ def load_saved_component_graph(
             weights_dir=weights_dir,
         )
 
-    graph_relpath = component_entry.get("graph")
     if not isinstance(graph_relpath, str) or not graph_relpath:
         raise ValueError(f"component entry is missing graph path: {component_entry}")
 
@@ -231,15 +298,44 @@ def run_transpiled_bundle(
     torch_dtype: torch.dtype = torch.float16,
     system_prompt: str | None = None,
     enable_thinking: bool = False,
+    max_new_tokens: int | None = None,
+    stop_sequences: tuple[str, ...] = (),
 ) -> dict[str, object]:
     bundle_root, manifest = load_component_bundle_manifest(bundle_dir_or_manifest)
     resolved_weights_dir = _default_weights_dir_for_manifest(manifest, explicit=weights_dir)
+    family = str(manifest.get("family", "") or "")
+    task = str(manifest.get("task", "") or "")
+    if (
+        task == "causal_lm_logits"
+        and input_ids is None
+        and _should_use_native_stateful_causal_runner(family)
+    ):
+        return _run_native_stateful_causal_lm_bundle(
+            bundle_root=bundle_root,
+            manifest=manifest,
+            prompt=prompt,
+            weights_dir=resolved_weights_dir,
+            enable_thinking=enable_thinking,
+            max_new_tokens=max_new_tokens,
+            stop_sequences=stop_sequences,
+        )
+    if (
+        audio_file is not None
+        and _should_use_native_stateful_audio_runner(family=family, task=task, manifest=manifest)
+    ):
+        return _run_native_stateful_audio_bundle(
+            bundle_root=bundle_root,
+            manifest=manifest,
+            audio_file=audio_file,
+            prompt=prompt,
+            weights_dir=resolved_weights_dir,
+            max_new_tokens=max_new_tokens,
+        )
+
     component_graphs, manifest = load_saved_component_graphs(
         bundle_dir_or_manifest,
         weights_dir=resolved_weights_dir,
     )
-    family = str(manifest.get("family", "") or "")
-    task = str(manifest.get("task", "") or "")
     if family == "parakeet_tdt" and task == "tdt_transcription":
         if audio_file is None:
             raise ValueError("audio_file is required for Parakeet TDT component bundles")
@@ -266,6 +362,27 @@ def run_transpiled_bundle(
             manifest=manifest,
             prompt=prompt,
             input_ids=input_ids,
+            enable_thinking=enable_thinking,
+            max_new_tokens=max_new_tokens,
+            stop_sequences=stop_sequences,
+        )
+    if task == "seq2seq_transcription":
+        if audio_file is None:
+            inputs_meta = manifest.get("inputs")
+            if isinstance(inputs_meta, dict):
+                stored_audio = inputs_meta.get("audio_file")
+                if isinstance(stored_audio, str) and stored_audio:
+                    audio_file = stored_audio
+        if audio_file is None:
+            raise ValueError("audio_file is required for seq2seq_transcription bundles")
+        return _run_seq2seq_transcription_bundle(
+            component_graphs=component_graphs,
+            manifest=manifest,
+            audio_file=audio_file,
+            prompt=prompt,
+            torch_dtype=torch_dtype,
+            max_new_tokens=max_new_tokens,
+            stop_sequences=stop_sequences,
         )
     if task == "encoder_hidden_states":
         if audio_file is None:
@@ -304,6 +421,311 @@ def _default_weights_dir_for_manifest(
     except Exception:
         return None
     return candidate if candidate.exists() else None
+
+
+def _should_use_native_stateful_causal_runner(family: str) -> bool:
+    if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_STATEFUL_RUNNER") == "1":
+        return False
+    return family.strip().lower() in {"qwen", "qwen3", "qwen3_5", "qwen3.5", "lfm", "lfm2", "lfm2_vl"}
+
+
+def _should_use_native_stateful_audio_runner(
+    *,
+    family: str,
+    task: str,
+    manifest: Mapping[str, object],
+) -> bool:
+    if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_AUDIO_RUNNER") == "1":
+        return False
+    model_id = str(manifest.get("model_id", "") or "").lower()
+    normalized_family = family.strip().lower()
+    if task == "tdt_transcription" and "parakeet" in normalized_family:
+        return True
+    if task == "seq2seq_transcription" and ("whisper" in normalized_family or "whisper" in model_id):
+        return True
+    return False
+
+
+def _run_native_stateful_audio_bundle(
+    *,
+    bundle_root: Path,
+    manifest: Mapping[str, object],
+    audio_file: str | Path,
+    prompt: str | None,
+    weights_dir: str | Path | None,
+    max_new_tokens: int | None,
+) -> dict[str, object]:
+    native_weights_dir = _resolve_native_stateful_weights_dir(
+        bundle_root=bundle_root,
+        manifest=manifest,
+        weights_dir=weights_dir,
+    )
+    if native_weights_dir is None:
+        raise FileNotFoundError("could not resolve a Cactus-native weights directory for stateful audio execution")
+
+    from src.cactus import cactus_destroy
+    from src.cactus import cactus_init
+    from src.cactus import cactus_transcribe
+
+    inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+    if not isinstance(inputs_meta, Mapping):
+        inputs_meta = {}
+    stored_target = int(inputs_meta.get("target_token_count", 0) or 0)
+    if max_new_tokens is None:
+        token_budget = stored_target if stored_target > 0 else 512
+    else:
+        token_budget = max(0, int(max_new_tokens))
+
+    resolved_prompt = prompt
+    if resolved_prompt is None:
+        stored_prompt = inputs_meta.get("prompt")
+        if isinstance(stored_prompt, str) and stored_prompt:
+            resolved_prompt = stored_prompt
+    if resolved_prompt is None:
+        resolved_prompt = ""
+
+    options = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0,
+        "max_tokens": token_budget,
+        "auto_handoff": False,
+        "confidence_threshold": -1.0,
+        "telemetry_enabled": False,
+    }
+
+    generated_token_ids: list[int] = []
+    token_pieces: list[str] = []
+
+    def _token_callback(token: str, token_id: int) -> None:
+        token_pieces.append(str(token))
+        generated_token_ids.append(int(token_id))
+
+    start = time.perf_counter()
+    model_handle = cactus_init(str(native_weights_dir), None, False)
+    try:
+        response_text = cactus_transcribe(
+            model_handle,
+            str(audio_file),
+            resolved_prompt,
+            json.dumps(options),
+            _token_callback,
+            None,
+        )
+    finally:
+        cactus_destroy(model_handle)
+    end = time.perf_counter()
+
+    try:
+        payload = json.loads(response_text)
+    except Exception:
+        payload = {"success": True, "response": response_text}
+
+    transcript = str(payload.get("response", response_text) or "")
+    total_ms = float(payload.get("total_time_ms", (end - start) * 1000.0) or 0.0)
+    decode_tokens = int(payload.get("decode_tokens", len(generated_token_ids)) or 0)
+    return {
+        "bundle_model_id": str(manifest.get("model_id", "") or ""),
+        "family": str(manifest.get("family", "") or ""),
+        "task": str(manifest.get("task", "") or ""),
+        "component_order": list(manifest.get("component_order", [])),
+        "runtime_strategy": "native_cactus_stateful_audio",
+        "native_weights_dir": str(native_weights_dir),
+        "audio_file": str(Path(audio_file).expanduser().resolve()),
+        "prompt": resolved_prompt,
+        "response": transcript,
+        "transcript": transcript,
+        "token_ids": generated_token_ids,
+        "generated_token_ids": generated_token_ids,
+        "token_pieces": token_pieces,
+        "decode_tokens": decode_tokens,
+        "prefill_tokens": int(payload.get("prefill_tokens", 0) or 0),
+        "total_tokens": int(payload.get("total_tokens", 0) or 0),
+        "time_to_first_token_ms": float(payload.get("time_to_first_token_ms", 0.0) or 0.0),
+        "prefill_tps": float(payload.get("prefill_tps", 0.0) or 0.0),
+        "decode_tps": float(payload.get("decode_tps", 0.0) or 0.0),
+        "decoder_ms": total_ms,
+        "total_ms": total_ms,
+        "wall_ms": (end - start) * 1000.0,
+        "native_response": payload,
+    }
+
+
+def _run_native_stateful_causal_lm_bundle(
+    *,
+    bundle_root: Path,
+    manifest: dict[str, object],
+    prompt: str | None,
+    weights_dir: str | Path | None,
+    enable_thinking: bool,
+    max_new_tokens: int | None,
+    stop_sequences: tuple[str, ...],
+) -> dict[str, object]:
+    resolved_prompt = prompt
+    if resolved_prompt is None:
+        inputs_meta = manifest.get("inputs")
+        if isinstance(inputs_meta, dict):
+            stored_prompt = inputs_meta.get("prompt")
+            if isinstance(stored_prompt, str) and stored_prompt:
+                resolved_prompt = stored_prompt
+    if not resolved_prompt:
+        raise ValueError("provide --prompt for native stateful causal-LM bundle execution")
+
+    native_weights_dir = _resolve_native_stateful_weights_dir(
+        bundle_root=bundle_root,
+        manifest=manifest,
+        weights_dir=weights_dir,
+    )
+    if native_weights_dir is None:
+        raise FileNotFoundError("could not resolve a Cactus-native weights directory for stateful causal-LM execution")
+
+    from src.cactus import cactus_complete
+    from src.cactus import cactus_destroy
+    from src.cactus import cactus_init
+
+    inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+    target_token_count = int(inputs_meta.get("target_token_count", 0) or 0)
+    prompt_token_count = len(_parse_nested_manifest_input_ids(inputs_meta.get("prompt_input_ids")) or [])
+    if max_new_tokens is None:
+        token_budget = max(1, target_token_count - prompt_token_count) if target_token_count > 0 else 8
+    else:
+        token_budget = max(0, int(max_new_tokens))
+
+    messages = []
+    system_prompt = str(inputs_meta.get("system_prompt", "") or "")
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": resolved_prompt})
+
+    options = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0,
+        "max_tokens": token_budget,
+        "auto_handoff": False,
+        "confidence_threshold": -1.0,
+        "telemetry_enabled": False,
+        "enable_thinking_if_supported": bool(enable_thinking),
+    }
+    if stop_sequences:
+        options["stop_sequences"] = list(stop_sequences)
+
+    generated_token_ids: list[int] = []
+    token_pieces: list[str] = []
+
+    def _token_callback(token: str, token_id: int) -> None:
+        token_pieces.append(str(token))
+        generated_token_ids.append(int(token_id))
+
+    start = time.perf_counter()
+    model_handle = cactus_init(str(native_weights_dir), None, False)
+    try:
+        response_json = cactus_complete(
+            model_handle,
+            json.dumps(messages),
+            json.dumps(options),
+            "",
+            _token_callback,
+            None,
+        )
+    finally:
+        cactus_destroy(model_handle)
+    end = time.perf_counter()
+
+    try:
+        payload = json.loads(response_json)
+    except Exception:
+        payload = {"success": True, "response": response_json}
+
+    total_ms = float(payload.get("total_time_ms", (end - start) * 1000.0) or 0.0)
+    return {
+        "bundle_model_id": str(manifest.get("model_id", "") or ""),
+        "family": str(manifest.get("family", "") or ""),
+        "task": str(manifest.get("task", "") or ""),
+        "component_order": list(manifest.get("component_order", [])),
+        "runtime_strategy": "native_cactus_stateful",
+        "native_weights_dir": str(native_weights_dir),
+        "prompt": resolved_prompt,
+        "response": str(payload.get("response", "") or ""),
+        "generated_token_ids": generated_token_ids,
+        "token_pieces": token_pieces,
+        "decode_tokens": int(payload.get("decode_tokens", len(generated_token_ids)) or 0),
+        "prefill_tokens": int(payload.get("prefill_tokens", 0) or 0),
+        "total_tokens": int(payload.get("total_tokens", 0) or 0),
+        "time_to_first_token_ms": float(payload.get("time_to_first_token_ms", 0.0) or 0.0),
+        "prefill_tps": float(payload.get("prefill_tps", 0.0) or 0.0),
+        "decode_tps": float(payload.get("decode_tps", 0.0) or 0.0),
+        "decoder_ms": total_ms,
+        "total_ms": total_ms,
+        "wall_ms": (end - start) * 1000.0,
+        "native_response": payload,
+    }
+
+
+def _resolve_native_stateful_weights_dir(
+    *,
+    bundle_root: Path,
+    manifest: Mapping[str, object],
+    weights_dir: str | Path | None,
+) -> Path | None:
+    candidates: list[Path] = []
+    if weights_dir is not None:
+        candidates.append(Path(weights_dir).expanduser().resolve())
+    for component in manifest.get("components", []):
+        if not isinstance(component, Mapping):
+            continue
+        for binding in component.get("bound_constant_bindings", []) or []:
+            if not isinstance(binding, Mapping):
+                continue
+            path = binding.get("path")
+            if isinstance(path, str) and path:
+                candidate = Path(path).expanduser()
+                if candidate.exists():
+                    candidates.append(candidate.resolve().parent)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen or not candidate.exists():
+            continue
+        seen.add(candidate)
+        if (candidate / "config.txt").exists():
+            if any(candidate.glob("*.cq4.weights")):
+                return _prepare_native_cq_weight_view(candidate, bundle_root)
+            return candidate
+    return None
+
+
+def _prepare_native_cq_weight_view(source_dir: Path, bundle_root: Path) -> Path:
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", source_dir.name)
+    view_dir = bundle_root / ".native_cq_view" / safe_name
+    view_dir.mkdir(parents=True, exist_ok=True)
+    for child in view_dir.iterdir():
+        if child.is_symlink() or child.is_file():
+            child.unlink()
+
+    for source in source_dir.iterdir():
+        if not source.is_file():
+            continue
+        target_name: str | None = None
+        if source.name.endswith(".cq4.weights"):
+            target_name = source.name.replace(".cq4.weights", ".weights")
+        elif source.name.endswith(".weights"):
+            cq4_sibling = source_dir / f"{source.name[:-len('.weights')]}.cq4.weights"
+            if not cq4_sibling.exists():
+                target_name = source.name
+        elif source.suffix in {".txt", ".json", ".model", ".jinja2", ".tiktoken", ".bias"}:
+            target_name = source.name
+        if target_name is None:
+            continue
+        target = view_dir / target_name
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        target.symlink_to(source)
+    return view_dir
 
 
 def _deserialize_saved_ir_graph(
@@ -539,6 +961,26 @@ def _run_parakeet_tdt_bundle(
 
     decoder_component = component_graphs["decoder"]
     decoder_steps = 0
+    decoder_input_names = component_input_names(decoder_component)
+    decoder_input_buffers: dict[str, np.ndarray] = {
+        "encoder_frame": np.zeros((batch_size, int(encoder_hidden_states.shape[-1])), dtype=encoder_hidden_states.dtype),
+        "token_ids": np.zeros((batch_size,), dtype=np.int64),
+    }
+    for index in range(config.predictor_num_layers):
+        decoder_input_buffers[f"state_h_{index}"] = np.zeros(
+            (batch_size, config.predictor_hidden_dim),
+            dtype=state_dtype,
+        )
+        decoder_input_buffers[f"state_c_{index}"] = np.zeros(
+            (batch_size, config.predictor_hidden_dim),
+            dtype=state_dtype,
+        )
+    bound_decoder_inputs = decoder_component.set_external_inputs(
+        [decoder_input_buffers[name] for name in decoder_input_names]
+    )
+    decoder_input_buffers = {
+        name: bound_decoder_inputs[index] for index, name in enumerate(decoder_input_names)
+    }
 
     def _step(
         frame: np.ndarray,
@@ -547,16 +989,11 @@ def _run_parakeet_tdt_bundle(
     ) -> tuple[np.ndarray, tuple[np.ndarray, ...]]:
         nonlocal decoder_steps
         decoder_steps += 1
-        input_store: dict[str, object] = {
-            "encoder_frame": np.ascontiguousarray(frame),
-            "token_ids": np.full((batch_size,), token_id, dtype=np.int64),
-        }
+        np.copyto(decoder_input_buffers["encoder_frame"], np.asarray(frame, dtype=encoder_hidden_states.dtype))
+        decoder_input_buffers["token_ids"].fill(int(token_id))
         for index in range(config.predictor_num_layers):
-            input_store[f"state_h_{index}"] = np.ascontiguousarray(state_values[index * 2])
-            input_store[f"state_c_{index}"] = np.ascontiguousarray(state_values[index * 2 + 1])
-
-        runtime_inputs = [input_store[name] for name in component_input_names(decoder_component)]
-        decoder_component.set_inputs(runtime_inputs)
+            np.copyto(decoder_input_buffers[f"state_h_{index}"], np.asarray(state_values[index * 2], dtype=state_dtype))
+            np.copyto(decoder_input_buffers[f"state_c_{index}"], np.asarray(state_values[index * 2 + 1], dtype=state_dtype))
         outputs = decoder_component.execute()
         logits = outputs[0].numpy().astype(np.float32, copy=False)
         next_states = tuple(output.numpy() for output in outputs[1:])
@@ -711,17 +1148,26 @@ def _run_causal_lm_logits_bundle(
     manifest: dict[str, object],
     prompt: str | None,
     input_ids: str | list[int] | tuple[int, ...] | None,
+    enable_thinking: bool,
+    max_new_tokens: int | None,
+    stop_sequences: tuple[str, ...],
 ) -> dict[str, object]:
     if "decoder" not in component_graphs:
         raise ValueError("causal LM component bundle must include a decoder graph")
 
-    token_ids, tokenizer = _resolve_causal_lm_input_ids(
+    prompt_token_ids, tokenizer = _resolve_causal_lm_input_ids(
         manifest=manifest,
         prompt=prompt,
         input_ids=input_ids,
+        enable_thinking=enable_thinking,
     )
-    if not token_ids:
+    if not prompt_token_ids:
         raise ValueError("causal LM bundle input token ids are empty")
+    if tokenizer is None:
+        try:
+            tokenizer = _load_bundle_tokenizer(manifest)
+        except Exception:
+            tokenizer = None
 
     _attach_component_io_names(manifest, component_graphs)
     decoder = component_graphs["decoder"]
@@ -732,39 +1178,312 @@ def _run_causal_lm_logits_bundle(
             f"got {runtime_inputs!r}"
         )
 
-    input_array = np.asarray([token_ids], dtype=np.int64)
-    start = time.perf_counter()
-    decoder.set_inputs([input_array])
-    outputs = decoder.execute()
-    end = time.perf_counter()
-    if not outputs:
-        raise RuntimeError("causal LM decoder graph produced no outputs")
+    inputs_meta = manifest.get("inputs")
+    if not isinstance(inputs_meta, dict):
+        inputs_meta = {}
+    stored_input_ids = _parse_nested_manifest_input_ids(inputs_meta.get("input_ids")) or []
+    stored_target_token_count = int(inputs_meta.get("target_token_count", 0) or 0)
+    target_token_count = max(
+        len(prompt_token_ids),
+        stored_target_token_count,
+        len(stored_input_ids),
+    )
+    if target_token_count <= 0:
+        raise ValueError("causal LM bundle manifest did not provide a valid target token count")
+    if len(prompt_token_ids) > target_token_count:
+        raise ValueError(
+            f"prompt token length {len(prompt_token_ids)} exceeds transpiled bundle context {target_token_count}; "
+            "re-transpile with a larger --max-new-tokens budget or use a shorter prompt"
+        )
 
-    logits = outputs[0].numpy()
-    if logits.ndim != 3:
-        raise RuntimeError(f"expected logits with shape [batch, seq, vocab], got {list(logits.shape)}")
-    next_token_id = int(np.argmax(logits[0, -1]))
-    decoded = None
-    if tokenizer is None:
-        try:
-            tokenizer = _load_bundle_tokenizer(manifest)
-        except Exception:
-            tokenizer = None
-    if tokenizer is not None and hasattr(tokenizer, "decode"):
-        decoded = tokenizer.decode([next_token_id])
+    padding_token_id = _resolve_bundle_padding_token_id(inputs_meta, tokenizer)
+    input_array = np.full((1, target_token_count), padding_token_id, dtype=np.int64)
+    input_array[0, : len(prompt_token_ids)] = np.asarray(prompt_token_ids, dtype=np.int64)
+    input_array = decoder.set_external_input(0, input_array)
+
+    available_headroom = max(0, target_token_count - len(prompt_token_ids))
+    if max_new_tokens is None:
+        token_budget = available_headroom if available_headroom > 0 else 1
+    else:
+        requested = max(0, int(max_new_tokens))
+        if available_headroom > 0:
+            token_budget = min(requested, available_headroom)
+        else:
+            token_budget = 1 if requested > 0 else 0
+
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    encoded_stop_sequences = _encode_stop_sequences(tokenizer, stop_sequences)
+    generated_ids: list[int] = []
+    logits_shape: list[int] | None = None
+    current_length = len(prompt_token_ids)
+    first_token_ms = 0.0
+    stop_reason = "max_new_tokens"
+    start = time.perf_counter()
+
+    for step_index in range(token_budget):
+        outputs = decoder.execute()
+        if not outputs:
+            raise RuntimeError("causal LM decoder graph produced no outputs")
+        logits = outputs[0].numpy()
+        logits_shape = list(logits.shape)
+        if logits.ndim != 3:
+            raise RuntimeError(f"expected logits with shape [batch, seq, vocab], got {list(logits.shape)}")
+        token_position = current_length - 1
+        if logits.shape[1] == 1:
+            token_position = 0
+        next_token_id = int(np.argmax(logits[0, token_position]))
+        generated_ids.append(next_token_id)
+        if step_index == 0:
+            first_token_ms = (time.perf_counter() - start) * 1000.0
+
+        if eos_token_id is not None and next_token_id == int(eos_token_id):
+            stop_reason = "eos_token"
+            break
+        if _trim_stop_suffix(generated_ids, encoded_stop_sequences):
+            stop_reason = "stop_sequence"
+            break
+
+        if current_length >= target_token_count:
+            stop_reason = "context_limit"
+            break
+        if step_index + 1 >= token_budget:
+            break
+
+        input_array[0, current_length] = next_token_id
+        current_length += 1
+
+    end = time.perf_counter()
+    response = _decode_generated_text(tokenizer, generated_ids, skip_special_tokens=True).strip()
+    if not response:
+        response = _decode_generated_text(tokenizer, generated_ids, skip_special_tokens=False).strip()
+    decode_time_ms = max(0.0, (end - start) * 1000.0 - first_token_ms)
+    decode_tps = (
+        ((len(generated_ids) - 1) * 1000.0) / decode_time_ms
+        if len(generated_ids) > 1 and decode_time_ms > 0.0
+        else 0.0
+    )
+    prefill_tps = (
+        (len(prompt_token_ids) * 1000.0) / first_token_ms
+        if first_token_ms > 0.0
+        else 0.0
+    )
+    first_generated_token_id = generated_ids[0] if generated_ids else None
+    first_generated_token = None
+    if first_generated_token_id is not None:
+        first_generated_token = _decode_generated_text(
+            tokenizer,
+            [int(first_generated_token_id)],
+            skip_special_tokens=False,
+        )
 
     return {
         "bundle_model_id": str(manifest.get("model_id", "") or ""),
         "family": str(manifest.get("family", "") or ""),
         "task": str(manifest.get("task", "") or ""),
         "component_order": list(manifest.get("component_order", [])),
-        "input_ids": token_ids,
+        "input_ids": prompt_token_ids,
         "input_shape": list(input_array.shape),
-        "output_shape": list(logits.shape),
+        "output_shape": logits_shape or [],
         "decoder_ms": (end - start) * 1000.0,
         "total_ms": (end - start) * 1000.0,
-        "next_token_id": next_token_id,
-        "next_token": decoded,
+        "time_to_first_token_ms": first_token_ms,
+        "prefill_tps": prefill_tps,
+        "decode_tps": decode_tps,
+        "decode_tokens": len(generated_ids),
+        "total_tokens": len(prompt_token_ids) + len(generated_ids),
+        "generated_token_ids": generated_ids,
+        "response": response,
+        "stop_reason": stop_reason,
+        "next_token_id": first_generated_token_id,
+        "next_token": first_generated_token,
+    }
+
+
+def _run_seq2seq_transcription_bundle(
+    *,
+    component_graphs: dict[str, LoadedComponentGraph],
+    manifest: dict[str, object],
+    audio_file: str | Path,
+    prompt: str | None,
+    torch_dtype: torch.dtype,
+    max_new_tokens: int | None,
+    stop_sequences: tuple[str, ...],
+) -> dict[str, object]:
+    if "audio_encoder" not in component_graphs or "decoder" not in component_graphs:
+        raise ValueError("seq2seq_transcription bundle must include audio_encoder and decoder graphs")
+
+    inputs_meta = manifest.get("inputs")
+    if not isinstance(inputs_meta, dict):
+        inputs_meta = {}
+    input_shapes = inputs_meta.get("input_shapes") if isinstance(inputs_meta, dict) else {}
+    if not isinstance(input_shapes, dict):
+        input_shapes = {}
+    expected_shape = input_shapes.get("input_features")
+    if not (isinstance(expected_shape, list) and len(expected_shape) == 3):
+        raise ValueError("seq2seq_transcription bundle manifest is missing inputs.input_shapes.input_features")
+
+    tokenizer = None
+    try:
+        tokenizer = _load_bundle_tokenizer(manifest)
+    except Exception:
+        tokenizer = None
+
+    prompt_token_ids = _resolve_seq2seq_prompt_token_ids(
+        manifest=manifest,
+        prompt=prompt,
+        tokenizer=tokenizer,
+    )
+    if not prompt_token_ids:
+        raise ValueError("seq2seq_transcription bundle input token ids are empty")
+
+    _attach_component_io_names(manifest, component_graphs)
+    encoder = component_graphs["audio_encoder"]
+    decoder = component_graphs["decoder"]
+    encoder_inputs = component_input_names(encoder)
+    decoder_inputs = component_input_names(decoder)
+    if encoder_inputs and encoder_inputs != ("input_features",):
+        raise ValueError(
+            "seq2seq_transcription audio_encoder must accept logical input ('input_features',), "
+            f"got {encoder_inputs!r}"
+        )
+    if decoder_inputs and decoder_inputs != ("decoder_input_ids", "encoder_hidden_states"):
+        raise ValueError(
+            "seq2seq_transcription decoder must accept logical inputs "
+            "('decoder_input_ids', 'encoder_hidden_states'), "
+            f"got {decoder_inputs!r}"
+        )
+
+    preprocess_start = time.perf_counter()
+    input_features, active_frames = _prepare_generic_audio_encoder_features(
+        audio_file=audio_file,
+        manifest=manifest,
+        expected_shape=expected_shape,
+        torch_dtype=torch_dtype,
+    )
+    preprocess_end = time.perf_counter()
+
+    encoder_start = time.perf_counter()
+    encoder.set_inputs([input_features])
+    encoder_outputs = encoder.execute()
+    encoder_end = time.perf_counter()
+    if not encoder_outputs:
+        raise RuntimeError("seq2seq_transcription encoder graph produced no outputs")
+    encoder_hidden_states = np.asarray(encoder_outputs[0].numpy())
+
+    stored_target_token_count = int(inputs_meta.get("target_token_count", 0) or 0)
+    target_token_count = max(stored_target_token_count, len(prompt_token_ids))
+    if target_token_count <= 0:
+        raise ValueError("seq2seq_transcription bundle manifest did not provide a valid target token count")
+    if len(prompt_token_ids) > target_token_count:
+        raise ValueError(
+            f"prompt token length {len(prompt_token_ids)} exceeds transpiled bundle context {target_token_count}; "
+            "re-transpile with a larger --max-new-tokens budget or use a shorter prompt"
+        )
+
+    padding_token_id = _resolve_bundle_padding_token_id(inputs_meta, tokenizer)
+    input_array = np.full((1, target_token_count), padding_token_id, dtype=np.int64)
+    input_array[0, : len(prompt_token_ids)] = np.asarray(prompt_token_ids, dtype=np.int64)
+    if hasattr(decoder, "set_external_inputs"):
+        bound_decoder_inputs = decoder.set_external_inputs([input_array, encoder_hidden_states])
+        input_array = bound_decoder_inputs[0]
+        encoder_hidden_states = bound_decoder_inputs[1]
+    else:
+        decoder.set_inputs([input_array, encoder_hidden_states])
+
+    available_headroom = max(0, target_token_count - len(prompt_token_ids))
+    if max_new_tokens is None:
+        token_budget = available_headroom if available_headroom > 0 else 1
+    else:
+        requested = max(0, int(max_new_tokens))
+        if available_headroom > 0:
+            token_budget = min(requested, available_headroom)
+        else:
+            token_budget = 1 if requested > 0 else 0
+
+    default_stop_sequences = ("<|endoftext|>", "<|endoftranscript|>", "</s>", "<pad>")
+    resolved_stop_sequences = stop_sequences or default_stop_sequences
+    encoded_stop_sequences = _encode_stop_sequences(tokenizer, resolved_stop_sequences)
+    eos_token_id = inputs_meta.get("eos_token_id", getattr(tokenizer, "eos_token_id", None))
+    suppress_tokens = [int(value) for value in inputs_meta.get("suppress_tokens", []) if isinstance(value, int)]
+    begin_suppress_tokens = [int(value) for value in inputs_meta.get("begin_suppress_tokens", []) if isinstance(value, int)]
+
+    generated_ids: list[int] = []
+    logits_shape: list[int] | None = None
+    current_length = len(prompt_token_ids)
+    first_token_ms = 0.0
+    stop_reason = "max_new_tokens"
+    decoder_start = time.perf_counter()
+
+    for step_index in range(token_budget):
+        outputs = decoder.execute()
+        if not outputs:
+            raise RuntimeError("seq2seq_transcription decoder graph produced no outputs")
+        logits = outputs[0].numpy()
+        logits_shape = list(logits.shape)
+        if logits.ndim != 3:
+            raise RuntimeError(f"expected decoder logits with shape [batch, seq, vocab], got {list(logits.shape)}")
+        token_position = current_length - 1
+        if logits.shape[1] == 1:
+            token_position = 0
+        next_token_id = _select_next_token_with_suppression(
+            np.asarray(logits[0, token_position]),
+            suppress_tokens=suppress_tokens,
+            begin_suppress_tokens=begin_suppress_tokens if step_index == 0 else (),
+        )
+        generated_ids.append(next_token_id)
+        if step_index == 0:
+            first_token_ms = (time.perf_counter() - decoder_start) * 1000.0
+
+        if eos_token_id is not None and next_token_id == int(eos_token_id):
+            stop_reason = "eos_token"
+            break
+        if _trim_stop_suffix(generated_ids, encoded_stop_sequences):
+            stop_reason = "stop_sequence"
+            break
+        if current_length >= target_token_count:
+            stop_reason = "context_limit"
+            break
+        if step_index + 1 >= token_budget:
+            break
+
+        input_array[0, current_length] = next_token_id
+        current_length += 1
+
+    decoder_end = time.perf_counter()
+    transcript = _decode_generated_text(tokenizer, generated_ids, skip_special_tokens=True).strip()
+    if not transcript:
+        transcript = _strip_whisper_control_tokens(
+            _decode_generated_text(tokenizer, generated_ids, skip_special_tokens=False)
+        ).strip()
+    decode_time_ms = max(0.0, (decoder_end - decoder_start) * 1000.0 - first_token_ms)
+    decode_tps = (
+        ((len(generated_ids) - 1) * 1000.0) / decode_time_ms
+        if len(generated_ids) > 1 and decode_time_ms > 0.0
+        else 0.0
+    )
+
+    return {
+        "bundle_model_id": str(manifest.get("model_id", "") or ""),
+        "family": str(manifest.get("family", "") or ""),
+        "task": str(manifest.get("task", "") or ""),
+        "audio_file": str(Path(audio_file).expanduser().resolve()),
+        "component_order": list(manifest.get("component_order", [])),
+        "active_feature_frames": active_frames,
+        "input_shape": list(input_features.shape),
+        "encoder_hidden_shape": list(encoder_hidden_states.shape),
+        "output_shape": logits_shape or [],
+        "input_ids": prompt_token_ids,
+        "generated_token_ids": generated_ids,
+        "transcript": transcript,
+        "response": transcript,
+        "preprocess_ms": (preprocess_end - preprocess_start) * 1000.0,
+        "encoder_ms": (encoder_end - encoder_start) * 1000.0,
+        "decoder_ms": (decoder_end - decoder_start) * 1000.0,
+        "total_ms": (decoder_end - preprocess_start) * 1000.0,
+        "time_to_first_token_ms": first_token_ms,
+        "decode_tps": decode_tps,
+        "decode_tokens": len(generated_ids),
+        "stop_reason": stop_reason,
     }
 
 
@@ -829,13 +1548,14 @@ def _prepare_generic_audio_encoder_features(
     torch_dtype: torch.dtype,
 ) -> tuple[np.ndarray, int]:
     family = str(manifest.get("family", "") or "")
+    family_lower = family.strip().lower()
     inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
     sample_rate = int(inputs_meta.get("sample_rate", 16000) if isinstance(inputs_meta, dict) else 16000)
     batch = int(expected_shape[0])
     if batch != 1:
         raise ValueError("saved audio encoder bundle runtime currently expects batch size 1")
 
-    if family == "whisper":
+    if "whisper" in family_lower:
         expected_mels = int(expected_shape[1])
         expected_frames = int(expected_shape[2])
         try:
@@ -868,7 +1588,7 @@ def _prepare_generic_audio_encoder_features(
     features = features[:active_frames, :]
     if expected_frames > active_frames:
         features = np.pad(features, ((0, expected_frames - active_frames), (0, 0)), mode="constant")
-    if family == "whisper":
+    if "whisper" in family_lower:
         features = np.ascontiguousarray(features.T)
     features = np.ascontiguousarray(features, dtype=np.float16 if torch_dtype == torch.float16 else np.float32)
     return np.expand_dims(features, axis=0), active_frames
@@ -879,6 +1599,7 @@ def _resolve_causal_lm_input_ids(
     manifest: dict[str, object],
     prompt: str | None,
     input_ids: str | list[int] | tuple[int, ...] | None,
+    enable_thinking: bool = False,
 ) -> tuple[list[int], object | None]:
     if input_ids is not None:
         return _parse_input_ids(input_ids), None
@@ -886,6 +1607,10 @@ def _resolve_causal_lm_input_ids(
     if prompt is None:
         inputs_meta = manifest.get("inputs")
         if isinstance(inputs_meta, dict):
+            stored_prompt_ids = inputs_meta.get("prompt_input_ids")
+            parsed_prompt_ids = _parse_nested_manifest_input_ids(stored_prompt_ids)
+            if parsed_prompt_ids:
+                return parsed_prompt_ids, None
             stored_ids = inputs_meta.get("input_ids")
             parsed = _parse_nested_manifest_input_ids(stored_ids)
             if parsed:
@@ -897,7 +1622,12 @@ def _resolve_causal_lm_input_ids(
         raise ValueError("provide --input-ids or --prompt for causal LM component bundles")
 
     tokenizer = _load_bundle_tokenizer(manifest)
-    token_ids = _tokenize_bundle_prompt(tokenizer, prompt)
+    token_ids = _tokenize_bundle_prompt_for_manifest(
+        manifest,
+        tokenizer,
+        prompt,
+        enable_thinking_if_supported=enable_thinking,
+    )
     return token_ids, tokenizer
 
 
@@ -955,7 +1685,12 @@ def _load_bundle_tokenizer(manifest: dict[str, object]):
     )
 
 
-def _tokenize_bundle_prompt(tokenizer: object, prompt: str) -> list[int]:
+def _tokenize_bundle_prompt(
+    tokenizer: object,
+    prompt: str,
+    *,
+    enable_thinking_if_supported: bool = False,
+) -> list[int]:
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
     if callable(apply_chat_template):
         try:
@@ -964,6 +1699,7 @@ def _tokenize_bundle_prompt(tokenizer: object, prompt: str) -> list[int]:
                 tokenize=True,
                 add_generation_prompt=True,
                 return_dict=True,
+                enable_thinking=bool(enable_thinking_if_supported),
             )
             ids = encoded["input_ids"] if isinstance(encoded, Mapping) else encoded
             if ids and isinstance(ids[0], list):
@@ -977,6 +1713,144 @@ def _tokenize_bundle_prompt(tokenizer: object, prompt: str) -> list[int]:
     if ids and isinstance(ids[0], list):
         ids = ids[0]
     return [int(value) for value in ids]
+
+
+def _tokenize_bundle_prompt_for_manifest(
+    manifest: Mapping[str, object],
+    tokenizer: object,
+    prompt: str,
+    *,
+    enable_thinking_if_supported: bool = False,
+) -> list[int]:
+    family = str(manifest.get("family", "") or "").strip().lower()
+    if family in {"qwen", "qwen3", "qwen3_5", "qwen3.5"}:
+        return _encode_prompt_text(
+            tokenizer,
+            f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
+        )
+    if family in {"lfm2", "lfm2_vl", "lfm"}:
+        return _encode_prompt_text(
+            tokenizer,
+            f"<|startoftext|><|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
+        )
+    return _tokenize_bundle_prompt(
+        tokenizer,
+        prompt,
+        enable_thinking_if_supported=enable_thinking_if_supported,
+    )
+
+
+def _encode_prompt_text(tokenizer: object, prompt_text: str) -> list[int]:
+    encode = getattr(tokenizer, "encode", None)
+    if callable(encode):
+        try:
+            return [int(value) for value in encode(prompt_text, add_special_tokens=False)]
+        except TypeError:
+            return [int(value) for value in encode(prompt_text)]
+    encoded = tokenizer(prompt_text, return_tensors=None, add_special_tokens=False)  # type: ignore[operator]
+    ids = encoded["input_ids"] if isinstance(encoded, Mapping) else encoded
+    if ids and isinstance(ids[0], list):
+        ids = ids[0]
+    return [int(value) for value in ids]
+
+
+def _resolve_bundle_padding_token_id(inputs_meta: Mapping[str, object] | None, tokenizer: object | None) -> int:
+    if isinstance(inputs_meta, Mapping):
+        value = inputs_meta.get("padding_token_id")
+        if isinstance(value, int) and value >= 0:
+            return int(value)
+    for attr_name in ("pad_token_id", "eos_token_id", "bos_token_id"):
+        token_id = getattr(tokenizer, attr_name, None) if tokenizer is not None else None
+        if isinstance(token_id, int) and token_id >= 0:
+            return int(token_id)
+    return 0
+
+
+def _encode_stop_sequences(tokenizer: object | None, stop_sequences: tuple[str, ...]) -> list[list[int]]:
+    if tokenizer is None or not stop_sequences:
+        return []
+    encode = getattr(tokenizer, "encode", None)
+    if not callable(encode):
+        return []
+    encoded: list[list[int]] = []
+    for stop_sequence in stop_sequences:
+        try:
+            token_ids = list(encode(stop_sequence, add_special_tokens=False))
+        except TypeError:
+            token_ids = list(encode(stop_sequence))
+        if token_ids:
+            encoded.append([int(token_id) for token_id in token_ids])
+    return encoded
+
+
+def _has_token_suffix(token_ids: list[int], suffix: list[int]) -> bool:
+    if not suffix or len(token_ids) < len(suffix):
+        return False
+    return token_ids[-len(suffix) :] == suffix
+
+
+def _trim_stop_suffix(token_ids: list[int], stop_sequences: list[list[int]]) -> bool:
+    for stop_sequence in stop_sequences:
+        if _has_token_suffix(token_ids, stop_sequence):
+            del token_ids[-len(stop_sequence) :]
+            return True
+    return False
+
+
+def _decode_generated_text(tokenizer: object | None, token_ids: list[int], *, skip_special_tokens: bool) -> str:
+    if tokenizer is None:
+        return ""
+    decode = getattr(tokenizer, "decode", None)
+    if not callable(decode):
+        return ""
+    try:
+        return str(decode(token_ids, skip_special_tokens=skip_special_tokens))
+    except TypeError:
+        return str(decode(token_ids))
+
+
+def _resolve_seq2seq_prompt_token_ids(
+    *,
+    manifest: dict[str, object],
+    prompt: str | None,
+    tokenizer: object | None,
+) -> list[int]:
+    if prompt:
+        if tokenizer is None:
+            raise ValueError("transformers tokenizer is required when providing --prompt for seq2seq bundles")
+        return _tokenize_bundle_prompt(tokenizer, prompt, enable_thinking_if_supported=False)
+
+    inputs_meta = manifest.get("inputs")
+    if isinstance(inputs_meta, dict):
+        stored_ids = _parse_nested_manifest_input_ids(inputs_meta.get("decoder_input_ids"))
+        if stored_ids:
+            return stored_ids
+        decoder_start_token_id = inputs_meta.get("decoder_start_token_id")
+        if isinstance(decoder_start_token_id, int):
+            return [int(decoder_start_token_id)]
+    return []
+
+
+def _select_next_token_with_suppression(
+    logits: np.ndarray,
+    *,
+    suppress_tokens: list[int] | tuple[int, ...],
+    begin_suppress_tokens: list[int] | tuple[int, ...],
+) -> int:
+    masked = np.asarray(logits, dtype=np.float32).copy()
+    vocab_size = masked.shape[-1]
+    for token_id in (*suppress_tokens, *begin_suppress_tokens):
+        token_index = int(token_id)
+        if 0 <= token_index < vocab_size:
+            masked[token_index] = -np.inf
+    return int(np.argmax(masked))
+
+
+def _strip_whisper_control_tokens(text: str) -> str:
+    cleaned = re.sub(r"<\|\d+(?:\.\d+)?\|>", " ", text)
+    cleaned = re.sub(r"<\|[^|>]+?\|>", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 def _attach_component_io_names(
@@ -1018,6 +1892,11 @@ def _infer_legacy_component_io_names(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if task in {"causal_lm_logits", "multimodal_causal_lm_logits"} and component_name == "decoder":
         return ("input_ids",), ("logits",)
+    if task == "seq2seq_transcription":
+        if component_name in {"audio_encoder", "encoder"}:
+            return ("input_features",), ("encoder_hidden_states",)
+        if component_name == "decoder":
+            return ("decoder_input_ids", "encoder_hidden_states"), ("logits",)
     if task == "encoder_hidden_states" and component_name in {"audio_encoder", "encoder"}:
         return ("input_features",), ("encoder_hidden_states",)
     if family == "parakeet_tdt" and task == "tdt_transcription":

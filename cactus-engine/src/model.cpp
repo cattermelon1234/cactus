@@ -238,7 +238,9 @@ bool Model::init_internal(CactusGraph* gb, const std::string& model_folder, size
 
     initialized_ = true;
 
-    if (do_warmup) {
+    if (do_warmup &&
+        config_.model_type != Config::ModelType::WHISPER &&
+        config_.model_type != Config::ModelType::PARAKEET_TDT) {
         std::vector<uint32_t> warmup_tokens = {2};
         forward(warmup_tokens);
         auto* gb = static_cast<CactusGraph*>(graph_handle_);
@@ -662,6 +664,8 @@ bool Config::from_json(const std::string& config_path) {
             else if (mt == "gemma") model_type = ModelType::GEMMA;
             else if (mt == "gemma3n") model_type = ModelType::GEMMA3N;
             else if (mt == "lfm2") model_type = ModelType::LFM2;
+            else if (mt == "whisper") model_type = ModelType::WHISPER;
+            else if (mt == "parakeet_tdt" || mt == "parakeet-tdt") model_type = ModelType::PARAKEET_TDT;
             else if (mt == "youtu") model_type = ModelType::YOUTU;
             else if (mt == "needle") model_type = ModelType::NEEDLE;
             else model_type = ModelType::GEMMA4;
@@ -866,6 +870,10 @@ std::unique_ptr<Model> create_model(const std::string& model_folder) {
             return std::make_unique<QwenModel>(config);
         case Config::ModelType::LFM2:
             return std::make_unique<LFM2Model>(config);
+        case Config::ModelType::WHISPER:
+            return std::make_unique<WhisperModel>(config);
+        case Config::ModelType::PARAKEET_TDT:
+            return std::make_unique<ParakeetTDTModel>(config);
         case Config::ModelType::GEMMA4:
             return std::make_unique<Gemma4Model>(config);
         default:

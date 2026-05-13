@@ -102,6 +102,56 @@ def _select_last_active_token(hidden_or_logits: torch.Tensor, attention_mask: to
     return (hidden_or_logits * expanded_mask).sum(dim=1, keepdim=True)
 
 
+def _select_last_non_pad_token(
+    hidden_or_logits: torch.Tensor,
+    input_ids: torch.Tensor | None,
+    *,
+    pad_token_id: int | None,
+) -> torch.Tensor:
+    if hidden_or_logits.ndim < 3:
+        return hidden_or_logits
+    if not isinstance(input_ids, torch.Tensor) or input_ids.ndim != 2:
+        return hidden_or_logits[:, -1:, ...]
+    if input_ids.shape[1] != hidden_or_logits.shape[1]:
+        raise ValueError(
+            "input id / hidden sequence length mismatch: "
+            f"{tuple(input_ids.shape)} vs {tuple(hidden_or_logits.shape)}"
+        )
+    if pad_token_id is None:
+        return hidden_or_logits[:, -1:, ...]
+    attention_mask = (input_ids != int(pad_token_id)).to(dtype=torch.int64)
+    return _select_last_active_token(hidden_or_logits, attention_mask)
+
+
+def _resolve_model_pad_token_id(model: torch.nn.Module) -> int | None:
+    config = getattr(model, "config", None)
+    for attr_name in ("pad_token_id", "eos_token_id", "bos_token_id"):
+        value = getattr(config, attr_name, None)
+        if value is not None:
+            return int(value)
+    generation_config = getattr(model, "generation_config", None)
+    for attr_name in ("pad_token_id", "eos_token_id", "bos_token_id"):
+        value = getattr(generation_config, attr_name, None)
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _filter_supported_kwargs(module: torch.nn.Module, kwargs: dict[str, object]) -> dict[str, object]:
+    try:
+        signature = inspect.signature(module.forward)
+    except (TypeError, ValueError):
+        return kwargs
+    accepted = signature.parameters
+    supports_var_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in accepted.values()
+    )
+    if supports_var_kwargs:
+        return kwargs
+    return {name: value for name, value in kwargs.items() if name in accepted}
+
+
 def _module_floating_dtype(module: torch.nn.Module) -> torch.dtype | None:
     for parameter in module.parameters():
         if parameter.is_floating_point():
@@ -945,16 +995,45 @@ def _gemma4_import_hints(backbone: torch.nn.Module, *, module_path_suffix_prefix
 
 
 class CausalLMLogitsAdapter(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pad_token_id: int | None = None):
         super().__init__()
         self.model = model
+        self.backbone = getattr(model, "model", None)
+        self.lm_head = getattr(model, "lm_head", None)
+        self.pad_token_id = pad_token_id if pad_token_id is not None else _resolve_model_pad_token_id(model)
 
     def forward(self, input_ids: torch.Tensor):
-        return self.model(
+        backbone = self.backbone
+        lm_head = self.lm_head
+        if isinstance(backbone, torch.nn.Module) and isinstance(lm_head, torch.nn.Module):
+            backbone_kwargs: dict[str, object] = {
+                "input_ids": input_ids,
+                "attention_mask": (input_ids != int(self.pad_token_id)).long()
+                if self.pad_token_id is not None
+                else None,
+                "use_cache": False,
+                "return_dict": True,
+            }
+            outputs = backbone(**_filter_supported_kwargs(backbone, backbone_kwargs))
+            hidden_states = _extract_tensor_output(outputs, preferred_field="last_hidden_state")
+            hidden_states = _select_last_non_pad_token(
+                hidden_states,
+                input_ids,
+                pad_token_id=self.pad_token_id,
+            )
+            return lm_head(hidden_states)
+
+        outputs = self.model(
             input_ids=input_ids,
             use_cache=False,
-            return_dict=False,
-        )[0]
+            return_dict=True,
+        )
+        logits = _extract_tensor_output(outputs, preferred_field="logits")
+        return _select_last_non_pad_token(
+            logits,
+            input_ids,
+            pad_token_id=self.pad_token_id,
+        )
 
     def get_transpile_metadata(self):
         return {
@@ -970,10 +1049,11 @@ class CausalLMLogitsAdapter(torch.nn.Module):
 
 
 class GemmaCausalLMLogitsAdapter(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pad_token_id: int | None = None):
         super().__init__()
         self.model = model
         self.backbone = model.model
+        self.pad_token_id = pad_token_id if pad_token_id is not None else _resolve_model_pad_token_id(model)
         from transformers.models.gemma.modeling_gemma import create_causal_mask  # type: ignore
 
         self._create_causal_mask = create_causal_mask
@@ -985,9 +1065,9 @@ class GemmaCausalLMLogitsAdapter(torch.nn.Module):
         inputs_embeds = self.backbone.embed_tokens(input_ids)
         position_ids = torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device).unsqueeze(0)
         causal_mask = self._create_causal_mask(
-            config=self.backbone.config,
-            inputs_embeds=inputs_embeds,
-            attention_mask=None,
+            self.backbone.config,
+            inputs_embeds,
+            None,
             past_key_values=None,
             position_ids=position_ids,
         )
@@ -1008,6 +1088,11 @@ class GemmaCausalLMLogitsAdapter(torch.nn.Module):
             checkpoints.append(hidden_states)
 
         hidden_states = self.backbone.norm(hidden_states)
+        hidden_states = _select_last_non_pad_token(
+            hidden_states,
+            input_ids,
+            pad_token_id=self.pad_token_id,
+        )
         checkpoints.append(hidden_states)
         return _gemma4_apply_final_logit_softcapping(self.model, self.model.lm_head(hidden_states)), checkpoints
 
@@ -1026,10 +1111,11 @@ class GemmaCausalLMLogitsAdapter(torch.nn.Module):
 
 
 class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pad_token_id: int | None = None):
         super().__init__()
         self.model = model
         self.backbone = model.model
+        self.pad_token_id = pad_token_id if pad_token_id is not None else _resolve_model_pad_token_id(model)
         from transformers.models.gemma3.modeling_gemma3 import create_causal_mask  # type: ignore
         from transformers.models.gemma3.modeling_gemma3 import create_sliding_window_causal_mask  # type: ignore
 
@@ -1042,17 +1128,23 @@ class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
     def debug_forward(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         inputs_embeds = self.backbone.embed_tokens(input_ids)
         position_ids = torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device).unsqueeze(0)
-
-        mask_kwargs = {
-            "config": self.backbone.config,
-            "inputs_embeds": inputs_embeds,
-            "attention_mask": None,
-            "past_key_values": None,
-            "position_ids": position_ids,
-        }
         causal_mask_mapping = {
-            "full_attention": self._create_causal_mask(**mask_kwargs),
-            "sliding_attention": self._create_sliding_window_causal_mask(**mask_kwargs),
+            "full_attention": self._create_causal_mask(
+                self.backbone.config,
+                inputs_embeds,
+                None,
+                None,
+                past_key_values=None,
+                position_ids=position_ids,
+            ),
+            "sliding_attention": self._create_sliding_window_causal_mask(
+                self.backbone.config,
+                inputs_embeds,
+                None,
+                None,
+                past_key_values=None,
+                position_ids=position_ids,
+            ),
         }
 
         hidden_states = inputs_embeds
@@ -1096,11 +1188,12 @@ class Gemma3CausalLMLogitsAdapter(torch.nn.Module):
 
 
 class Gemma4CausalLMLogitsAdapter(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pad_token_id: int | None = None):
         super().__init__()
         self.model = model
         model_backbone = model.model
         self.backbone = getattr(model_backbone, "language_model", model_backbone)
+        self.pad_token_id = pad_token_id if pad_token_id is not None else _resolve_model_pad_token_id(model)
         from transformers.models.gemma4.modeling_gemma4 import create_causal_mask  # type: ignore
         from transformers.models.gemma4.modeling_gemma4 import create_sliding_window_causal_mask  # type: ignore
 
@@ -2236,10 +2329,11 @@ def _build_gemma4_multimodal_component_specs(
 
 
 class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pad_token_id: int | None = None):
         super().__init__()
         self.model = model
         self.backbone = model.model
+        self.pad_token_id = pad_token_id if pad_token_id is not None else _resolve_model_pad_token_id(model)
         from transformers.models.qwen3_5.modeling_qwen3_5 import create_causal_mask  # type: ignore
 
         self._create_causal_mask = create_causal_mask
@@ -2249,6 +2343,11 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
 
     def debug_forward(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         inputs_embeds = self.backbone.embed_tokens(input_ids)
+        attention_mask = (
+            (input_ids != int(self.pad_token_id)).to(dtype=torch.int64)
+            if self.pad_token_id is not None
+            else None
+        )
         position_ids = torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device)
         position_ids = position_ids.view(1, 1, -1).expand(4, inputs_embeds.shape[0], -1)
         text_position_ids = position_ids[0]
@@ -2257,11 +2356,11 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
         causal_mask = self._create_causal_mask(
             config=self.backbone.config,
             inputs_embeds=inputs_embeds,
-            attention_mask=None,
+            attention_mask=attention_mask,
             past_key_values=None,
             position_ids=text_position_ids,
         )
-        linear_attn_mask = self.backbone._update_linear_attn_mask(None, None)
+        linear_attn_mask = self.backbone._update_linear_attn_mask(attention_mask, None)
 
         hidden_states = inputs_embeds
         checkpoints: list[torch.Tensor] = []
@@ -2280,6 +2379,11 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
             checkpoints.append(hidden_states)
 
         hidden_states = self.backbone.norm(hidden_states)
+        hidden_states = _select_last_non_pad_token(
+            hidden_states,
+            input_ids,
+            pad_token_id=self.pad_token_id,
+        )
         checkpoints.append(hidden_states)
         return self.model.lm_head(hidden_states), checkpoints
 
@@ -2308,6 +2412,85 @@ class Qwen35CausalLMLogitsAdapter(torch.nn.Module):
                 "layer_types": layer_types,
             },
             "import_hints": import_hints,
+        }
+
+
+class Qwen3CausalLMLogitsAdapter(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pad_token_id: int | None = None):
+        super().__init__()
+        self.model = model
+        self.backbone = model.model
+        self.pad_token_id = pad_token_id if pad_token_id is not None else _resolve_model_pad_token_id(model)
+
+    def forward(self, input_ids: torch.Tensor):
+        return self.debug_forward(input_ids)[0]
+
+    def debug_forward(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        inputs_embeds = self.backbone.embed_tokens(input_ids)
+        position_ids = torch.arange(inputs_embeds.shape[1], device=inputs_embeds.device).unsqueeze(0)
+        seq_len = int(inputs_embeds.shape[1])
+        allowed_positions = torch.tril(
+            torch.ones((seq_len, seq_len), dtype=torch.bool, device=inputs_embeds.device),
+        ).view(1, 1, seq_len, seq_len)
+        if self.pad_token_id is not None:
+            key_mask = (input_ids != int(self.pad_token_id)).view(input_ids.shape[0], 1, 1, seq_len)
+            allowed_positions = torch.logical_and(allowed_positions, key_mask)
+        allowed_values = torch.ones(
+            (1, 1, seq_len, seq_len),
+            dtype=inputs_embeds.dtype,
+            device=inputs_embeds.device,
+        ) * 0.0
+        blocked_values = torch.ones(
+            (1, 1, seq_len, seq_len),
+            dtype=inputs_embeds.dtype,
+            device=inputs_embeds.device,
+        ) * torch.finfo(inputs_embeds.dtype).min
+        causal_mask = torch.where(
+            allowed_positions,
+            allowed_values,
+            blocked_values,
+        )
+
+        hidden_states = inputs_embeds
+        checkpoints: list[torch.Tensor] = []
+        position_embeddings = self.backbone.rotary_emb(hidden_states, position_ids)
+
+        for i, decoder_layer in enumerate(self.backbone.layers[: self.backbone.config.num_hidden_layers]):
+            hidden_states = decoder_layer(
+                hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_values=None,
+                use_cache=False,
+            )
+            checkpoints.append(hidden_states)
+
+        hidden_states = self.backbone.norm(hidden_states)
+        hidden_states = _select_last_non_pad_token(
+            hidden_states,
+            input_ids,
+            pad_token_id=self.pad_token_id,
+        )
+        checkpoints.append(hidden_states)
+        return self.model.lm_head(hidden_states), checkpoints
+
+    def get_transpile_metadata(self):
+        sliding_window = getattr(self.backbone.config, "sliding_window", None)
+        layer_types = list(getattr(self.backbone.config, "layer_types", []))
+        return {
+            "graph": {
+                **_transpile_graph_meta(
+                    self.model,
+                    adapter_family="qwen3",
+                    adapter_type=type(self).__name__,
+                    input_names=("input_ids",),
+                ),
+                "num_hidden_layers": int(self.backbone.config.num_hidden_layers),
+                "layer_types": tuple(layer_types),
+                "sliding_window": None if sliding_window is None else int(sliding_window),
+            },
+            "import_hints": _gemma4_import_hints(self.backbone, module_path_suffix_prefix="backbone"),
         }
 
 
@@ -2342,6 +2525,105 @@ class EncoderHiddenStatesAdapter(BoundInputAdapter):
         return _extract_tensor_output(outputs, preferred_field="last_hidden_state")
 
 
+class WhisperEncoderComponentAdapter(torch.nn.Module):
+    def __init__(self, encoder: torch.nn.Module):
+        super().__init__()
+        self.encoder = encoder
+
+    def forward(self, input_features: torch.Tensor) -> torch.Tensor:
+        hidden_states = F.gelu(self.encoder.conv1(input_features))
+        hidden_states = F.gelu(self.encoder.conv2(hidden_states))
+        hidden_states = hidden_states.permute(0, 2, 1)
+
+        position_ids = torch.arange(hidden_states.shape[1], device=hidden_states.device)
+        positions = self.encoder.embed_positions(position_ids)
+        hidden_states = hidden_states + positions.to(
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        ).unsqueeze(0)
+
+        for layer in self.encoder.layers:
+            residual = hidden_states
+            hidden_states = layer.self_attn_layer_norm(hidden_states)
+            hidden_states, _ = layer.self_attn(
+                hidden_states=hidden_states,
+                attention_mask=None,
+            )
+            hidden_states = residual + hidden_states
+
+            residual = hidden_states
+            hidden_states = layer.final_layer_norm(hidden_states)
+            hidden_states = layer.activation_fn(layer.fc1(hidden_states))
+            hidden_states = layer.fc2(hidden_states)
+            hidden_states = residual + hidden_states
+
+        return self.encoder.layer_norm(hidden_states)
+
+
+class WhisperDecoderComponentAdapter(torch.nn.Module):
+    def __init__(self, decoder: torch.nn.Module, proj_out: torch.nn.Module, *, pad_token_id: int | None):
+        super().__init__()
+        self.decoder = decoder
+        self.proj_out = proj_out
+        self.pad_token_id = pad_token_id
+
+    @staticmethod
+    def _build_causal_mask(input_ids: torch.Tensor, *, dtype: torch.dtype) -> torch.Tensor:
+        seq_len = int(input_ids.shape[1])
+        allowed = torch.tril(
+            torch.ones((seq_len, seq_len), dtype=torch.bool, device=input_ids.device),
+        ).view(1, 1, seq_len, seq_len)
+        allowed_values = torch.ones(
+            (1, 1, seq_len, seq_len),
+            dtype=dtype,
+            device=input_ids.device,
+        ) * 0.0
+        blocked_values = torch.ones(
+            (1, 1, seq_len, seq_len),
+            dtype=dtype,
+            device=input_ids.device,
+        ) * torch.finfo(dtype).min
+        return torch.where(allowed, allowed_values, blocked_values)
+
+    def forward(self, decoder_input_ids: torch.Tensor, encoder_hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.decoder.embed_tokens(decoder_input_ids)
+        position_ids = torch.arange(
+            hidden_states.shape[1],
+            device=hidden_states.device,
+        ).unsqueeze(0).expand(hidden_states.shape[0], -1)
+        positions = self.decoder.embed_positions(
+            decoder_input_ids,
+            past_key_values_length=0,
+            position_ids=position_ids,
+        )
+        hidden_states = hidden_states + positions.to(
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+
+        causal_mask = self._build_causal_mask(
+            decoder_input_ids,
+            dtype=hidden_states.dtype,
+        )
+        for layer in self.decoder.layers:
+            hidden_states = layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=None,
+                past_key_values=None,
+                use_cache=False,
+            )
+
+        hidden_states = self.decoder.layer_norm(hidden_states)
+        hidden_states = _select_last_non_pad_token(
+            hidden_states,
+            decoder_input_ids,
+            pad_token_id=self.pad_token_id,
+        )
+        return self.proj_out(hidden_states)
+
+
 def _family_key(model: torch.nn.Module) -> str:
     explicit_family = getattr(model, "family", None)
     if isinstance(explicit_family, str) and explicit_family:
@@ -2357,6 +2639,8 @@ def _family_key(model: torch.nn.Module) -> str:
         return "gemma"
     if module_name.startswith("transformers.models.qwen3_5."):
         return "qwen3_5"
+    if module_name.startswith("transformers.models.qwen3."):
+        return "qwen3"
     if module_name.startswith("transformers.models.lfm2_vl."):
         return "lfm2_vl"
     if module_name.startswith("transformers.models.lfm2_moe."):
@@ -2366,12 +2650,105 @@ def _family_key(model: torch.nn.Module) -> str:
     return "generic"
 
 
+def _build_whisper_seq2seq_component_specs(
+    model: torch.nn.Module,
+    *,
+    named_tensors: dict[str, torch.Tensor],
+    inputs_metadata: dict[str, object] | None = None,
+    weights_dir: str | None = None,
+) -> list[ComponentModuleSpec]:
+    input_features = named_tensors.get("input_features")
+    if not isinstance(input_features, torch.Tensor):
+        raise RuntimeError("Whisper component transpile requires input_features")
+
+    get_encoder = getattr(model, "get_encoder", None)
+    encoder = get_encoder() if callable(get_encoder) else None
+    if not isinstance(encoder, torch.nn.Module):
+        encoder = getattr(getattr(model, "model", None), "encoder", None)
+    decoder = getattr(getattr(model, "model", None), "decoder", None)
+    proj_out = getattr(model, "proj_out", None)
+    if not isinstance(encoder, torch.nn.Module) or not isinstance(decoder, torch.nn.Module):
+        raise RuntimeError(f"{type(model).__name__} does not expose Whisper encoder/decoder modules")
+    if not isinstance(proj_out, torch.nn.Module):
+        raise RuntimeError(f"{type(model).__name__} does not expose a Whisper projection head")
+
+    metadata = dict(inputs_metadata or {})
+    decoder_prompt_ids = metadata.get("decoder_input_ids")
+    if not isinstance(decoder_prompt_ids, list) or not decoder_prompt_ids:
+        decoder_start_token_id = getattr(getattr(model, "config", None), "decoder_start_token_id", None)
+        if not isinstance(decoder_start_token_id, int):
+            raise RuntimeError("Whisper component transpile requires decoder_input_ids metadata")
+        decoder_prompt_ids = [int(decoder_start_token_id)]
+    else:
+        decoder_prompt_ids = [int(value) for value in decoder_prompt_ids]
+
+    target_token_count = int(metadata.get("target_token_count", len(decoder_prompt_ids)) or len(decoder_prompt_ids))
+    target_token_count = max(target_token_count, len(decoder_prompt_ids))
+    pad_token_id = int(metadata.get("pad_token_id", getattr(getattr(model, "config", None), "pad_token_id", 0)) or 0)
+
+    encoder_adapter = WhisperEncoderComponentAdapter(encoder).eval()
+    decoder_adapter = WhisperDecoderComponentAdapter(
+        decoder,
+        proj_out,
+        pad_token_id=pad_token_id,
+    ).eval()
+
+    with torch.no_grad():
+        encoder_hidden_states = encoder_adapter(input_features)
+
+    decoder_input_ids = torch.full(
+        (1, target_token_count),
+        pad_token_id,
+        dtype=torch.int64,
+        device=input_features.device,
+    )
+    decoder_input_ids[:, : len(decoder_prompt_ids)] = torch.tensor(
+        decoder_prompt_ids,
+        dtype=torch.int64,
+        device=input_features.device,
+    )
+
+    common_graph_meta = {
+        **_transpile_graph_meta(
+            model,
+            adapter_family="whisper",
+            adapter_type="component_pipeline",
+            input_names=("input_features",),
+        ),
+        "task": "seq2seq_transcription",
+        "adapter_family": "whisper",
+    }
+    if weights_dir:
+        common_graph_meta["weights_dir"] = weights_dir
+    return [
+        ComponentModuleSpec(
+            component="audio_encoder",
+            module=encoder_adapter,
+            example_inputs=(input_features,),
+            input_keys=("input_features",),
+            output_keys=("encoder_hidden_states",),
+            graph_meta={**common_graph_meta, "component": "audio_encoder"},
+            metadata={"family": "whisper", "task": "seq2seq_transcription"},
+        ),
+        ComponentModuleSpec(
+            component="decoder",
+            module=decoder_adapter,
+            example_inputs=(decoder_input_ids, encoder_hidden_states),
+            input_keys=("decoder_input_ids", "encoder_hidden_states"),
+            output_keys=("logits",),
+            graph_meta={**common_graph_meta, "component": "decoder"},
+            metadata={"family": "whisper", "task": "seq2seq_transcription"},
+        ),
+    ]
+
+
 def build_component_module_specs(
     model: torch.nn.Module,
     *,
     task: str,
     named_tensors: dict[str, torch.Tensor],
     weights_dir: str | None = None,
+    inputs_metadata: dict[str, object] | None = None,
     components: tuple[str, ...] | None = None,
 ) -> list[ComponentModuleSpec] | None:
     family = _family_key(model)
@@ -2390,6 +2767,13 @@ def build_component_module_specs(
             named_tensors=named_tensors,
             weights_dir=weights_dir,
         )
+    if family == "whisper" and task == "seq2seq_transcription":
+        return _build_whisper_seq2seq_component_specs(
+            model,
+            named_tensors=named_tensors,
+            inputs_metadata=inputs_metadata,
+            weights_dir=weights_dir,
+        )
     return None
 
 
@@ -2399,22 +2783,48 @@ def canonicalize_model_interface(
     *,
     input_names: tuple[str, ...] | None = None,
     weights_dir: str | None = None,
+    inputs_metadata: dict[str, object] | None = None,
 ) -> CanonicalizedModel:
     family = _family_key(model)
     adapter_factory: Callable[[torch.nn.Module], torch.nn.Module]
     resolved_input_names = tuple(input_names or ())
+    padding_token_id_value = None
+    if isinstance(inputs_metadata, dict):
+        raw_padding_token_id = inputs_metadata.get("padding_token_id")
+        if isinstance(raw_padding_token_id, int):
+            padding_token_id_value = int(raw_padding_token_id)
 
     if task == "causal_lm_logits":
         if family == "gemma":
-            adapter_factory = GemmaCausalLMLogitsAdapter
+            adapter_factory = lambda inner_model: GemmaCausalLMLogitsAdapter(  # type: ignore[assignment]
+                inner_model,
+                pad_token_id=padding_token_id_value,
+            )
         elif family == "gemma4":
-            adapter_factory = Gemma4CausalLMLogitsAdapter
+            adapter_factory = lambda inner_model: Gemma4CausalLMLogitsAdapter(  # type: ignore[assignment]
+                inner_model,
+                pad_token_id=padding_token_id_value,
+            )
         elif family == "gemma3":
-            adapter_factory = Gemma3CausalLMLogitsAdapter
+            adapter_factory = lambda inner_model: Gemma3CausalLMLogitsAdapter(  # type: ignore[assignment]
+                inner_model,
+                pad_token_id=padding_token_id_value,
+            )
         elif family == "qwen3_5":
-            adapter_factory = Qwen35CausalLMLogitsAdapter
+            adapter_factory = lambda inner_model: Qwen35CausalLMLogitsAdapter(  # type: ignore[assignment]
+                inner_model,
+                pad_token_id=padding_token_id_value,
+            )
+        elif family == "qwen3":
+            adapter_factory = lambda inner_model: Qwen3CausalLMLogitsAdapter(  # type: ignore[assignment]
+                inner_model,
+                pad_token_id=padding_token_id_value,
+            )
         else:
-            adapter_factory = CausalLMLogitsAdapter
+            adapter_factory = lambda inner_model: CausalLMLogitsAdapter(  # type: ignore[assignment]
+                inner_model,
+                pad_token_id=padding_token_id_value,
+            )
         resolved_input_names = ("input_ids",)
     elif task == "multimodal_causal_lm_logits":
         if family != "gemma4":

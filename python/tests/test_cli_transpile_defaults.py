@@ -70,3 +70,61 @@ def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch) -> No
     assert "--skip-execute" not in command
     assert "--artifact-dir" in command
     assert "/tmp/gemma4-bundle" in command
+
+
+def test_cmd_transpile_skips_empty_default_weights_dir(monkeypatch, tmp_path: Path) -> None:
+    parser = cli.create_parser()
+    args = cli.preprocess_eval_args(parser, ["transpile", "whisper-small"])
+
+    empty_weights_dir = tmp_path / "weights" / "whisper-small"
+    empty_weights_dir.mkdir(parents=True)
+
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr(cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
+    monkeypatch.setattr(cli, "get_weights_dir", lambda model_id: empty_weights_dir)
+
+    def _fake_run(command, cwd=None, env=None):
+        captured.append(list(command))
+        return _fake_completed_process(0)
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    rc = cli.cmd_transpile(args)
+
+    assert rc == 0
+    assert captured
+    command = captured[0]
+    assert "--weights-dir" not in command
+
+
+def test_cmd_transpile_uses_ready_default_weights_dir(monkeypatch, tmp_path: Path) -> None:
+    parser = cli.create_parser()
+    args = cli.preprocess_eval_args(parser, ["transpile", "parakeet"])
+
+    ready_weights_dir = tmp_path / "weights" / "parakeet-tdt-0.6b-v3"
+    ready_weights_dir.mkdir(parents=True)
+    (ready_weights_dir / "weights_manifest.json").write_text("{}")
+
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr(cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
+    monkeypatch.setattr(cli, "get_weights_dir", lambda model_id: ready_weights_dir)
+
+    def _fake_run(command, cwd=None, env=None):
+        captured.append(list(command))
+        return _fake_completed_process(0)
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    rc = cli.cmd_transpile(args)
+
+    assert rc == 0
+    assert captured
+    command = captured[0]
+    assert "--weights-dir" in command
+    assert str(ready_weights_dir) in command
+
+
+def test_lfm_alias_points_to_vl_450m() -> None:
+    assert cli.MODEL_ID_ALIASES["lfm"] == "LiquidAI/LFM2-VL-450M"

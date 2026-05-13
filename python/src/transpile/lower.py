@@ -513,6 +513,11 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
             return [x]
         return [g.expand(x, target_shape)]
 
+    if op == "repeat":
+        x = _tensor(env, node.inputs[0])
+        repeats = tuple(int(value) for value in node.attrs["repeats"])
+        return [_lower_repeat(g, x, repeats)]
+
     if op == "one_hot":
         indices = _tensor(env, node.inputs[0])
         num_classes = int(node.attrs["num_classes"])
@@ -1290,6 +1295,22 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
                 out_nlc = g.add(out_nlc, bias_reshaped)
             return [g.permute(out_nlc, (0, 2, 1))]
 
+        if (
+            len(x.shape) == 3
+            and len(weight.shape) == 3
+            and groups == 1
+            and dilation == 1
+            and weight.shape[2] == 3
+            and padding == 1
+            and stride in {1, 2}
+        ):
+            out = g.conv1d_k3(x, weight, stride=stride)
+            if bias is not None:
+                bias_reshaped = g.reshape(bias, (1, int(weight.shape[0]), 1))
+                out, bias_reshaped = _legalize_elementwise_binary_inputs(g, out, bias_reshaped)
+                out = g.add(out, bias_reshaped)
+            return [out]
+
         if dilation != 1:
             raise NotImplementedError(f"conv1d with dilation != 1 is unsupported by generic lowering: {dilation}")
         if padding != 0:
@@ -1918,6 +1939,28 @@ def _try_lower_identity_broadcast_advanced_index(
     return g.reshape(source, output_shape)
 
 
+def _try_lower_embedding_advanced_index(
+    g: Graph,
+    node: IRNode,
+    env: dict[str, Any],
+    ir: IRGraph,
+) -> Tensor | None:
+    if len(node.inputs) != 2:
+        return None
+
+    source = _tensor(env, node.inputs[0])
+    indices = _tensor(env, node.inputs[1])
+    source_shape = tuple(int(dim) for dim in source.shape)
+    if len(source_shape) != 2:
+        return None
+
+    output_shape = _static_shape(ir.values[node.outputs[0]].shape if node.outputs and node.outputs[0] in ir.values else None)
+    gathered = g.embedding_from_tensor(source, indices)
+    if output_shape is not None and tuple(int(dim) for dim in gathered.shape) != tuple(int(dim) for dim in output_shape):
+        gathered = g.reshape(gathered, output_shape)
+    return gathered
+
+
 def _try_lower_prefix_mask_advanced_index(
     g: Graph,
     node: IRNode,
@@ -1968,6 +2011,9 @@ def _try_lower_advanced_index(
     env: dict[str, Any],
     ir: IRGraph,
 ) -> Tensor | None:
+    lowered = _try_lower_embedding_advanced_index(g, node, env, ir)
+    if lowered is not None:
+        return lowered
     lowered = _try_lower_identity_broadcast_advanced_index(g, node, env, ir)
     if lowered is not None:
         return lowered
@@ -2461,6 +2507,30 @@ def _resolve_expand_shape(input_shape: tuple[int, ...], requested_shape: tuple[i
             raise NotImplementedError(f"invalid expand dimension: {req_dim}")
         resolved.append(int(req_dim))
     return tuple(resolved)
+
+
+def _lower_repeat(g: Graph, x: Tensor, repeats: tuple[int, ...]) -> Tensor:
+    if not repeats:
+        return x
+
+    input_shape = tuple(int(dim) for dim in x.shape)
+    if len(repeats) < len(input_shape):
+        raise NotImplementedError(f"repeat cannot reduce rank: {input_shape} with repeats={repeats}")
+
+    if len(repeats) > len(input_shape):
+        padded_shape = (1,) * (len(repeats) - len(input_shape)) + input_shape
+        x = g.reshape(x, padded_shape)
+
+    result = x
+    for axis, factor in enumerate(repeats):
+        if factor < 0:
+            raise NotImplementedError(f"repeat does not support negative factors: {repeats}")
+        if factor == 0:
+            raise NotImplementedError(f"repeat does not support zero factors: {repeats}")
+        if factor == 1:
+            continue
+        result = g.cat([result] * factor, axis=axis)
+    return result
 
 
 def _resolve_reshape_shape(input_shape: tuple[int, ...], requested_shape: tuple[int, ...]) -> tuple[int, ...]:

@@ -879,6 +879,21 @@ def import_expand(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[in
     register_node(ir, ir_node, shape=shape, dtype=dtype)
 
 
+def import_repeat(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
+    repeats = _extract_int_sequence_literal(node.args[1]) if len(node.args) > 1 else None
+    if repeats is None:
+        ctx.fail(f"unsupported repeat factors for {torch_op}: {node.args!r}")
+    ir_node = IRNode(
+        id=node_id(node),
+        op="repeat",
+        inputs=[value_id(node.args[0], ctx)],
+        outputs=[value_id(node, ctx)],
+        attrs={"repeats": repeats},
+        meta=_base_meta(shape, dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
+
+
 def import_one_hot(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str) -> None:
     num_classes = _extract_static_int(node.args[1]) if len(node.args) > 1 else None
     if (num_classes is None or num_classes <= 0) and shape is not None and shape:
@@ -1811,6 +1826,7 @@ OP_IMPORTERS = {
     "unsqueeze": import_unsqueeze,
     "squeeze": import_squeeze,
     "expand": import_expand,
+    "repeat": import_repeat,
     "one_hot": import_one_hot,
     "tril": import_tril,
     "unfold": import_unfold,

@@ -50,6 +50,7 @@ from src.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
 from src.transpile.weight_compat import ensure_binding_compatible
 
 _TORCHVISION_COMPAT_LIBRARIES: list[object] = []
+_DEFAULT_CAUSAL_PROMPT = "The capital of France is"
 
 
 @dataclass
@@ -1253,15 +1254,15 @@ def _infer_task_from_config(model_id_or_path: str) -> str:
     if any("CTC" in value for value in architectures):
         return "ctc_logits"
     if model_type == "whisper":
-        return "encoder_hidden_states"
+        return "seq2seq_transcription"
     if any("ConditionalGeneration" in value and "Whisper" in value for value in architectures):
-        return "encoder_hidden_states"
+        return "seq2seq_transcription"
 
     lowered_id = model_id_or_path.lower()
     if "parakeet-tdt" in lowered_id:
         return "tdt_transcription"
     if "whisper" in lowered_id:
-        return "encoder_hidden_states"
+        return "seq2seq_transcription"
     if "ctc" in lowered_id:
         return "ctc_logits"
     if any(token in lowered_id for token in ("qwen", "gemma", "llama", "mistral", "lfm")):
@@ -1275,6 +1276,7 @@ def _infer_task_from_config(model_id_or_path: str) -> str:
         "  --task tdt_transcription\n"
         "  --task ctc_logits\n"
         "  --task encoder_hidden_states\n"
+        "  --task seq2seq_transcription\n"
     )
 
 
@@ -1293,6 +1295,8 @@ def _resolve_audio_sample_rate(processor: object) -> int:
 def _infer_fallback_audio_input_names(config: dict[str, object], task: str) -> tuple[str, ...]:
     model_type = str(config.get("model_type", "") or "").lower()
     if model_type == "whisper":
+        return ("input_features",)
+    if task == "seq2seq_transcription":
         return ("input_features",)
     if task == "encoder_hidden_states":
         return ("input_features",)
@@ -1603,7 +1607,130 @@ def _prepare_audio_inputs(
     )
 
 
-def _tokenize_text_prompt(tokenizer: object, prompt: str) -> torch.Tensor:
+def _contains_token_subsequence(token_ids: list[int], subsequence: list[int]) -> bool:
+    if not subsequence:
+        return False
+    width = len(subsequence)
+    return any(token_ids[index : index + width] == subsequence for index in range(len(token_ids) - width + 1))
+
+
+def _resolve_whisper_decoder_prompt_token_ids(
+    tokenizer_or_processor: object,
+    *,
+    prompt: str | None,
+    decoder_start_token_id: int | None,
+    forced_decoder_ids: list[list[int]] | tuple[tuple[int, int], ...] | None = None,
+) -> list[int]:
+    tokenizer = getattr(tokenizer_or_processor, "tokenizer", tokenizer_or_processor)
+    encode = getattr(tokenizer, "encode", None)
+    if not callable(encode):
+        encode = None
+
+    normalized_prompt = (prompt or "").strip()
+    if normalized_prompt == _DEFAULT_CAUSAL_PROMPT:
+        normalized_prompt = ""
+
+    prompt_token_ids: list[int] = []
+    if decoder_start_token_id is not None:
+        prompt_token_ids.append(int(decoder_start_token_id))
+
+    normalized_forced_ids: list[tuple[int, int]] = []
+    if forced_decoder_ids is not None:
+        for item in forced_decoder_ids:
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) == 2
+                and isinstance(item[0], int)
+                and isinstance(item[1], int)
+            ):
+                normalized_forced_ids.append((int(item[0]), int(item[1])))
+        normalized_forced_ids.sort(key=lambda pair: pair[0])
+
+    next_position = 1
+    for position, token_id in normalized_forced_ids:
+        if position != next_position:
+            break
+        prompt_token_ids.append(int(token_id))
+        next_position += 1
+
+    if normalized_prompt:
+        if encode is None:
+            raise RuntimeError("Whisper transpile requires a tokenizer to encode a non-empty prompt")
+        try:
+            encoded_prompt = encode(normalized_prompt, add_special_tokens=False)
+        except TypeError:
+            encoded_prompt = encode(normalized_prompt)
+        prompt_token_ids.extend(int(value) for value in encoded_prompt)
+
+    if not prompt_token_ids:
+        if encode is None:
+            raise RuntimeError("Whisper transpile requires a tokenizer or decoder_start_token_id")
+        try:
+            prompt_token_ids = [int(value) for value in encode("<|startoftranscript|>", add_special_tokens=False)]
+        except TypeError:
+            prompt_token_ids = [int(value) for value in encode("<|startoftranscript|>")]
+        if not prompt_token_ids and decoder_start_token_id is not None:
+            prompt_token_ids = [int(decoder_start_token_id)]
+
+    return prompt_token_ids
+
+
+def _augment_whisper_seq2seq_metadata(
+    prepared: PreparedInputs,
+    *,
+    tokenizer_or_processor: object,
+    model: torch.nn.Module,
+    prompt: str | None,
+    max_new_tokens: int,
+) -> PreparedInputs:
+    config = getattr(model, "config", None)
+    decoder_start_token_id = getattr(config, "decoder_start_token_id", None)
+    eos_token_id = getattr(config, "eos_token_id", None)
+    pad_token_id = getattr(config, "pad_token_id", None)
+    max_target_positions = int(getattr(config, "max_target_positions", 0) or 0)
+    suppress_tokens = [int(value) for value in (getattr(config, "suppress_tokens", None) or [])]
+    begin_suppress_tokens = [int(value) for value in (getattr(config, "begin_suppress_tokens", None) or [])]
+
+    decoder_input_ids = _resolve_whisper_decoder_prompt_token_ids(
+        tokenizer_or_processor,
+        prompt=prompt,
+        decoder_start_token_id=int(decoder_start_token_id) if isinstance(decoder_start_token_id, int) else None,
+        forced_decoder_ids=getattr(config, "forced_decoder_ids", None),
+    )
+    if not decoder_input_ids:
+        raise RuntimeError("Whisper transpile could not resolve decoder prompt token ids")
+
+    target_token_count = len(decoder_input_ids) + max(1, int(max_new_tokens))
+    if max_target_positions > 0:
+        target_token_count = min(target_token_count, max_target_positions)
+    target_token_count = max(target_token_count, len(decoder_input_ids))
+
+    metadata = dict(prepared.metadata)
+    metadata.update(
+        {
+            "decoder_input_ids": [int(value) for value in decoder_input_ids],
+            "decoder_start_token_id": None if decoder_start_token_id is None else int(decoder_start_token_id),
+            "eos_token_id": None if eos_token_id is None else int(eos_token_id),
+            "pad_token_id": None if pad_token_id is None else int(pad_token_id),
+            "target_token_count": int(target_token_count),
+            "max_target_positions": int(max_target_positions),
+            "suppress_tokens": suppress_tokens,
+            "begin_suppress_tokens": begin_suppress_tokens,
+        }
+    )
+    return PreparedInputs(
+        names=prepared.names,
+        tensors=prepared.tensors,
+        metadata=metadata,
+    )
+
+
+def _tokenize_text_prompt(
+    tokenizer: object,
+    prompt: str,
+    *,
+    enable_thinking_if_supported: bool = False,
+) -> torch.Tensor:
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
     if callable(apply_chat_template):
         try:
@@ -1612,6 +1739,7 @@ def _tokenize_text_prompt(tokenizer: object, prompt: str) -> torch.Tensor:
                 tokenize=True,
                 add_generation_prompt=True,
                 return_tensors="pt",
+                enable_thinking=bool(enable_thinking_if_supported),
             )
             if isinstance(encoded, torch.Tensor) and encoded.ndim == 2:
                 return encoded.to(dtype=torch.long)
@@ -1625,20 +1753,81 @@ def _tokenize_text_prompt(tokenizer: object, prompt: str) -> torch.Tensor:
     return encoded["input_ids"].to(dtype=torch.long)
 
 
-def _prepare_text_inputs(tokenizer: object, *, prompt: str, input_ids_text: str | None) -> PreparedInputs:
+def _resolve_text_padding_token_id(tokenizer: object | None) -> int:
+    for attr_name in ("pad_token_id", "eos_token_id", "bos_token_id"):
+        token_id = getattr(tokenizer, attr_name, None) if tokenizer is not None else None
+        if isinstance(token_id, int) and token_id >= 0:
+            return int(token_id)
+    return 0
+
+
+def _resolve_graph_safe_text_padding_token_id(
+    tokenizer: object | None,
+    prompt_input_ids: torch.Tensor,
+) -> int:
+    padding_token_id = _resolve_text_padding_token_id(tokenizer)
+    if padding_token_id <= 60000:
+        return padding_token_id
+
+    used_token_ids = {int(value) for value in prompt_input_ids.detach().cpu().reshape(-1).tolist()}
+    vocab_size = getattr(tokenizer, "vocab_size", None)
+    upper_bound = int(vocab_size) if isinstance(vocab_size, int) and vocab_size > 0 else 2048
+    # v2 compare fallbacks currently legalize scalar comparisons through FP16.
+    # A large HF pad token such as Qwen's 151643 overflows that path, so choose
+    # a small valid token ID that is absent from the prompt and mask it out.
+    for candidate in range(min(upper_bound, 2048)):
+        if candidate not in used_token_ids:
+            return int(candidate)
+    return 0
+
+
+def _prepare_text_inputs(
+    tokenizer: object,
+    *,
+    prompt: str,
+    input_ids_text: str | None,
+    max_new_tokens: int,
+    enable_thinking_if_supported: bool = False,
+) -> PreparedInputs:
     if input_ids_text:
         token_ids = [int(part.strip()) for part in input_ids_text.split(",") if part.strip()]
         if not token_ids:
             raise ValueError("--input-ids was provided but no ids were parsed")
-        input_ids = torch.tensor([token_ids], dtype=torch.long)
+        prompt_input_ids = torch.tensor([token_ids], dtype=torch.long)
     else:
-        input_ids = _tokenize_text_prompt(tokenizer, prompt)
+        prompt_input_ids = _tokenize_text_prompt(
+            tokenizer,
+            prompt,
+            enable_thinking_if_supported=enable_thinking_if_supported,
+        )
+    if prompt_input_ids.ndim != 2 or int(prompt_input_ids.shape[0]) != 1:
+        raise ValueError(
+            "causal_lm_logits transpile currently expects prompt input ids with shape [1, T], "
+            f"got {tuple(int(dim) for dim in prompt_input_ids.shape)}"
+        )
+    if int(max_new_tokens) < 0:
+        raise ValueError("--max-new-tokens must be non-negative")
+
+    prompt_token_count = int(prompt_input_ids.shape[1])
+    target_token_count = prompt_token_count + int(max_new_tokens)
+    padding_token_id = _resolve_graph_safe_text_padding_token_id(tokenizer, prompt_input_ids)
+    if target_token_count > prompt_token_count:
+        input_ids = torch.full((1, target_token_count), padding_token_id, dtype=torch.long)
+        input_ids[:, :prompt_token_count] = prompt_input_ids
+    else:
+        input_ids = prompt_input_ids
     return PreparedInputs(
         names=("input_ids",),
         tensors=(input_ids,),
         metadata={
             "prompt": prompt,
+            "prompt_input_ids": prompt_input_ids.tolist(),
             "input_ids": input_ids.tolist(),
+            "prompt_token_count": prompt_token_count,
+            "target_token_count": target_token_count,
+            "max_new_tokens": int(max_new_tokens),
+            "padding_token_id": int(padding_token_id),
+            "enable_thinking": bool(enable_thinking_if_supported),
         },
     )
 
@@ -2200,7 +2389,7 @@ def _load_transformers_bundle(
 
     if task == "ctc_logits":
         model_loaders = (AutoModelForCTC, AutoModel)
-    elif task == "encoder_hidden_states":
+    elif task in {"encoder_hidden_states", "seq2seq_transcription"}:
         model_loaders = (AutoModelForSpeechSeq2Seq, AutoModelForSeq2SeqLM, AutoModel)
     else:
         raise NotImplementedError(f"unsupported generic HF task: {task}")
@@ -2380,13 +2569,14 @@ def main() -> int:
             "multimodal_causal_lm_logits",
             "ctc_logits",
             "encoder_hidden_states",
+            "seq2seq_transcription",
             "tdt_transcription",
         ),
         help="Transpile task. Use auto to infer from config/model id.",
     )
     parser.add_argument(
         "--prompt",
-        default="The capital of France is",
+        default=_DEFAULT_CAUSAL_PROMPT,
         help="Prompt used for causal_lm_logits or multimodal_causal_lm_logits when --input-ids is not set.",
     )
     parser.add_argument(
@@ -2403,6 +2593,15 @@ def main() -> int:
         "--input-ids",
         default="",
         help="Optional comma-separated token ids for causal_lm_logits.",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=32,
+        help=(
+            "For causal_lm_logits bundles, preallocate prompt-plus-generation context "
+            "so run-transpiled can do greedy autoregressive decoding."
+        ),
     )
     parser.add_argument(
         "--audio-file",
@@ -2524,12 +2723,15 @@ def main() -> int:
             processor_or_tokenizer,
             prompt=args.prompt,
             input_ids_text=args.input_ids.strip() or None,
+            max_new_tokens=int(args.max_new_tokens),
+            enable_thinking_if_supported=args.enable_thinking,
         )
         canonical = canonicalize_model_interface(
             model,
             task=task,
             input_names=prepared.names,
             weights_dir=weights_dir,
+            inputs_metadata=prepared.metadata,
         )
     elif task == "multimodal_causal_lm_logits":
         prepared = _prepare_gemma4_multimodal_inputs(
@@ -2564,6 +2766,27 @@ def main() -> int:
             audio_file=args.audio_file,
             torch_dtype=torch_dtype,
         )
+    elif task == "seq2seq_transcription":
+        if not args.audio_file:
+            raise RuntimeError(f"--audio-file is required for task={task}")
+        prepared = _prepare_audio_inputs(
+            processor_or_tokenizer,
+            input_names=("input_features",),
+            config=model_config,
+            preprocessor_config=preprocessor_config,
+            model=model,
+            task=task,
+            audio_file=args.audio_file,
+            torch_dtype=torch_dtype,
+        )
+        if getattr(model_config, "get", None) is not None or getattr(model, "config", None) is not None:
+            prepared = _augment_whisper_seq2seq_metadata(
+                prepared,
+                tokenizer_or_processor=processor_or_tokenizer,
+                model=model,
+                prompt=args.prompt,
+                max_new_tokens=int(args.max_new_tokens),
+            )
     else:
         if not args.audio_file:
             raise RuntimeError(f"--audio-file is required for task={task}")
@@ -2588,6 +2811,7 @@ def main() -> int:
         task=task,
         named_tensors=_named_tensor_store(prepared),
         weights_dir=weights_dir,
+        inputs_metadata=prepared.metadata,
     )
     use_component_pipeline = False
     if args.component_pipeline == "on":

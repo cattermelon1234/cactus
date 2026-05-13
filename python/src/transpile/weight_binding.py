@@ -114,7 +114,9 @@ _WHISPER_GLOBAL_FILENAMES: dict[str, tuple[str, str]] = {
     "decoder.embed_positions.weight": ("decoder_position_embeddings.weights", "embedding"),
     "decoder.layer_norm.weight": ("decoder_norm.weights", "weight"),
     "decoder.layer_norm.bias": ("decoder_norm.bias", "weight"),
-    "proj_out.weight": ("output_weight.weights", "weight"),
+    # Whisper ties the LM head to the decoder token embedding table in the
+    # converted Cactus layouts we currently support.
+    "proj_out.weight": ("token_embeddings.weights", "embedding"),
     "encoder.embed_positions.weight": ("encoder_position_embeddings.weights", "embedding"),
     "encoder.conv1.bias": ("encoder_conv1_bias.bias", "weight"),
     "encoder.conv1.weight": ("encoder_conv1_weight.weights", "weight"),
@@ -153,6 +155,31 @@ _WHISPER_LAYER_FILENAMES: dict[str, str] = {
     "final_layernorm.weight": "final_norm.weights",
     "final_layer_norm.bias": "final_norm.bias",
     "final_layernorm.bias": "final_norm.bias",
+}
+
+_GENERIC_GLOBAL_FILENAMES: dict[str, tuple[str, str]] = {
+    "model.embed_tokens.weight": ("token_embeddings.weights", "embedding"),
+    "model.language_model.embed_tokens.weight": ("token_embeddings.weights", "embedding"),
+    "model.norm.weight": ("output_norm.weights", "weight"),
+    "model.language_model.norm.weight": ("output_norm.weights", "weight"),
+}
+
+_LFM_DECODER_LAYER_FILENAMES: dict[str, tuple[str, str]] = {
+    "operator_norm.weight": ("input_norm.weights", "weight"),
+    "conv.in_proj.weight": ("conv_in_proj.weights", "weight"),
+    "conv.conv.weight": ("conv_depthwise.weights", "weight"),
+    "conv.out_proj.weight": ("conv_out_proj.weights", "weight"),
+    "ffn_norm.weight": ("post_attn_norm.weights", "weight"),
+    "feed_forward.w1.weight": ("ffn_gate.weights", "weight"),
+    "feed_forward.w3.weight": ("ffn_up.weights", "weight"),
+    "feed_forward.w2.weight": ("ffn_down.weights", "weight"),
+    "self_attn.q_proj.weight": ("attn_q.weights", "weight"),
+    "self_attn.k_proj.weight": ("attn_k.weights", "weight"),
+    "self_attn.v_proj.weight": ("attn_v.weights", "weight"),
+    "self_attn.out_proj.weight": ("attn_output.weights", "weight"),
+    "self_attn.o_proj.weight": ("attn_output.weights", "weight"),
+    "self_attn.q_layernorm.weight": ("attn_q_norm.weights", "weight"),
+    "self_attn.k_layernorm.weight": ("attn_k_norm.weights", "weight"),
 }
 
 _GEMMA3N_VISION_TOWER_PREFIX = "model.vision_tower.timm_model."
@@ -196,6 +223,50 @@ _GEMMA_DECODER_LAYER_FILENAMES: dict[str, tuple[str, str]] = {
     "per_layer_projection.weight": ("per_layer_proj.weights", "weight"),
 }
 
+
+
+def _flattened_whisper_source_candidates(source_name: str) -> list[str]:
+    candidates: list[str] = []
+
+    def _add(name: str) -> None:
+        if name and name not in candidates:
+            candidates.append(name)
+
+    stripped_forms: list[str] = []
+    raw = source_name.strip()
+    if raw:
+        stripped_forms.append(raw)
+    changed = True
+    while changed:
+        changed = False
+        next_forms: list[str] = []
+        for item in stripped_forms:
+            for prefix in ("v_", "module_", "adapter_", "model_"):
+                if item.startswith(prefix):
+                    tail = item[len(prefix):]
+                    if tail and tail not in stripped_forms and tail not in next_forms:
+                        next_forms.append(tail)
+                        changed = True
+        stripped_forms.extend(next_forms)
+
+    flattened_globals = {key.replace(".", "_"): key for key in _WHISPER_GLOBAL_FILENAMES}
+    flattened_layers = {key.replace(".", "_"): key for key in _WHISPER_LAYER_FILENAMES}
+
+    for flat_name in stripped_forms:
+        mapped_global = flattened_globals.get(flat_name)
+        if mapped_global is not None:
+            _add(mapped_global)
+
+        layer_match = re.match(r"^(encoder|decoder)_layers_(\d+)_(.+)$", flat_name)
+        if layer_match:
+            block = layer_match.group(1)
+            layer_index = int(layer_match.group(2))
+            suffix = layer_match.group(3)
+            mapped_layer = flattened_layers.get(suffix)
+            if mapped_layer is not None:
+                _add(f"{block}.layers.{layer_index}.{mapped_layer}")
+
+    return candidates
 
 
 def _candidate_model_dir_names(model_name_or_path: str) -> list[str]:
@@ -265,12 +336,22 @@ def _normalized_source_candidates(source_name: str) -> list[str]:
     raw = source_name.strip()
     _add(raw)
     _add_backbone_aliases(raw)
+    for whisper_candidate in _flattened_whisper_source_candidates(raw):
+        _add(whisper_candidate)
+        _add_backbone_aliases(whisper_candidate)
 
     for prefix in ("p_", "b_", "c_"):
         if raw.startswith(prefix):
             stripped = raw[len(prefix):]
             _add(stripped)
             _add_backbone_aliases(stripped)
+    if raw.startswith("v_"):
+        stripped = raw[len("v_"):]
+        _add(stripped)
+        _add_backbone_aliases(stripped)
+        for whisper_candidate in _flattened_whisper_source_candidates(stripped):
+            _add(whisper_candidate)
+            _add_backbone_aliases(whisper_candidate)
 
     stripped = raw
     while True:
@@ -432,6 +513,9 @@ def _fallback_filename_candidates(source_name: str) -> list[tuple[str, str]]:
             filenames.append(candidate)
 
     for candidate in _normalized_source_candidates(source_name):
+        generic_global = _GENERIC_GLOBAL_FILENAMES.get(candidate)
+        if generic_global is not None:
+            _add(generic_global[0], kind=generic_global[1])
         _add(_PARAKEET_GLOBAL_FILENAMES.get(candidate))
         whisper_global = _WHISPER_GLOBAL_FILENAMES.get(candidate)
         if whisper_global is not None:
@@ -489,6 +573,17 @@ def _fallback_filename_candidates(source_name: str) -> list[tuple[str, str]]:
             mapped = _WHISPER_LAYER_FILENAMES.get(suffix)
             if mapped is not None:
                 _add(f"{block}.layer_{layer_index}_{mapped}")
+
+        lfm_layer_match = re.match(
+            r"^(?:model(?:\.language_model)?\.)?layers\.(\d+)\.(.+)$",
+            candidate,
+        )
+        if lfm_layer_match:
+            layer_index = int(lfm_layer_match.group(1))
+            suffix = lfm_layer_match.group(2)
+            mapped = _LFM_DECODER_LAYER_FILENAMES.get(suffix)
+            if mapped is not None:
+                _add(f"layer_{layer_index}_{mapped[0]}", kind=mapped[1])
 
         gemma_layer_match = re.match(
             r"^(?:model(?:\.language_model)?\.)?layers\.(\d+)\.(.+)$",

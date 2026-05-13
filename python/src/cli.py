@@ -53,7 +53,7 @@ MODEL_ID_ALIASES = {
     "parakeet-tdt": "nvidia/parakeet-tdt-0.6b-v3",
     "whisper": "openai/whisper-small",
     "qwen": "Qwen/Qwen3-1.7B",
-    "lfm": "LiquidAI/LFM2-350M",
+    "lfm": "LiquidAI/LFM2-VL-450M",
 }
 
 
@@ -180,11 +180,20 @@ def _link_python_runtime_library(*, static_library_path: Path, library_path: Pat
 
 def _ensure_python_runtime_library() -> Path:
     library_path = _python_runtime_library_path()
-    if library_path.exists():
+    static_library_path = _static_cactus_library_path()
+    if (
+        library_path.exists()
+        and static_library_path.exists()
+        and library_path.stat().st_mtime >= static_library_path.stat().st_mtime
+    ):
         return library_path
 
     print_color(YELLOW, "Building Cactus shared runtime for transpiler...")
-    static_library_path = _build_static_cactus_library()
+    if not static_library_path.exists() or (
+        library_path.exists()
+        and static_library_path.stat().st_mtime > library_path.stat().st_mtime
+    ):
+        static_library_path = _build_static_cactus_library()
     _link_python_runtime_library(static_library_path=static_library_path, library_path=library_path)
     if not library_path.exists():
         raise RuntimeError(
@@ -243,6 +252,15 @@ def get_effective_weights_dir(model_id, args=None):
     if not is_needle_model_id(model_id):
         return get_weights_dir(model_id)
     return (PROJECT_ROOT / "weights" / "needle").resolve()
+
+
+def _weights_dir_looks_transpile_ready(weights_dir: Path) -> bool:
+    root = Path(weights_dir).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return False
+    if (root / "weights_manifest.json").exists():
+        return True
+    return any(root.glob("*.weights"))
 
 
 
@@ -1254,6 +1272,8 @@ def cmd_run_transpiled(args):
         weights_dir=getattr(args, "weights_dir", None),
         system_prompt=getattr(args, "system", None),
         enable_thinking=bool(getattr(args, "thinking", False)),
+        max_new_tokens=getattr(args, "max_new_tokens", None),
+        stop_sequences=tuple(getattr(args, "stop_sequence", []) or ()),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     if getattr(args, "result_json", None):
@@ -1277,7 +1297,7 @@ def cmd_transpile(args):
     command = [sys.executable, str(script_path), "--model-id", model_id]
     if "--weights-dir" not in extra_args:
         default_weights_dir = get_weights_dir(model_id)
-        if default_weights_dir.exists():
+        if _weights_dir_looks_transpile_ready(default_weights_dir):
             command.extend(["--weights-dir", str(default_weights_dir)])
     if not getattr(args, "execute_after_transpile", False) and "--skip-execute" not in extra_args:
         command.append("--skip-execute")
@@ -2380,6 +2400,10 @@ def create_parser():
                             help='Initial prompt to send immediately')
     run_parser.add_argument('--input-ids', default=None,
                             help='Comma-separated token ids for transpiled causal-LM bundles')
+    run_parser.add_argument('--max-new-tokens', type=int, default=None,
+                            help='Maximum tokens to generate for transpiled causal-LM bundles')
+    run_parser.add_argument('--stop-sequence', action='append', default=[],
+                            help='Optional stop sequence for transpiled causal-LM bundles. Repeatable.')
     run_parser.add_argument('--result-json', default=None,
                             help='Optional path to save transpiled bundle results as JSON')
     run_parser.add_argument('--thinking', action='store_true',
@@ -2408,6 +2432,10 @@ def create_parser():
                                        help='Prompt for causal-LM bundles')
     run_transpiled_parser.add_argument('--input-ids', default=None,
                                        help='Comma-separated token ids for causal-LM bundles')
+    run_transpiled_parser.add_argument('--max-new-tokens', type=int, default=None,
+                                       help='Maximum tokens to generate for causal-LM bundles')
+    run_transpiled_parser.add_argument('--stop-sequence', action='append', default=[],
+                                       help='Optional stop sequence for causal-LM bundles. Repeatable.')
     run_transpiled_parser.add_argument('--result-json', default=None,
                                        help='Optional path to save the result payload as JSON')
     run_transpiled_parser.add_argument('--system', default=None,
