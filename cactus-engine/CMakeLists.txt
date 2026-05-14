@@ -74,19 +74,6 @@ set(ENGINE_SOURCES
     src/npu.cpp
 )
 
-set(MODEL_SOURCES
-    models/model_lfm2.cpp
-    models/model_lfm2vl.cpp
-    models/model_parakeet_tdt.cpp
-    models/model_qwen.cpp
-    models/model_siglip2.cpp
-    models/model_whisper.cpp
-    models/gemma4/model_gemma4.cpp
-    models/gemma4/model_gemma4_mm.cpp
-    models/gemma4/model_gemma4_audio.cpp
-    models/gemma4/model_gemma4_vision.cpp
-)
-
 if(APPLE)
     enable_language(OBJCXX)
     list(APPEND ENGINE_SOURCES src/npu_ane.mm)

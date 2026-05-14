@@ -14,9 +14,33 @@ def _fake_completed_process(returncode: int = 0):
     return _Result(returncode)
 
 
-def test_cmd_transpile_defaults_to_skip_execute(monkeypatch) -> None:
+def test_cmd_transpile_requires_converted_weights_by_default(monkeypatch) -> None:
     parser = cli.create_parser()
     args = cli.preprocess_eval_args(parser, ["transpile", "gemma4"])
+
+    captured: list[tuple[list[str], Path, dict[str, str]]] = []
+
+    def _unexpected_runtime_build():
+        raise AssertionError("runtime build should not run before CQ weights are available")
+
+    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", _unexpected_runtime_build)
+    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
+
+    def _fake_run(command, cwd=None, env=None):
+        captured.append((list(command), Path(cwd), dict(env or {})))
+        return _fake_completed_process(0)
+
+    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
+
+    rc = transpile_cli.cmd_transpile(args)
+
+    assert rc == 1
+    assert not captured
+
+
+def test_cmd_transpile_allows_unconverted_weights_for_debug(monkeypatch) -> None:
+    parser = cli.create_parser()
+    args = cli.preprocess_eval_args(parser, ["transpile", "gemma4", "--allow-unconverted-weights"])
 
     captured: list[tuple[list[str], Path, dict[str, str]]] = []
 
@@ -41,12 +65,13 @@ def test_cmd_transpile_defaults_to_skip_execute(monkeypatch) -> None:
         "--model-id",
         transpile_cli.DEFAULT_MODEL_ID,
     ]
+    assert "--allow-unconverted-weights" in command
     assert "--skip-execute" in command
     assert cwd == transpile_cli.PROJECT_ROOT
     assert env["CACTUS_LIB_PATH"] == "/tmp/libcactus.dylib"
 
 
-def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch) -> None:
+def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch, tmp_path: Path) -> None:
     parser = cli.create_parser()
     args = cli.preprocess_eval_args(
         parser,
@@ -56,7 +81,11 @@ def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch) -> No
     captured: list[list[str]] = []
 
     monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
+    ready_weights_dir = tmp_path / "weights" / "gemma-4-e2b-it"
+    ready_weights_dir.mkdir(parents=True)
+    (ready_weights_dir / "weights_manifest.json").write_text("{}")
+
+    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: ready_weights_dir)
 
     def _fake_run(command, cwd=None, env=None):
         captured.append(list(command))
@@ -74,7 +103,7 @@ def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch) -> No
     assert "/tmp/gemma4-bundle" in command
 
 
-def test_cmd_transpile_skips_empty_default_weights_dir(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_transpile_rejects_empty_default_weights_dir(monkeypatch, tmp_path: Path) -> None:
     parser = cli.create_parser()
     args = cli.preprocess_eval_args(parser, ["transpile", "whisper-small"])
 
@@ -94,10 +123,8 @@ def test_cmd_transpile_skips_empty_default_weights_dir(monkeypatch, tmp_path: Pa
 
     rc = transpile_cli.cmd_transpile(args)
 
-    assert rc == 0
-    assert captured
-    command = captured[0]
-    assert "--weights-dir" not in command
+    assert rc == 1
+    assert not captured
 
 
 def test_cmd_transpile_uses_ready_default_weights_dir(monkeypatch, tmp_path: Path) -> None:

@@ -40,8 +40,10 @@ def cmd_transpile(args):
     command = [sys.executable, "-m", "cactus.transpile.hf_model", "--model-id", model_id]
     if "--weights-dir" not in extra_args:
         default_weights_dir = get_weights_dir(model_id)
-        if default_weights_dir.exists():
+        if _weights_dir_looks_transpile_ready(default_weights_dir):
             command.extend(["--weights-dir", str(default_weights_dir)])
+        else:
+            return 1
     if not getattr(args, "execute_after_transpile", False) and "--skip-execute" not in extra_args:
         command.append("--skip-execute")
     command.extend(extra_args)
@@ -50,6 +52,8 @@ def cmd_transpile(args):
 Two important details:
 
 - `cactus transpile` saves artifacts and skips execution by default.
+- Normal transpilation requires converted Cactus CQ weights. Run `cactus convert`
+  first, or pass `--weights-dir` to an existing converted folder.
 - The CLI only has an explicit `--execute-after-transpile` flag; most other
   transpile options are forwarded as unknown args to `hf_model.py`.
 
@@ -868,6 +872,8 @@ cactus transpile <hf-model-id>
 
 By default this:
 
+- requires a converted Cactus CQ weights directory, either passed with
+  `--weights-dir` or found in the default `weights/<model>` location
 - resolves the runtime library
 - launches `python/cactus/transpile/hf_model.py`
 - saves artifacts under `./transpiled/<model-id>/`
@@ -899,13 +905,16 @@ Common ones:
 - `--no-fuse-rms-norm`
 - `--no-fuse-rope`
 - `--no-fuse-attention`
+- `--allow-unconverted-weights` for compiler-only debugging
 
 Examples:
 
 ### Text causal LM
 
 ```bash
+cactus convert <text-model-id> /path/to/converted_weights --bits 4
 cactus transpile <text-model-id> \
+  --weights-dir /path/to/converted_weights \
   --prompt "The capital of France is" \
   --artifact-dir ./transpiled/text_demo
 ```
@@ -932,9 +941,11 @@ cactus transpile <gemma4-model-id> \
 ### Whisper-style encoder capture
 
 ```bash
+cactus convert <whisper-model-id> /path/to/converted_weights --bits 4
 cactus transpile <whisper-model-id> \
   --audio-file /path/to/sample.wav \
-  --task encoder_hidden_states
+  --task encoder_hidden_states \
+  --weights-dir /path/to/converted_weights
 ```
 
 ### Parakeet TDT

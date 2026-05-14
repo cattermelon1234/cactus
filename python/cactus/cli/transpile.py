@@ -168,7 +168,16 @@ def _weights_dir_looks_transpile_ready(weights_dir: Path) -> bool:
         return False
     if (root / "weights_manifest.json").exists():
         return True
-    return any(root.glob("*.weights"))
+    if any(root.glob("*.cq[1-4].weights")):
+        return True
+    # Legacy converted Cactus weight folders may not have a manifest yet, but
+    # they should still carry runtime config plus Cactus tensor files.
+    return (root / "config.txt").exists() and any(root.glob("*.weights"))
+
+
+def _extra_args_has_option(extra_args: list[str], option: str) -> bool:
+    prefix = f"{option}="
+    return any(arg == option or arg.startswith(prefix) for arg in extra_args)
 
 
 def _resolve_transpiled_manifest(path_value: str | os.PathLike[str] | None) -> Path | None:
@@ -193,22 +202,41 @@ def _prepend_python_path(env: dict[str, str]) -> None:
 
 def cmd_transpile(args) -> int:
     """Invoke the saved-model transpiler entrypoint."""
+    model_id = resolve_model_id_alias(args.model_id)
+    extra_args = list(getattr(args, "extra_args", []) or [])
+    allow_unconverted = bool(getattr(args, "allow_unconverted_weights", False))
+
+    command = [sys.executable, "-m", "cactus.transpile.hf_model", "--model-id", model_id]
+    if _extra_args_has_option(extra_args, "--weights-dir"):
+        pass
+    else:
+        default_weights_dir = get_weights_dir(model_id)
+        if _weights_dir_looks_transpile_ready(default_weights_dir):
+            command.extend(["--weights-dir", str(default_weights_dir)])
+        elif not allow_unconverted:
+            print_color(
+                RED,
+                "Error: transpilation requires converted Cactus CQ weights.",
+            )
+            print_color(
+                YELLOW,
+                "Run conversion first, then retry:\n"
+                f"  cactus convert {model_id} {default_weights_dir} --bits 4\n"
+                f"  cactus transpile {model_id} --weights-dir {default_weights_dir}",
+            )
+            return 1
+
+    if allow_unconverted:
+        command.append("--allow-unconverted-weights")
+    if not getattr(args, "execute_after_transpile", False) and "--skip-execute" not in extra_args:
+        command.append("--skip-execute")
+    command.extend(extra_args)
+
     try:
         transpile_lib = _ensure_python_runtime_library()
     except RuntimeError as exc:
         print_color(RED, f"Error: {exc}")
         return 1
-
-    model_id = resolve_model_id_alias(args.model_id)
-    extra_args = list(getattr(args, "extra_args", []) or [])
-    command = [sys.executable, "-m", "cactus.transpile.hf_model", "--model-id", model_id]
-    if "--weights-dir" not in extra_args:
-        default_weights_dir = get_weights_dir(model_id)
-        if _weights_dir_looks_transpile_ready(default_weights_dir):
-            command.extend(["--weights-dir", str(default_weights_dir)])
-    if not getattr(args, "execute_after_transpile", False) and "--skip-execute" not in extra_args:
-        command.append("--skip-execute")
-    command.extend(extra_args)
 
     env = os.environ.copy()
     env["CACTUS_LIB_PATH"] = str(transpile_lib)

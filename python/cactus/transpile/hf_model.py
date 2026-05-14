@@ -2655,7 +2655,12 @@ def main() -> int:
     parser.add_argument(
         "--weights-dir",
         default="",
-        help="Optional converted Cactus weights directory for mmap weight binding.",
+        help="Converted Cactus CQ weights directory for mmap weight binding.",
+    )
+    parser.add_argument(
+        "--allow-unconverted-weights",
+        action="store_true",
+        help="Debug only: allow transpiling without converted Cactus CQ weights.",
     )
     parser.add_argument(
         "--artifact-dir",
@@ -2699,6 +2704,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    validated_weights_dir = _validate_weights_dir(args.weights_dir.strip() or None, model_id=args.model_id)
+    if validated_weights_dir is None and not args.allow_unconverted_weights:
+        raise RuntimeError(
+            "Transpilation requires converted Cactus CQ weights.\n"
+            "\n"
+            "Create them first with:\n"
+            f"  cactus convert {args.model_id} <weights-dir> --bits 4\n"
+            "\n"
+            "Then retry with:\n"
+            f"  cactus transpile {args.model_id} --weights-dir <weights-dir>\n"
+            "\n"
+            "For compiler-only debugging, pass --allow-unconverted-weights."
+        )
+
     image_files = tuple(str(path) for path in args.image_file if str(path).strip())
     if args.task == "auto":
         inferred_task = _infer_task_from_config(args.model_id)
@@ -2718,7 +2737,6 @@ def main() -> int:
     else:
         task = args.task
     torch_dtype = _parse_dtype(args.torch_dtype)
-    validated_weights_dir = _validate_weights_dir(args.weights_dir.strip() or None, model_id=args.model_id)
     weights_dir = str(validated_weights_dir) if validated_weights_dir is not None else None
     artifact_dir = Path(args.artifact_dir).resolve() if args.artifact_dir else _default_artifact_dir_for_model(args.model_id)
 

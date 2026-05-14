@@ -229,6 +229,11 @@ def create_parser():
         action='store_true',
         help='Also run the transpiled graph immediately. By default `cactus transpile` saves the bundle and skips execution.',
     )
+    transpile_parser.add_argument(
+        '--allow-unconverted-weights',
+        action='store_true',
+        help='Debug only: allow transpiling without converted Cactus CQ weights.',
+    )
 
     run_transpiled_parser = subparsers.add_parser('run-transpiled', help='Run a saved transpiled component bundle')
     run_transpiled_parser.add_argument('bundle_dir',
