@@ -4,21 +4,21 @@ from collections import Counter
 
 import torch
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.graph_ir import verify_ir
-from src.transpile.ops import canonicalize_op
-from src.transpile.ops import get_op
-from src.transpile.ops import has_op
-from src.transpile.canonicalize.utils import bypass_unary_node
-from src.transpile.canonicalize.utils import dce
-from src.transpile.canonicalize.utils import ir_dtype_to_torch
-from src.transpile.canonicalize.utils import materialize_constant_output
-from src.transpile.canonicalize.utils import normalize_dim
-from src.transpile.canonicalize.utils import normalize_dtype_name
-from src.transpile.canonicalize.utils import numel
-from src.transpile.canonicalize.utils import rebuild_graph
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.graph_ir import verify_ir
+from cactus.transpile.ops import canonicalize_op
+from cactus.transpile.ops import get_op
+from cactus.transpile.ops import has_op
+from cactus.transpile.canonicalize.utils import bypass_unary_node
+from cactus.transpile.canonicalize.utils import dce
+from cactus.transpile.canonicalize.utils import ir_dtype_to_torch
+from cactus.transpile.canonicalize.utils import materialize_constant_output
+from cactus.transpile.canonicalize.utils import normalize_dim
+from cactus.transpile.canonicalize.utils import normalize_dtype_name
+from cactus.transpile.canonicalize.utils import numel
+from cactus.transpile.canonicalize.utils import rebuild_graph
 
 
 COMPILER_SUPPORTED_OPS = {

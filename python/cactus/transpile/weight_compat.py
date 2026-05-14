@@ -7,24 +7,24 @@ from pathlib import Path
 
 import numpy as np
 
-from src.tensor_io import CACTUS_ALIGNMENT
-from src.tensor_io import CACTUS_MAGIC
-from src.tensor_io import FLAG_INTERLEAVED
-from src.tensor_io import align_offset
-from src.cq_convert.model_adapters.naming import gemma4_scale_factor
-from src.transpile.runtime_compat import Graph
-from src.transpile.weight_binding import WeightBinding
-from src.cq_convert.quantization.cq import FLAG_ORTHOGONAL_ROTATION
-from src.cq_convert.quantization.cq import GROUP_SIZE as CQ_GROUP_SIZE
-from src.cq_convert.quantization.cq import PRECISION_CQ
-from src.cq_convert.quantization.cq import make_codebook
-from src.cq_convert.quantization.cq import make_hadamard_components
-from src.cq_convert.quantization.cq import make_hadamard_matrix
-from src.cq_convert.quantization.cq import make_orthogonal_rotation
-from src.cq_convert.quantization.cq import pack_indices_lsb
-from src.cq_convert.quantization.cq import quantize_hadamard
-from src.cq_convert.quantization.cq import quantize_orthogonal
-from src.cq_convert.quantization.cq import write_cq_tensor
+from cactus.convert.cactus_adapters.tensor_io import CACTUS_ALIGNMENT
+from cactus.convert.cactus_adapters.tensor_io import CACTUS_MAGIC
+from cactus.convert.cactus_adapters.tensor_io import FLAG_INTERLEAVED
+from cactus.convert.cactus_adapters.tensor_io import align_offset
+from cactus.convert.model_adapters.naming import gemma4_scale_factor
+from cactus.transpile.runtime_compat import Graph
+from cactus.transpile.weight_binding import WeightBinding
+from cactus.convert.quantization.cq import FLAG_ORTHOGONAL_ROTATION
+from cactus.convert.quantization.cq import GROUP_SIZE as CQ_GROUP_SIZE
+from cactus.convert.quantization.cq import PRECISION_CQ
+from cactus.convert.quantization.cq import make_codebook
+from cactus.convert.quantization.cq import make_hadamard_components
+from cactus.convert.quantization.cq import make_hadamard_matrix
+from cactus.convert.quantization.cq import make_orthogonal_rotation
+from cactus.convert.quantization.cq import pack_indices_lsb
+from cactus.convert.quantization.cq import quantize_hadamard
+from cactus.convert.quantization.cq import quantize_orthogonal
+from cactus.convert.quantization.cq import write_cq_tensor
 
 
 _HEADER_SIZE = 84

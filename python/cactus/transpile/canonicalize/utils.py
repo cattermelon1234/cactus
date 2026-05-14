@@ -4,10 +4,10 @@ from typing import Any
 
 import torch
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.graph_ir import verify_ir
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.graph_ir import verify_ir
 
 
 def normalize_dtype_name(dtype: Any) -> str | None:

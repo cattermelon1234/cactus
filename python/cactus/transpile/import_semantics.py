@@ -5,12 +5,12 @@ from typing import Any
 
 import torch
 
-from src.transpile.fusion.common import producer
-from src.transpile.fusion.common import strip_passthrough
-from src.transpile.canonicalize.utils import rebuild_graph
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import verify_ir
+from cactus.transpile.fusion.common import producer
+from cactus.transpile.fusion.common import strip_passthrough
+from cactus.transpile.canonicalize.utils import rebuild_graph
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import verify_ir
 
 
 @dataclass(frozen=True)

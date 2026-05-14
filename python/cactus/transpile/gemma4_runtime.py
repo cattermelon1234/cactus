@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from src.transpile.audio_preprocess import prepare_native_gemma4_audio_features
+from cactus.transpile.audio_preprocess import prepare_native_gemma4_audio_features
 
 
 _TORCHVISION_COMPAT_LIBRARIES: list[object] = []
@@ -533,7 +533,7 @@ def prepare_gemma4_multimodal_inputs(
     sample_rate: int | None = None
     if audio_file:
         sample_rate = _resolve_audio_sample_rate(processor)
-        from src.transpile.audio_preprocess import load_audio_waveform
+        from cactus.transpile.audio_preprocess import load_audio_waveform
 
         audio_waveforms.append(load_audio_waveform(audio_file, target_sample_rate=sample_rate))
 

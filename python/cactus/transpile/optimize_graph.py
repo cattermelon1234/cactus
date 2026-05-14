@@ -5,29 +5,29 @@ import re
 
 import torch
 
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.canonicalize.utils import normalize_dtype_name
-from src.transpile.canonicalize.utils import remove_node
-from src.transpile.canonicalize.utils import rebuild_graph
-from src.transpile.fusion import match_attention
-from src.transpile.fusion import match_attention_block
-from src.transpile.fusion import match_conv_module
-from src.transpile.fusion import match_gated_deltanet
-from src.transpile.fusion import match_gated_mlp
-from src.transpile.fusion import match_lstm_cell
-from src.transpile.fusion import match_rel_pos_bias
-from src.transpile.fusion import match_rms_norm
-from src.transpile.fusion import match_rope
-from src.transpile.fusion import match_self_attention_block
-from src.transpile.fusion.common import producer
-from src.transpile.fusion.common import strip_passthrough
-from src.transpile.fusion.linear import match_linear
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.graph_ir import verify_ir
-from src.transpile.model_patterns import GOLD_PATTERNS
-from src.transpile.normalize import dtype_to_ir
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.canonicalize.utils import normalize_dtype_name
+from cactus.transpile.canonicalize.utils import remove_node
+from cactus.transpile.canonicalize.utils import rebuild_graph
+from cactus.transpile.fusion import match_attention
+from cactus.transpile.fusion import match_attention_block
+from cactus.transpile.fusion import match_conv_module
+from cactus.transpile.fusion import match_gated_deltanet
+from cactus.transpile.fusion import match_gated_mlp
+from cactus.transpile.fusion import match_lstm_cell
+from cactus.transpile.fusion import match_rel_pos_bias
+from cactus.transpile.fusion import match_rms_norm
+from cactus.transpile.fusion import match_rope
+from cactus.transpile.fusion import match_self_attention_block
+from cactus.transpile.fusion.common import producer
+from cactus.transpile.fusion.common import strip_passthrough
+from cactus.transpile.fusion.linear import match_linear
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.graph_ir import verify_ir
+from cactus.transpile.model_patterns import GOLD_PATTERNS
+from cactus.transpile.normalize import dtype_to_ir
 
 
 @dataclass(frozen=True)

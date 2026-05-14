@@ -16,7 +16,7 @@ This README is a code-first walkthrough of the actual flow in the repo today.
 
 ## Related Entry Points
 
-These files are outside `python/src/transpile`, but they are the public top-level
+These files are outside `python/cactus/transpile`, but they are the public top-level
 entry points for the transpiler:
 
 - `python/cactus/cli/transpile.py`
@@ -479,7 +479,7 @@ Gemma4 gets extra handling in this pass:
 ## 12. Lower IR Into A Cactus `Graph`
 
 `lower.py` is the last compiler stage. It maps `IRValue`s and `IRNode`s into the
-runtime `Graph` object from `src.graph`.
+runtime `Graph` object from `cactus.bindings.graph`.
 
 The high-level structure is:
 

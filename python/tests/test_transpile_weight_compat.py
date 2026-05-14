@@ -4,12 +4,12 @@ from pathlib import Path
 
 import numpy as np
 
-from src.tensor_io import save_tensor_with_header
-from src.transpile.weight_binding import WeightBinding
-from src.transpile.weight_binding import resolve_weight_binding
-from src.transpile.weight_compat import _open_cactus_tensor_file
-from src.transpile.weight_compat import ensure_binding_compatible
-from src.transpile.weight_compat import ensure_embedding_binding_compatible
+from cactus.convert.cactus_adapters.tensor_io import save_tensor_with_header
+from cactus.transpile.weight_binding import WeightBinding
+from cactus.transpile.weight_binding import resolve_weight_binding
+from cactus.transpile.weight_compat import _open_cactus_tensor_file
+from cactus.transpile.weight_compat import ensure_binding_compatible
+from cactus.transpile.weight_compat import ensure_embedding_binding_compatible
 
 
 def _write_grouped_int8_embedding(path: Path, rows: int, cols: int) -> None:

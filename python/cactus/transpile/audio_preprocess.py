@@ -167,7 +167,7 @@ def prepare_cactus_audio_features(
     torch_dtype: torch.dtype,
     layout: str = "frames_mels",
 ) -> tuple[torch.Tensor, int]:
-    from src.cactus import cactus_preprocess_audio_features
+    from cactus.bindings.cactus import cactus_preprocess_audio_features
 
     capacity_frames = int(expected_frames) if isinstance(expected_frames, int) and expected_frames > 0 else 0
     if capacity_frames <= 0:
@@ -288,7 +288,7 @@ def prepare_cactus_audio_features_raw(
     mel_bins: int,
     capacity: int,
 ) -> tuple[list[float], int, int]:
-    from src.cactus import cactus_preprocess_audio_features
+    from cactus.bindings.cactus import cactus_preprocess_audio_features
 
     return cactus_preprocess_audio_features(
         str(Path(audio_file).expanduser().resolve()),

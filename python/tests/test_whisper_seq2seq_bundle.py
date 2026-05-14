@@ -4,8 +4,8 @@ import numpy as np
 import torch
 
 from cactus.transpile import hf_model
-from src.transpile import component_bundle_runtime
-from src.transpile import model_adapters
+from cactus.transpile import component_bundle_runtime
+from cactus.transpile import model_adapters
 
 
 class _FakeTensor:

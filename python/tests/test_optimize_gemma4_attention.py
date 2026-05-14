@@ -1,7 +1,7 @@
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.optimize_graph import normalize_gemma4_decoder_attention_semantics
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.optimize_graph import normalize_gemma4_decoder_attention_semantics
 
 
 def test_normalize_gemma4_full_attention_uses_sequence_window_compat() -> None:

@@ -15,29 +15,29 @@ from typing import Any
 import numpy as np
 import torch
 
-from src.tensor_io import CACTUS_MAGIC
-from src.tensor_io import FLAG_INTERLEAVED
-from src.tensor_io import align_offset
-from src.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
-from src.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
-from src.transpile.audio_preprocess import prepare_cactus_audio_features
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.gemma4_runtime import ensure_transformers_supports_gemma4
-from src.transpile.gemma4_runtime import patch_torch_flex_attention_compat
-from src.transpile.gemma4_runtime import patch_transformers_torchvision_probe
-from src.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.lower import transpile_preoptimized_ir
-from src.transpile.optimize_graph import optimize_graph
-from src.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
-from src.transpile.parakeet_tdt_local import load_parakeet_tdt_config
-from src.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
-from src.transpile.runtime_compat import _lib
-from src.transpile.runtime_compat import cactus_node_t
-from src.transpile.runtime_compat import Graph
-from src.transpile.runtime_compat import Tensor
+from cactus.convert.cactus_adapters.tensor_io import CACTUS_MAGIC
+from cactus.convert.cactus_adapters.tensor_io import FLAG_INTERLEAVED
+from cactus.convert.cactus_adapters.tensor_io import align_offset
+from cactus.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
+from cactus.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
+from cactus.transpile.audio_preprocess import prepare_cactus_audio_features
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.gemma4_runtime import ensure_transformers_supports_gemma4
+from cactus.transpile.gemma4_runtime import patch_torch_flex_attention_compat
+from cactus.transpile.gemma4_runtime import patch_transformers_torchvision_probe
+from cactus.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.lower import transpile_preoptimized_ir
+from cactus.transpile.optimize_graph import optimize_graph
+from cactus.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
+from cactus.transpile.parakeet_tdt_local import load_parakeet_tdt_config
+from cactus.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
+from cactus.transpile.runtime_compat import _lib
+from cactus.transpile.runtime_compat import cactus_node_t
+from cactus.transpile.runtime_compat import Graph
+from cactus.transpile.runtime_compat import Tensor
 
 
 _HEADER_SIZE = 84
@@ -428,7 +428,7 @@ def _default_weights_dir_for_manifest(
     if not model_id:
         return None
     try:
-        from src.downloads import get_weights_dir
+        from cactus.cli.download import get_weights_dir
 
         candidate = get_weights_dir(model_id)
     except Exception:
@@ -491,9 +491,9 @@ def _run_native_stateful_audio_bundle(
     if native_weights_dir is None:
         raise FileNotFoundError("could not resolve a Cactus-native weights directory for stateful audio execution")
 
-    from src.cactus import cactus_destroy
-    from src.cactus import cactus_init
-    from src.cactus import cactus_transcribe
+    from cactus.bindings.cactus import cactus_destroy
+    from cactus.bindings.cactus import cactus_init
+    from cactus.bindings.cactus import cactus_transcribe
 
     inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
     if not isinstance(inputs_meta, Mapping):
@@ -636,9 +636,9 @@ def _run_native_stateful_multimodal_bundle(
     if native_weights_dir is None:
         raise FileNotFoundError("could not resolve a Cactus-native weights directory for Gemma4 multimodal execution")
 
-    from src.cactus import cactus_complete
-    from src.cactus import cactus_destroy
-    from src.cactus import cactus_init
+    from cactus.bindings.cactus import cactus_complete
+    from cactus.bindings.cactus import cactus_destroy
+    from cactus.bindings.cactus import cactus_init
 
     if max_new_tokens is None:
         token_budget = int(inputs_meta.get("max_new_tokens", 0) or 0)
@@ -759,9 +759,9 @@ def _run_native_stateful_causal_lm_bundle(
     if native_weights_dir is None:
         raise FileNotFoundError("could not resolve a Cactus-native weights directory for stateful causal-LM execution")
 
-    from src.cactus import cactus_complete
-    from src.cactus import cactus_destroy
-    from src.cactus import cactus_init
+    from cactus.bindings.cactus import cactus_complete
+    from cactus.bindings.cactus import cactus_destroy
+    from cactus.bindings.cactus import cactus_init
 
     inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
     target_token_count = int(inputs_meta.get("target_token_count", 0) or 0)

@@ -396,7 +396,7 @@ result = json.loads(cactus_complete(model, messages, None, None, None))
 The `Graph` API provides a tensor computation graph for building and executing dataflow pipelines on the Cactus kernel layer:
 
 ```python
-from src.graph import Graph
+from cactus.bindings.graph import Graph
 import numpy as np
 
 g = Graph()

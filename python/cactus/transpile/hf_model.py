@@ -24,33 +24,33 @@ PYTHON_ROOT = Path(__file__).resolve().parents[2]
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from src.transpile.runtime_compat import Graph
-from src.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
-from src.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
-from src.transpile.audio_preprocess import prepare_cactus_audio_features
-from src.transpile.audio_preprocess import prepare_native_gemma4_audio_features
-from src.transpile.capture_pytorch import capture_model
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.component_partition import extract_component_subgraphs
-from src.transpile.component_partition import summarize_ir_components
-from src.transpile.component_pipeline import capture_component_spec
-from src.transpile.component_pipeline import execute_component_pipeline
-from src.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs as _shared_prepare_gemma4_multimodal_inputs
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import verify_ir
-from src.transpile.lower import TranspiledGraph
-from src.transpile.lower import _lower_constant_value
-from src.transpile.lower import _lower_input_value
-from src.transpile.lower import _lower_ir_node
-from src.transpile.lower import _lookup_weight_binding
-from src.transpile.model_adapters import build_component_module_specs
-from src.transpile.model_adapters import canonicalize_model_interface
-from src.transpile.optimize_graph import FusionConfig
-from src.transpile.optimize_graph import optimize_graph
-from src.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
-from src.transpile.parakeet_tdt_local import load_parakeet_tdt_local_model
-from src.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
-from src.transpile.weight_compat import ensure_binding_compatible
+from cactus.transpile.runtime_compat import Graph
+from cactus.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
+from cactus.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
+from cactus.transpile.audio_preprocess import prepare_cactus_audio_features
+from cactus.transpile.audio_preprocess import prepare_native_gemma4_audio_features
+from cactus.transpile.capture_pytorch import capture_model
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.component_partition import extract_component_subgraphs
+from cactus.transpile.component_partition import summarize_ir_components
+from cactus.transpile.component_pipeline import capture_component_spec
+from cactus.transpile.component_pipeline import execute_component_pipeline
+from cactus.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs as _shared_prepare_gemma4_multimodal_inputs
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import verify_ir
+from cactus.transpile.lower import TranspiledGraph
+from cactus.transpile.lower import _lower_constant_value
+from cactus.transpile.lower import _lower_input_value
+from cactus.transpile.lower import _lower_ir_node
+from cactus.transpile.lower import _lookup_weight_binding
+from cactus.transpile.model_adapters import build_component_module_specs
+from cactus.transpile.model_adapters import canonicalize_model_interface
+from cactus.transpile.optimize_graph import FusionConfig
+from cactus.transpile.optimize_graph import optimize_graph
+from cactus.transpile.parakeet_tdt_local import greedy_decode_parakeet_tdt_token_ids
+from cactus.transpile.parakeet_tdt_local import load_parakeet_tdt_local_model
+from cactus.transpile.parakeet_tdt_local import prepare_parakeet_tdt_audio_features
+from cactus.transpile.weight_compat import ensure_binding_compatible
 
 _TORCHVISION_COMPAT_LIBRARIES: list[object] = []
 _DEFAULT_CAUSAL_PROMPT = "The capital of France is"

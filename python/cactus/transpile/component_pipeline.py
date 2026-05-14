@@ -9,13 +9,13 @@ from typing import Any
 import numpy as np
 import torch
 
-from src.transpile.capture_pytorch import capture_model
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.graph_ir import IRGraph
-from src.transpile.lower import TranspiledGraph
-from src.transpile.lower import transpile_preoptimized_ir
-from src.transpile.optimize_graph import FusionConfig
-from src.transpile.optimize_graph import optimize_graph
+from cactus.transpile.capture_pytorch import capture_model
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.lower import TranspiledGraph
+from cactus.transpile.lower import transpile_preoptimized_ir
+from cactus.transpile.optimize_graph import FusionConfig
+from cactus.transpile.optimize_graph import optimize_graph
 
 
 @dataclass

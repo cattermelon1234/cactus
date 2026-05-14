@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
 
 
 @dataclass(frozen=True)

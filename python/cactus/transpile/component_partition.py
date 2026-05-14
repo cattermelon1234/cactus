@@ -3,10 +3,10 @@ from __future__ import annotations
 import copy
 from collections import Counter
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.graph_ir import verify_ir
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.graph_ir import verify_ir
 
 
 COMPONENT_AUDIO_ENCODER = "audio_encoder"

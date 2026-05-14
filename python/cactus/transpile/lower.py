@@ -8,17 +8,17 @@ from typing import Any
 import numpy as np
 import torch
 
-from src.transpile.runtime_compat import Graph
-from src.transpile.runtime_compat import Tensor
-from src.transpile.capture_pytorch import CapturedModel
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.graph_ir import verify_ir
-from src.transpile.optimize_graph import optimize_graph
-from src.transpile.weight_compat import ensure_binding_compatible
-from src.transpile.weight_binding import WeightBinding
+from cactus.transpile.runtime_compat import Graph
+from cactus.transpile.runtime_compat import Tensor
+from cactus.transpile.capture_pytorch import CapturedModel
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.graph_ir import verify_ir
+from cactus.transpile.optimize_graph import optimize_graph
+from cactus.transpile.weight_compat import ensure_binding_compatible
+from cactus.transpile.weight_binding import WeightBinding
 
 
 @dataclass

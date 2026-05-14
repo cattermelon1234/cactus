@@ -8,11 +8,11 @@ from typing import Any
 
 import torch
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.graph_ir import IRValue
-from src.transpile.normalize import dtype_to_ir
-from src.transpile.normalize import normalize_target
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.graph_ir import IRValue
+from cactus.transpile.normalize import dtype_to_ir
+from cactus.transpile.normalize import normalize_target
 
 
 class UnsupportedImportError(NotImplementedError):

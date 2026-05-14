@@ -21,15 +21,15 @@ PROJECT_ROOT = PYTHON_ROOT.parent
 
 sys.path.insert(0, str(PYTHON_ROOT))
 
-from src.cactus import cactus_complete
-from src.cactus import cactus_destroy
-from src.cactus import cactus_init
-from src.cactus import cactus_reset
-from src.transpile.capture_pytorch import capture_model
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.model_adapters import canonicalize_model_interface
-from src.transpile.optimize_graph import FusionConfig
-from src.transpile.optimize_graph import optimize_graph
+from cactus.bindings.cactus import cactus_complete
+from cactus.bindings.cactus import cactus_destroy
+from cactus.bindings.cactus import cactus_init
+from cactus.bindings.cactus import cactus_reset
+from cactus.transpile.capture_pytorch import capture_model
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.model_adapters import canonicalize_model_interface
+from cactus.transpile.optimize_graph import FusionConfig
+from cactus.transpile.optimize_graph import optimize_graph
 from cactus.transpile.hf_model import TranspileWrapper
 from cactus.transpile.hf_model import _graph_to_dict
 from cactus.transpile.hf_model import _load_transformers_bundle

@@ -4,10 +4,10 @@ from dataclasses import dataclass
 
 import torch
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.fusion.common import producer
-from src.transpile.fusion.common import strip_passthrough
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.fusion.common import producer
+from cactus.transpile.fusion.common import strip_passthrough
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ import torch
 from torch.export import export
 from torch.fx.passes.shape_prop import ShapeProp
 
-from src.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRGraph
 
 
 class CapturePhaseError(RuntimeError):
@@ -204,7 +204,7 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
             f"torch.export failed for model={type(model).__name__} strict={strict}: {exc}",
             cause=exc,
         ) from exc
-    from src.transpile.import_ir import import_captured_to_ir
+    from cactus.transpile.import_ir import import_captured_to_ir
 
     import_graph_module = _prepare_import_graph_module(ep, example_args, example_kwargs)
 

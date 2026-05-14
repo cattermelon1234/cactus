@@ -12,10 +12,10 @@ PYTHON_ROOT = Path(__file__).resolve().parents[3]
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from src.transpile.capture_pytorch import capture_model
-from src.transpile.canonicalize.cleanup import canonicalize_exported_graph
-from src.transpile.graph_ir import IRGraph
-from src.transpile.model_adapters import canonicalize_model_interface
+from cactus.transpile.capture_pytorch import capture_model
+from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.model_adapters import canonicalize_model_interface
 
 
 class Gemma4FullModelWrapper(torch.nn.Module):

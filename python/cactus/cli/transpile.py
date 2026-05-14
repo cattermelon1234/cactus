@@ -230,7 +230,7 @@ def cmd_run_transpiled(args) -> int:
     if python_root not in sys.path:
         sys.path.insert(0, python_root)
 
-    from src.transpile.component_bundle_runtime import run_transpiled_bundle
+    from cactus.transpile.component_bundle_runtime import run_transpiled_bundle
 
     bundle_dir = getattr(args, "bundle_dir", None) or getattr(args, "model_id", None)
     image_values: list[str] = []

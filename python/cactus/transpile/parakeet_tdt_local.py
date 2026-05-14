@@ -12,8 +12,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.transpile.component_pipeline import ComponentModuleSpec
-from src.transpile.audio_preprocess import prepare_native_parakeet_audio_features
+from cactus.transpile.component_pipeline import ComponentModuleSpec
+from cactus.transpile.audio_preprocess import prepare_native_parakeet_audio_features
 
 
 def _cfg_get(config: dict[str, Any], key: str, default: Any = None) -> Any:

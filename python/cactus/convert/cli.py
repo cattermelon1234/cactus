@@ -541,7 +541,7 @@ def convert(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m src.convert")
+    parser = argparse.ArgumentParser(prog="python -m cactus.convert")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("convert")
     p.add_argument("--model", required=True)

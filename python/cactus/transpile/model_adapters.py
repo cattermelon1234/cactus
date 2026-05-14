@@ -12,9 +12,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from src.transpile.component_pipeline import ComponentModuleSpec
-from src.tensor_io import CACTUS_MAGIC
-from src.tensor_io import align_offset
+from cactus.transpile.component_pipeline import ComponentModuleSpec
+from cactus.convert.cactus_adapters.tensor_io import CACTUS_MAGIC
+from cactus.convert.cactus_adapters.tensor_io import align_offset
 
 
 _GEMMA4_SAFE_TEXT_MLP_PRODUCT_SCALE = 1.0 / 64.0
@@ -2893,7 +2893,7 @@ def build_component_module_specs(
             components=components,
         )
     if family == "parakeet_tdt" and task == "tdt_transcription":
-        from src.transpile.parakeet_tdt_local import build_parakeet_tdt_component_specs
+        from cactus.transpile.parakeet_tdt_local import build_parakeet_tdt_component_specs
 
         return build_parakeet_tdt_component_specs(
             model,

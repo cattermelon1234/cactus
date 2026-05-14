@@ -33,13 +33,13 @@ def _patched_cdll_getattr(self: ctypes.CDLL, name: str):
 
 
 def _load_runtime_modules():
-    if "src.cactus" in sys.modules and "src.graph" in sys.modules:
-        return sys.modules["src.cactus"], sys.modules["src.graph"]
+    if "cactus.bindings.cactus" in sys.modules and "cactus.bindings.graph" in sys.modules:
+        return sys.modules["cactus.bindings.cactus"], sys.modules["cactus.bindings.graph"]
 
     ctypes.CDLL.__getattr__ = _patched_cdll_getattr
     try:
-        cactus_module = importlib.import_module("src.cactus")
-        graph_module = importlib.import_module("src.graph")
+        cactus_module = importlib.import_module("cactus.bindings.cactus")
+        graph_module = importlib.import_module("cactus.bindings.graph")
     finally:
         ctypes.CDLL.__getattr__ = _ORIG_CDLL_GETATTR
     return cactus_module, graph_module

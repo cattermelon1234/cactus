@@ -101,7 +101,7 @@ jobs:
             [ -n "$pipeline_tag" ] && FLAGS+=(--pipeline-tag "$pipeline_tag")
             [ -n "$tags" ] && FLAGS+=(--tags "$tags")
             set +e
-            python -m src.publish_to_hf --task export_model "${FLAGS[@]}" --description "$description"
+            python -m cactus.cli.publish_to_hf --task export_model "${FLAGS[@]}" --description "$description"
             local rc=$?
             set -e
             return $rc
@@ -148,6 +148,6 @@ jobs:
         run: |
           cd python
           ORG="${{ github.event.inputs.org || 'Cactus-Compute' }}"
-          python -m src.publish_to_hf --task update_org_readme --org "$ORG"
+          python -m cactus.cli.publish_to_hf --task update_org_readme --org "$ORG"
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

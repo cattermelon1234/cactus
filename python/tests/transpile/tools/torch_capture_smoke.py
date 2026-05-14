@@ -10,13 +10,13 @@ PYTHON_ROOT = Path(__file__).resolve().parents[3]
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
-from src.transpile.capture_pytorch import (
+from cactus.transpile.capture_pytorch import (
     capture_model_with_fallback,
     dump_graph,
     get_dtype,
     get_shape,
 )
-from src.transpile.lower import transpile_captured
+from cactus.transpile.lower import transpile_captured
 
 
 class TinyBlock(nn.Module):

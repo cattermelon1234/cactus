@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.transpile.graph_ir import IRGraph
-from src.transpile.graph_ir import IRNode
-from src.transpile.fusion.common import collect_node_ids
-from src.transpile.fusion.common import producer
-from src.transpile.fusion.common import strip_passthrough
-from src.transpile.fusion.linear import match_linear
-from src.transpile.fusion.rms_norm import match_rms_norm
-from src.transpile.fusion.rope import match_rope
+from cactus.transpile.graph_ir import IRGraph
+from cactus.transpile.graph_ir import IRNode
+from cactus.transpile.fusion.common import collect_node_ids
+from cactus.transpile.fusion.common import producer
+from cactus.transpile.fusion.common import strip_passthrough
+from cactus.transpile.fusion.linear import match_linear
+from cactus.transpile.fusion.rms_norm import match_rms_norm
+from cactus.transpile.fusion.rope import match_rope
 
 
 @dataclass(frozen=True)
