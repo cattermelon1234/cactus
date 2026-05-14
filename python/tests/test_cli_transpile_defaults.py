@@ -1,159 +1,108 @@
 from __future__ import annotations
 
+from argparse import Namespace
 from pathlib import Path
 
 from cactus import cli
-from cactus.cli import transpile as transpile_cli
+from cactus.cli import convert as convert_cli
 
 
-def _fake_completed_process(returncode: int = 0):
-    class _Result:
-        def __init__(self, code: int):
-            self.returncode = code
-
-    return _Result(returncode)
-
-
-def test_cmd_transpile_requires_converted_weights_by_default(monkeypatch) -> None:
+def test_cmd_convert_transpiles_into_same_weights_folder(monkeypatch, tmp_path: Path) -> None:
     parser = cli.create_parser()
-    args = cli.preprocess_eval_args(parser, ["transpile", "gemma4"])
+    args = parser.parse_args(["convert", "gemma4"])
 
-    captured: list[tuple[list[str], Path, dict[str, str]]] = []
+    model_dir = tmp_path / "weights" / "gemma-4-e2b-it"
+    calls: list[tuple[str, object]] = []
 
-    def _unexpected_runtime_build():
-        raise AssertionError("runtime build should not run before CQ weights are available")
+    def _fake_cq_main(command):
+        calls.append(("cq", list(command)))
+        return 0
 
-    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", _unexpected_runtime_build)
-    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
+    def _fake_cmd_transpile(transpile_args):
+        calls.append(("transpile", transpile_args))
+        assert transpile_args.model_id == "google/gemma-4-E2B-it"
+        assert transpile_args.execute_after_transpile is False
+        assert transpile_args.allow_unconverted_weights is False
+        assert transpile_args.extra_args == [
+            "--weights-dir",
+            str(model_dir),
+            "--artifact-dir",
+            str(model_dir),
+        ]
+        return 0
 
-    def _fake_run(command, cwd=None, env=None):
-        captured.append((list(command), Path(cwd), dict(env or {})))
-        return _fake_completed_process(0)
+    monkeypatch.setattr(convert_cli, "get_weights_dir", lambda model_id: model_dir)
+    monkeypatch.setattr(convert_cli, "cmd_transpile", _fake_cmd_transpile)
 
-    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
+    import cactus.convert.cli as cq_cli
 
-    rc = transpile_cli.cmd_transpile(args)
+    monkeypatch.setattr(cq_cli, "main", _fake_cq_main)
 
-    assert rc == 1
-    assert not captured
-
-
-def test_cmd_transpile_allows_unconverted_weights_for_debug(monkeypatch) -> None:
-    parser = cli.create_parser()
-    args = cli.preprocess_eval_args(parser, ["transpile", "gemma4", "--allow-unconverted-weights"])
-
-    captured: list[tuple[list[str], Path, dict[str, str]]] = []
-
-    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: Path("/tmp/missing-weights"))
-
-    def _fake_run(command, cwd=None, env=None):
-        captured.append((list(command), Path(cwd), dict(env or {})))
-        return _fake_completed_process(0)
-
-    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
-
-    rc = transpile_cli.cmd_transpile(args)
+    rc = convert_cli.cmd_convert(args)
 
     assert rc == 0
-    assert captured
-    command, cwd, env = captured[0]
-    assert command[:5] == [
-        transpile_cli.sys.executable,
-        "-m",
-        "cactus.transpile.hf_model",
-        "--model-id",
-        transpile_cli.DEFAULT_MODEL_ID,
+    assert calls[0][0] == "cq"
+    assert calls[0][1] == [
+        "convert",
+        "--model",
+        "google/gemma-4-E2B-it",
+        "--out",
+        str(model_dir),
+        "--bits",
+        "4",
+        "--force",
     ]
-    assert "--allow-unconverted-weights" in command
-    assert "--skip-execute" in command
-    assert cwd == transpile_cli.PROJECT_ROOT
-    assert env["CACTUS_LIB_PATH"] == "/tmp/libcactus.dylib"
+    assert calls[1][0] == "transpile"
 
 
-def test_cmd_transpile_can_execute_immediately_when_requested(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_convert_honors_explicit_output_dir(monkeypatch, tmp_path: Path) -> None:
     parser = cli.create_parser()
-    args = cli.preprocess_eval_args(
-        parser,
-        ["transpile", "gemma4", "--execute-after-transpile", "--artifact-dir", "/tmp/gemma4-bundle"],
-    )
+    args = parser.parse_args(["convert", "google/gemma-4-E2B-it", str(tmp_path / "custom")])
 
-    captured: list[list[str]] = []
+    cq_calls: list[list[str]] = []
 
-    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    ready_weights_dir = tmp_path / "weights" / "gemma-4-e2b-it"
-    ready_weights_dir.mkdir(parents=True)
-    (ready_weights_dir / "weights_manifest.json").write_text("{}")
+    def _fake_cq_main(command):
+        cq_calls.append(list(command))
+        return 0
 
-    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: ready_weights_dir)
+    transpile_calls: list[Namespace] = []
 
-    def _fake_run(command, cwd=None, env=None):
-        captured.append(list(command))
-        return _fake_completed_process(0)
+    def _fake_cmd_transpile(transpile_args):
+        transpile_calls.append(transpile_args)
+        return 0
 
-    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(convert_cli, "cmd_transpile", _fake_cmd_transpile)
 
-    rc = transpile_cli.cmd_transpile(args)
+    import cactus.convert.cli as cq_cli
+
+    monkeypatch.setattr(cq_cli, "main", _fake_cq_main)
+
+    rc = convert_cli.cmd_convert(args)
 
     assert rc == 0
-    assert captured
-    command = captured[0]
-    assert "--skip-execute" not in command
-    assert "--artifact-dir" in command
-    assert "/tmp/gemma4-bundle" in command
+    assert cq_calls[0] == [
+        "convert",
+        "--model",
+        "google/gemma-4-E2B-it",
+        "--out",
+        str(tmp_path / "custom"),
+        "--bits",
+        "4",
+        "--force",
+    ]
+    assert transpile_calls[0].extra_args == [
+        "--weights-dir",
+        str(tmp_path / "custom"),
+        "--artifact-dir",
+        str(tmp_path / "custom"),
+    ]
 
 
-def test_cmd_transpile_rejects_empty_default_weights_dir(monkeypatch, tmp_path: Path) -> None:
+def test_cli_no_longer_registers_transpile_command() -> None:
     parser = cli.create_parser()
-    args = cli.preprocess_eval_args(parser, ["transpile", "whisper-small"])
-
-    empty_weights_dir = tmp_path / "weights" / "whisper-small"
-    empty_weights_dir.mkdir(parents=True)
-
-    captured: list[list[str]] = []
-
-    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: empty_weights_dir)
-
-    def _fake_run(command, cwd=None, env=None):
-        captured.append(list(command))
-        return _fake_completed_process(0)
-
-    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
-
-    rc = transpile_cli.cmd_transpile(args)
-
-    assert rc == 1
-    assert not captured
-
-
-def test_cmd_transpile_uses_ready_default_weights_dir(monkeypatch, tmp_path: Path) -> None:
-    parser = cli.create_parser()
-    args = cli.preprocess_eval_args(parser, ["transpile", "parakeet"])
-
-    ready_weights_dir = tmp_path / "weights" / "parakeet-tdt-0.6b-v3"
-    ready_weights_dir.mkdir(parents=True)
-    (ready_weights_dir / "weights_manifest.json").write_text("{}")
-
-    captured: list[list[str]] = []
-
-    monkeypatch.setattr(transpile_cli, "_ensure_python_runtime_library", lambda: Path("/tmp/libcactus.dylib"))
-    monkeypatch.setattr(transpile_cli, "get_weights_dir", lambda model_id: ready_weights_dir)
-
-    def _fake_run(command, cwd=None, env=None):
-        captured.append(list(command))
-        return _fake_completed_process(0)
-
-    monkeypatch.setattr(transpile_cli.subprocess, "run", _fake_run)
-
-    rc = transpile_cli.cmd_transpile(args)
-
-    assert rc == 0
-    assert captured
-    command = captured[0]
-    assert "--weights-dir" in command
-    assert str(ready_weights_dir) in command
-
-
-def test_lfm_alias_points_to_vl_450m() -> None:
-    assert transpile_cli.MODEL_ID_ALIASES["lfm"] == "LiquidAI/LFM2-VL-450M"
+    try:
+        parser.parse_args(["transpile", "gemma4"])
+    except SystemExit as exc:
+        assert exc.code != 0
+    else:
+        raise AssertionError("transpile should no longer be a public CLI command")
