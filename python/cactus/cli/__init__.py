@@ -13,7 +13,7 @@ from .test import cmd_test
 from .convert import cmd_convert
 from .eval import cmd_eval
 from .misc import cmd_auth, cmd_clean, cmd_list
-from .transpile import cmd_run_transpiled, cmd_transpile
+from .transpile import cmd_run_transpiled
 
 
 def create_parser():
@@ -63,7 +63,7 @@ def create_parser():
 
    -----------------------------------------------------------------
 
-  cactus download <model>              downloads CQ model weights
+  cactus download <model>              downloads CQ model files
                                        auto-resolves Cactus-Compute CQ repo
 
     Optional flags:
@@ -76,15 +76,13 @@ def create_parser():
   -----------------------------------------------------------------
 
   cactus convert <model> [output_dir]  converts HuggingFace model to CQ format
+                                       and transpiles the graph into the same folder
 
     Optional flags:
     --bits 1|2|3|4                     CQ quantization bits (default: 4)
     --token <token>                    HuggingFace API token
 
   -----------------------------------------------------------------
-
-  cactus transpile <model>             transpiles a HuggingFace model into
-                                       Cactus component graph bundle files
 
   cactus run <bundle_dir>              runs a transpiled Cactus bundle
   cactus run-transpiled <bundle_dir>   explicit transpiled bundle runner
@@ -164,7 +162,7 @@ def create_parser():
 
     parser._action_groups = []
 
-    download_parser = subparsers.add_parser('download', help='Download CQ model weights')
+    download_parser = subparsers.add_parser('download', help='Download CQ model files')
     download_parser.add_argument('model_id', nargs='?', default=DEFAULT_MODEL_ID,
                                  help=f'HuggingFace model ID or Cactus-Compute CQ repo (default: {DEFAULT_MODEL_ID})')
     download_parser.add_argument('--language-bits', type=int, choices=[1, 2, 3, 4], default=4,
@@ -221,19 +219,6 @@ def create_parser():
                             help='Optional path to save transpiled bundle results as JSON')
     run_parser.add_argument('--thinking', action='store_true',
                             help='Enable thinking/reasoning for models that support it')
-
-    transpile_parser = subparsers.add_parser('transpile', help='Transpile a HuggingFace model into Cactus component graphs')
-    transpile_parser.add_argument('model_id', help='HuggingFace model ID to transpile (aliases: gemma4, parakeet, whisper, qwen, lfm)')
-    transpile_parser.add_argument(
-        '--execute-after-transpile',
-        action='store_true',
-        help='Also run the transpiled graph immediately. By default `cactus transpile` saves the bundle and skips execution.',
-    )
-    transpile_parser.add_argument(
-        '--allow-unconverted-weights',
-        action='store_true',
-        help='Debug only: allow transpiling without converted Cactus CQ weights.',
-    )
 
     run_transpiled_parser = subparsers.add_parser('run-transpiled', help='Run a saved transpiled component bundle')
     run_transpiled_parser.add_argument('bundle_dir',
@@ -344,7 +329,7 @@ def create_parser():
 def preprocess_eval_args(parser, argv):
     args, unknown = parser.parse_known_args(argv)
 
-    if getattr(args, 'command', None) in ('eval', 'transpile'):
+    if getattr(args, 'command', None) == 'eval':
         setattr(args, 'extra_args', unknown)
         return args
 
@@ -367,8 +352,6 @@ def main():
         sys.exit(cmd_build(args))
     elif args.command == 'run':
         sys.exit(cmd_run(args))
-    elif args.command == 'transpile':
-        sys.exit(cmd_transpile(args))
     elif args.command == 'run-transpiled':
         sys.exit(cmd_run_transpiled(args))
     elif args.command == 'transcribe':
