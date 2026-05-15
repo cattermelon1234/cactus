@@ -48,6 +48,14 @@ def normalize_target(target: str) -> str:
         return "not_equal"
     if target.startswith("aten.eq.") or target == "aten.eq":
         return "equal"
+    if target.startswith("aten.gt.") or target == "aten.gt":
+        return "greater"
+    if target.startswith("aten.ge.") or target == "aten.ge":
+        return "greater_equal"
+    if target.startswith("aten.lt.") or target == "aten.lt":
+        return "less"
+    if target.startswith("aten.le.") or target == "aten.le":
+        return "less_equal"
     if target.startswith("aten.logical_or") or target.startswith("aten.__or__"):
         return "logical_or"
     if target.startswith("aten.logical_and") or target.startswith("aten.__and__"):

@@ -467,6 +467,8 @@ def _should_use_native_stateful_multimodal_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_MULTIMODAL_RUNNER") == "1":
         return False
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_MULTIMODAL_RUNNER") != "1":
+        return False
     model_id = str(manifest.get("model_id", "") or "").lower()
     normalized_family = family.strip().lower()
     return task == "multimodal_causal_lm_logits" and (
@@ -1219,7 +1221,12 @@ def _run_multimodal_causal_lm_bundle(
     system_prompt: str | None,
     enable_thinking: bool,
 ) -> dict[str, object]:
-    required_components = ("vision_encoder", "audio_encoder", "lm_encoder", "decoder")
+    family = str(manifest.get("family", "") or "").strip().lower()
+    required_components = (
+        ("vision_encoder", "lm_encoder", "decoder")
+        if family == "lfm2_vl"
+        else ("vision_encoder", "audio_encoder", "lm_encoder", "decoder")
+    )
     missing = [name for name in required_components if name not in component_graphs]
     if missing:
         raise ValueError(
@@ -1252,12 +1259,13 @@ def _run_multimodal_causal_lm_bundle(
         if isinstance(stored_audio, str) and stored_audio:
             resolved_audio = str(Path(stored_audio).expanduser().resolve())
 
-    external_transformers_site_packages = ensure_transformers_supports_gemma4()
-    if external_transformers_site_packages:
-        print(
-            "note=using external transformers install for gemma4 runtime: "
-            f"{external_transformers_site_packages}"
-        )
+    if family != "lfm2_vl":
+        external_transformers_site_packages = ensure_transformers_supports_gemma4()
+        if external_transformers_site_packages:
+            print(
+                "note=using external transformers install for gemma4 runtime: "
+                f"{external_transformers_site_packages}"
+            )
     patch_transformers_torchvision_probe()
     patch_torch_flex_attention_compat()
 
@@ -1272,22 +1280,58 @@ def _run_multimodal_causal_lm_bundle(
         local_files_only=Path(model_source).exists(),
         trust_remote_code=True,
     )
-    prepared = prepare_gemma4_multimodal_inputs(
-        processor,
-        prompt=resolved_prompt,
-        image_files=resolved_image_files,
-        audio_file=resolved_audio,
-        torch_dtype=torch_dtype,
-        system_prompt=system_prompt or "",
-        enable_thinking_if_supported=enable_thinking,
-        use_gemma4_chat_template=True,
-    )
+    if family == "lfm2_vl":
+        from cactus.transpile.hf_model import _prepare_lfm2_vl_multimodal_inputs
+
+        prepared = _prepare_lfm2_vl_multimodal_inputs(
+            processor,
+            prompt=resolved_prompt,
+            image_files=resolved_image_files,
+            torch_dtype=torch_dtype,
+            system_prompt=system_prompt or "",
+            enable_thinking_if_supported=enable_thinking,
+        )
+    else:
+        prepared = prepare_gemma4_multimodal_inputs(
+            processor,
+            prompt=resolved_prompt,
+            image_files=resolved_image_files,
+            audio_file=resolved_audio,
+            torch_dtype=torch_dtype,
+            system_prompt=system_prompt or "",
+            enable_thinking_if_supported=enable_thinking,
+            use_gemma4_chat_template=True,
+        )
 
     _attach_component_io_names(manifest, component_graphs)
     prepared_store = {
         name: tensor.detach().cpu().numpy()
         for name, tensor in zip(prepared.names, prepared.tensors, strict=True)
     }
+    if family == "lfm2_vl":
+        tokenizer = getattr(processor, "tokenizer", processor)
+        padding_token_id = _resolve_bundle_padding_token_id(inputs_meta, tokenizer)
+        input_shapes = inputs_meta.get("input_shapes") if isinstance(inputs_meta, Mapping) else None
+        if isinstance(input_shapes, Mapping):
+            for name, pad_value in (("input_ids", padding_token_id), ("attention_mask", 0)):
+                target_shape = input_shapes.get(name)
+                value = prepared_store.get(name)
+                if (
+                    isinstance(target_shape, list)
+                    and len(target_shape) == 2
+                    and isinstance(value, np.ndarray)
+                    and value.ndim == 2
+                ):
+                    target_len = int(target_shape[1])
+                    if value.shape[1] > target_len:
+                        raise ValueError(
+                            f"{name} length {value.shape[1]} exceeds transpiled LFM2-VL context {target_len}; "
+                            "re-transpile with a longer representative prompt."
+                        )
+                    if value.shape[1] < target_len:
+                        padded = np.full((value.shape[0], target_len), pad_value, dtype=value.dtype)
+                        padded[:, : value.shape[1]] = value
+                        prepared_store[name] = padded
     start = time.perf_counter()
     store, _ = execute_loaded_component_pipeline(
         [component_graphs[name] for name in required_components],

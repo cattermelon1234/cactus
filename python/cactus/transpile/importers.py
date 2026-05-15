@@ -610,6 +610,52 @@ def import_equal(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int
     register_node(ir, ir_node, shape=shape, dtype=dtype)
 
 
+def import_compare(ir: IRGraph, node: Any, ctx: ImportContext, *, shape: tuple[int, ...] | None, dtype: str | None, torch_op: str, op_name: str) -> None:
+    lhs, rhs = node.args[0], node.args[1]
+    lhs_is_node = is_fx_node(lhs)
+    rhs_is_node = is_fx_node(rhs)
+    lhs_literal = _extract_numeric_literal(lhs)
+    rhs_literal = _extract_numeric_literal(rhs)
+
+    if lhs_is_node and rhs_is_node:
+        ir_node = IRNode(
+            id=node_id(node),
+            op=op_name,
+            inputs=[value_id(lhs, ctx), value_id(rhs, ctx)],
+            outputs=[value_id(node, ctx)],
+            meta=_base_meta(shape, dtype, torch_op, node),
+        )
+        register_node(ir, ir_node, shape=shape, dtype=dtype)
+        return
+
+    if lhs_is_node and rhs_literal is not None:
+        inputs = [value_id(lhs, ctx)]
+        scalar_op = f"scalar_{op_name}"
+        scalar_value = rhs_literal
+    elif rhs_is_node and lhs_literal is not None:
+        reverse_ops = {
+            "greater": "less",
+            "greater_equal": "less_equal",
+            "less": "greater",
+            "less_equal": "greater_equal",
+        }
+        inputs = [value_id(rhs, ctx)]
+        scalar_op = f"scalar_{reverse_ops[op_name]}"
+        scalar_value = lhs_literal
+    else:
+        ctx.fail(f"unsupported scalar form for {torch_op}: {node.args!r}")
+
+    ir_node = IRNode(
+        id=node_id(node),
+        op=scalar_op,
+        inputs=inputs,
+        outputs=[value_id(node, ctx)],
+        attrs={"value": scalar_value},
+        meta=_base_meta(shape, dtype, torch_op, node),
+    )
+    register_node(ir, ir_node, shape=shape, dtype=dtype)
+
+
 def import_binary(op_name: str):
     def _importer(
         ir: IRGraph,
@@ -1807,6 +1853,18 @@ OP_IMPORTERS = {
     "clamp": import_clamp,
     "not_equal": import_not_equal,
     "equal": import_equal,
+    "greater": lambda ir, node, ctx, *, shape, dtype, torch_op: import_compare(
+        ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op, op_name="greater"
+    ),
+    "greater_equal": lambda ir, node, ctx, *, shape, dtype, torch_op: import_compare(
+        ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op, op_name="greater_equal"
+    ),
+    "less": lambda ir, node, ctx, *, shape, dtype, torch_op: import_compare(
+        ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op, op_name="less"
+    ),
+    "less_equal": lambda ir, node, ctx, *, shape, dtype, torch_op: import_compare(
+        ir, node, ctx, shape=shape, dtype=dtype, torch_op=torch_op, op_name="less_equal"
+    ),
     "logical_and": import_binary("logical_and"),
     "logical_or": import_binary("logical_or"),
     "logical_not": import_unary("logical_not"),

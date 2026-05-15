@@ -32,9 +32,15 @@ CANONICAL_UNSUPPORTED_RENAMES = {
     "aten.cumsum.default": "cumsum",
     "aten.eq.Scalar": "equal",
     "aten.eq.Tensor": "equal",
+    "aten.ge.Scalar": "greater_equal",
+    "aten.ge.Tensor": "greater_equal",
+    "aten.gt.Scalar": "greater",
     "aten.gt.Tensor": "greater",
     "aten.index.Tensor": "advanced_index",
+    "aten.le.Scalar": "less_equal",
     "aten.le.Tensor": "less_equal",
+    "aten.lt.Scalar": "less",
+    "aten.lt.Tensor": "less",
 }
 
 FP32_SUPPORTED_ALL_INPUT_OPS = {
@@ -69,6 +75,10 @@ FP32_SUPPORTED_ALL_INPUT_OPS = {
     "scalar_floor_divide",
     "scalar_not_equal",
     "scalar_equal",
+    "scalar_greater",
+    "scalar_greater_equal",
+    "scalar_less",
+    "scalar_less_equal",
     "abs",
     "negate",
     "pow",
@@ -88,6 +98,8 @@ FP16_ONLY_OUTPUT_OPS = {
     "not_equal",
     "equal",
     "greater",
+    "greater_equal",
+    "less",
     "less_equal",
     "logical_and",
     "logical_or",
@@ -95,6 +107,10 @@ FP16_ONLY_OUTPUT_OPS = {
     "one_hot",
     "scalar_not_equal",
     "scalar_equal",
+    "scalar_greater",
+    "scalar_greater_equal",
+    "scalar_less",
+    "scalar_less_equal",
     "cat",
     "softmax",
     "rms_norm",
@@ -328,17 +344,25 @@ def _fold_constant_node(graph: IRGraph, node: IRNode) -> bool:
             result = constant_inputs[0] / scalar
         return materialize_constant_output(graph, node, result.to(dtype=output_torch_dtype))
 
-    if node.op in {"scalar_not_equal", "scalar_equal"}:
+    if node.op in {"scalar_not_equal", "scalar_equal", "scalar_greater", "scalar_greater_equal", "scalar_less", "scalar_less_equal"}:
         if len(constant_inputs) != 1 or not isinstance(constant_inputs[0], torch.Tensor):
             return False
         scalar = float(node.attrs["value"])
         if node.op == "scalar_not_equal":
             result = constant_inputs[0] != scalar
-        else:
+        elif node.op == "scalar_equal":
             result = constant_inputs[0] == scalar
+        elif node.op == "scalar_greater":
+            result = constant_inputs[0] > scalar
+        elif node.op == "scalar_greater_equal":
+            result = constant_inputs[0] >= scalar
+        elif node.op == "scalar_less":
+            result = constant_inputs[0] < scalar
+        else:
+            result = constant_inputs[0] <= scalar
         return materialize_constant_output(graph, node, result.to(dtype=output_torch_dtype))
 
-    if node.op in {"not_equal", "equal", "greater", "less_equal", "logical_and", "logical_or"}:
+    if node.op in {"not_equal", "equal", "greater", "greater_equal", "less", "less_equal", "logical_and", "logical_or"}:
         if len(constant_inputs) != 2 or not all(isinstance(value, torch.Tensor) for value in constant_inputs):
             return False
         lhs, rhs = constant_inputs
@@ -348,6 +372,10 @@ def _fold_constant_node(graph: IRGraph, node: IRNode) -> bool:
             result = lhs == rhs
         elif node.op == "greater":
             result = lhs > rhs
+        elif node.op == "greater_equal":
+            result = lhs >= rhs
+        elif node.op == "less":
+            result = lhs < rhs
         elif node.op == "less_equal":
             result = lhs <= rhs
         elif node.op == "logical_and":

@@ -660,18 +660,11 @@ int cactus_complete(
         bool has_audio = prompt.has_audio();
         const bool has_gemma4_mixed_media = prompt.model_type == Config::ModelType::GEMMA4 && has_images && has_audio;
         auto decode_gemma4_mixed_media = [&](const std::vector<uint32_t>& tokens, float* out_entropy) -> uint32_t {
-            auto* gemma4_mm = dynamic_cast<Gemma4MmModel*>(handle->model.get());
-            if (!gemma4_mm) {
-                throw std::runtime_error("Gemma4 mixed-media decode requested on non-Gemma4 multimodal model");
-            }
-            return gemma4_mm->decode_with_media(
-                tokens,
-                prompt.image_paths,
-                prompt.audio_features,
-                prompt.options.temperature, prompt.options.top_p, prompt.options.top_k,
-                "", out_entropy,
-                prompt.options.min_p, prompt.options.repetition_penalty
-            );
+            (void)tokens;
+            (void)out_entropy;
+            throw std::runtime_error(
+                "Gemma4 mixed-media native decode is not present in this build. "
+                "Use cactus run-transpiled for transpiled graph bundles.");
         };
 
         auto stop_token_sequences = build_stop_sequences(tokenizer, prompt.options.stop_sequences, prompt.model_type, !prompt.tools.empty());

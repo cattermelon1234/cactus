@@ -322,6 +322,29 @@ def create_parser():
                                 help='CQ quantization bits (default: 4)')
     convert_parser.add_argument('--cache-dir', help='Cache directory for HuggingFace models')
     convert_parser.add_argument('--token', help='HuggingFace API token')
+    convert_parser.add_argument('--task', default='auto',
+                                choices=['auto', 'causal_lm_logits', 'multimodal_causal_lm_logits',
+                                         'ctc_logits', 'encoder_hidden_states',
+                                         'seq2seq_transcription', 'tdt_transcription'],
+                                help='Transpile task after conversion (default: auto)')
+    convert_parser.add_argument('--prompt',
+                                help='Prompt used for causal or multimodal graph shape capture')
+    convert_parser.add_argument('--system-prompt', default='',
+                                help='Optional system prompt for multimodal prompt construction')
+    convert_parser.add_argument('--image-file', action='append', default=[],
+                                help='Representative image file for multimodal transpile')
+    convert_parser.add_argument('--audio-file',
+                                help='Representative audio file for audio/multimodal transpile')
+    convert_parser.add_argument('--max-new-tokens', type=int, default=32,
+                                help='Generation room to preallocate for causal decode graphs')
+    convert_parser.add_argument('--component-pipeline', default='auto', choices=['auto', 'on', 'off'],
+                                help='Use split component graph transpilation when supported')
+    convert_parser.add_argument('--components',
+                                help='Comma-separated component subset for component-pipeline models')
+    convert_parser.add_argument('--trust-remote-code', action='store_true',
+                                help='Allow HF remote code during the transpile phase')
+    convert_parser.add_argument('--local-files-only', action='store_true',
+                                help='Require HF model/processor files to already be local during transpile')
 
     return parser
 

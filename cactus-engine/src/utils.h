@@ -2,7 +2,6 @@
 #define CACTUS_UTILS_H
 
 #include "engine.h"
-#include "../models/model.h"
 #include <string>
 #include <vector>
 #include <unordered_map>

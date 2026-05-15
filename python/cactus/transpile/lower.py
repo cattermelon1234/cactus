@@ -356,6 +356,12 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
     if op == "greater":
         return [_lower_compare_op(g, env[node.inputs[0]], env[node.inputs[1]], "greater")]
 
+    if op == "greater_equal":
+        return [_lower_compare_op(g, env[node.inputs[0]], env[node.inputs[1]], "greater_equal")]
+
+    if op == "less":
+        return [_lower_compare_op(g, env[node.inputs[0]], env[node.inputs[1]], "less")]
+
     if op == "less_equal":
         return [_lower_compare_op(g, env[node.inputs[0]], env[node.inputs[1]], "less_equal")]
 
@@ -415,6 +421,22 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         x = _ensure_scalar_math_tensor(g, _tensor(env, node.inputs[0]))
         not_equal = g.scalar_not_equal(x, float(node.attrs["value"]))
         return [g.scalar_not_equal(not_equal, 1.0)]
+
+    if op == "scalar_greater":
+        x = _ensure_scalar_math_tensor(g, _tensor(env, node.inputs[0]))
+        return [_lower_compare_op(g, x, float(node.attrs["value"]), "greater")]
+
+    if op == "scalar_greater_equal":
+        x = _ensure_scalar_math_tensor(g, _tensor(env, node.inputs[0]))
+        return [_lower_compare_op(g, x, float(node.attrs["value"]), "greater_equal")]
+
+    if op == "scalar_less":
+        x = _ensure_scalar_math_tensor(g, _tensor(env, node.inputs[0]))
+        return [_lower_compare_op(g, x, float(node.attrs["value"]), "less")]
+
+    if op == "scalar_less_equal":
+        x = _ensure_scalar_math_tensor(g, _tensor(env, node.inputs[0]))
+        return [_lower_compare_op(g, x, float(node.attrs["value"]), "less_equal")]
 
     if op == "scalar_divide_reverse":
         raise NotImplementedError("scalar_divide_reverse is not directly supported by Cactus graph ops")
@@ -2154,6 +2176,13 @@ def _lower_compare_op(g: Graph, lhs_value: Any, rhs_value: Any, op: str) -> Tens
         delta = _lower_binary_op(g, lhs_value, rhs_value, "subtract")
         delta = _ensure_fp16_tensor(g, delta)
         return g.scalar_not_equal(g.relu(delta), 0.0)
+
+    if op == "less":
+        return _lower_compare_op(g, rhs_value, lhs_value, "greater")
+
+    if op == "greater_equal":
+        less = _lower_compare_op(g, lhs_value, rhs_value, "less")
+        return g.scalar_not_equal(less, 1.0)
 
     if op == "less_equal":
         greater = _lower_compare_op(g, lhs_value, rhs_value, "greater")

@@ -31,6 +31,7 @@ from .export.validate import validate_qdq
 from .model_adapters.detection import SUPPORTED_FAMILIES, detect_family
 from .model_adapters.adapters import adapter_for_family
 from .quantization.cq import quantize_hadamard, quantize_orthogonal, write_cq_tensor
+from .compat import patch_transformers_import_compat
 
 ALPHA = 0.25
 
@@ -45,6 +46,8 @@ def _load_hf(model_id_or_path: str, device: str):
     import logging, warnings
     logging.getLogger("transformers").setLevel(logging.ERROR)
     warnings.filterwarnings("ignore", message=".*You are using a model of type.*")
+    for note in patch_transformers_import_compat():
+        print(f"note={note}")
     try:
         from transformers import AutoConfig, AutoModel
     except Exception as exc:  # pragma: no cover

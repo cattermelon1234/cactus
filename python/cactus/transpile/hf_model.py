@@ -33,6 +33,7 @@ from cactus.transpile.capture_pytorch import capture_model
 from cactus.transpile.canonicalize.cleanup import canonicalize_exported_graph
 from cactus.transpile.component_partition import extract_component_subgraphs
 from cactus.transpile.component_partition import summarize_ir_components
+from cactus.transpile.component_plan import infer_component_plan_from_config
 from cactus.transpile.component_pipeline import capture_component_spec
 from cactus.transpile.component_pipeline import execute_component_pipeline
 from cactus.transpile.gemma4_runtime import prepare_gemma4_multimodal_inputs as _shared_prepare_gemma4_multimodal_inputs
@@ -1104,6 +1105,16 @@ def _remap_gemma4_checkpoint_state_dict(state_dict: dict[str, torch.Tensor]) -> 
 
 
 def _repair_gemma4_checkpoint_weights(model: torch.nn.Module, model_source: str) -> dict[str, object]:
+    multimodal_backbone = getattr(model, "model", model)
+    audio_tower = getattr(multimodal_backbone, "audio_tower", None)
+    # Older/local Gemma4 variants used Cactus-style module names such as
+    # audio_tower.conformer and bare clippable-linear weights. Current HF
+    # Gemma4 classes use audio_tower.layers and *.linear.weight, and
+    # from_pretrained already loads them correctly. Do not reload a legacy
+    # remap into the current layout, because that leaves real weights missing.
+    if not hasattr(audio_tower, "conformer"):
+        return {"applied": False, "reason": "current HF Gemma4 layout does not need legacy key remap"}
+
     raw_state_dict = _load_local_torch_state_dict(model_source)
     if raw_state_dict is None:
         return {"applied": False, "reason": "no local checkpoint state_dict"}
@@ -1243,6 +1254,9 @@ def _load_gemma4_processor_fallback(
 
 def _infer_task_from_config(model_id_or_path: str) -> str:
     config = _load_config_json(model_id_or_path)
+    plan = infer_component_plan_from_config(config, model_id=model_id_or_path)
+    if plan is not None:
+        return plan.task
     architectures = [str(value) for value in config.get("architectures", []) if isinstance(value, str)]
     model_type = str(config.get("model_type", "") or "").lower()
     decoding_cfg = config.get("decoding")
@@ -1845,6 +1859,14 @@ _GEMMA4_MULTIMODAL_INPUT_ORDER = (
     "input_features_mask",
 )
 
+_LFM2_VL_MULTIMODAL_INPUT_ORDER = (
+    "input_ids",
+    "attention_mask",
+    "pixel_values",
+    "spatial_shapes",
+    "pixel_attention_mask",
+)
+
 
 def _normalize_multimodal_prompt(
     prompt: str,
@@ -2234,6 +2256,73 @@ def _prepare_gemma4_multimodal_inputs(
     )
 
 
+def _prepare_lfm2_vl_multimodal_inputs(
+    processor: object | None,
+    *,
+    prompt: str,
+    image_files: tuple[str, ...],
+    torch_dtype: torch.dtype,
+    system_prompt: str = "",
+    enable_thinking_if_supported: bool = False,
+) -> PreparedInputs:
+    if processor is None:
+        raise RuntimeError("LFM2-VL multimodal transpile requires an AutoProcessor with image support")
+    images = _load_image_inputs(image_files)
+    if not images:
+        raise RuntimeError("LFM2-VL multimodal transpile requires at least one --image-file")
+
+    user_content: list[dict[str, object]] = [{"type": "image", "image": image} for image in images]
+    user_content.append({"type": "text", "text": prompt.strip()})
+
+    messages: list[dict[str, object]] = []
+    normalized_system = system_prompt.strip()
+    if normalized_system:
+        messages.append({"role": "system", "content": normalized_system})
+    messages.append({"role": "user", "content": user_content})
+
+    batch: Mapping[str, object]
+    apply_chat_template = getattr(processor, "apply_chat_template", None)
+    if callable(apply_chat_template):
+        batch = apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+    else:
+        batch = processor(text=prompt, images=images, return_tensors="pt")
+
+    tensors: list[torch.Tensor] = []
+    names: list[str] = []
+    input_shapes: dict[str, list[int]] = {}
+    for key in _LFM2_VL_MULTIMODAL_INPUT_ORDER:
+        value = batch.get(key) if hasattr(batch, "get") else None
+        if not isinstance(value, torch.Tensor):
+            raise RuntimeError(f"LFM2-VL processor did not return required tensor input: {key}")
+        if torch.is_floating_point(value):
+            value = value.to(dtype=torch_dtype)
+        elif key == "pixel_attention_mask":
+            value = value.to(dtype=torch.int64)
+        else:
+            value = value.to(dtype=torch.long)
+        names.append(key)
+        tensors.append(value)
+        input_shapes[key] = [int(dim) for dim in value.shape]
+
+    return PreparedInputs(
+        names=tuple(names),
+        tensors=tuple(tensors),
+        metadata={
+            "prompt": prompt,
+            "system_prompt": system_prompt,
+            "image_files": [str(Path(path).resolve()) for path in image_files],
+            "input_shapes": input_shapes,
+            "enable_thinking": bool(enable_thinking_if_supported),
+        },
+    )
+
+
 def _load_model_source(model_id: str, *, local_files_only: bool) -> str:
     local_snapshot = _resolve_local_snapshot(model_id)
     if local_snapshot and _snapshot_has_model_weights(local_snapshot):
@@ -2364,13 +2453,25 @@ def _load_transformers_bundle(
                 + processor_config_hint
             )
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_source,
-            dtype=torch_dtype,
-            device_map=None,
-            low_cpu_mem_usage=True,
-            **common_kwargs,
-        ).eval()
+        if config_model_type == "lfm2_vl":
+            model = AutoModelForImageTextToText.from_pretrained(
+                model_source,
+                dtype=torch_dtype,
+                device_map=None,
+                low_cpu_mem_usage=True,
+                **common_kwargs,
+            ).eval()
+            tie_note = _tie_lfm2_vl_lm_head_if_needed(model)
+            if tie_note:
+                print(f"note={tie_note}")
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_source,
+                dtype=torch_dtype,
+                device_map=None,
+                low_cpu_mem_usage=True,
+                **common_kwargs,
+            ).eval()
         if config_model_type == "gemma4":
             repair_result = _repair_gemma4_checkpoint_weights(model, model_source)
             if repair_result.get("applied"):
@@ -2722,16 +2823,13 @@ def main() -> int:
     if args.task == "auto":
         inferred_task = _infer_task_from_config(args.model_id)
         config_for_auto = _load_config_json(args.model_id)
-        model_type_for_auto = str(config_for_auto.get("model_type", "") or "").lower()
+        plan_for_auto = infer_component_plan_from_config(config_for_auto, model_id=args.model_id)
         has_multimodal_config = (
-            model_type_for_auto == "gemma4"
-            and (
-                isinstance(config_for_auto.get("vision_config"), dict)
-                or isinstance(config_for_auto.get("audio_config"), dict)
-            )
+            plan_for_auto is not None
+            and plan_for_auto.task == "multimodal_causal_lm_logits"
         )
         if image_files or (args.audio_file and has_multimodal_config and inferred_task == "causal_lm_logits"):
-            task = "multimodal_causal_lm_logits"
+            task = plan_for_auto.task if plan_for_auto is not None else "multimodal_causal_lm_logits"
         else:
             task = inferred_task
     else:
@@ -2778,16 +2876,27 @@ def main() -> int:
             inputs_metadata=prepared.metadata,
         )
     elif task == "multimodal_causal_lm_logits":
-        prepared = _prepare_gemma4_multimodal_inputs(
-            processor_or_tokenizer,
-            prompt=args.prompt,
-            image_files=image_files,
-            audio_file=args.audio_file.strip() or None,
-            torch_dtype=torch_dtype,
-            system_prompt=args.system_prompt,
-            enable_thinking_if_supported=args.enable_thinking,
-            use_gemma4_chat_template=True,
-        )
+        config_model_type = str(model_config.get("model_type", "") or "").lower()
+        if config_model_type == "lfm2_vl":
+            prepared = _prepare_lfm2_vl_multimodal_inputs(
+                processor_or_tokenizer,
+                prompt=args.prompt,
+                image_files=image_files,
+                torch_dtype=torch_dtype,
+                system_prompt=args.system_prompt,
+                enable_thinking_if_supported=args.enable_thinking,
+            )
+        else:
+            prepared = _prepare_gemma4_multimodal_inputs(
+                processor_or_tokenizer,
+                prompt=args.prompt,
+                image_files=image_files,
+                audio_file=args.audio_file.strip() or None,
+                torch_dtype=torch_dtype,
+                system_prompt=args.system_prompt,
+                enable_thinking_if_supported=args.enable_thinking,
+                use_gemma4_chat_template=True,
+            )
         canonical = canonicalize_model_interface(
             model,
             task=task,

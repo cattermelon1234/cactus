@@ -23,6 +23,7 @@ from ..cactus_adapters.config_utils import (
 )
 from .naming import NameMatch, cactus_name_for_tensor, gemma4_scale_factor, restore_hf_key_for_family
 from .policy import TensorPolicy, policy_for_tensor
+from ..compat import patch_transformers_import_compat
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class FamilyAdapter:
         return self.family
 
     def model_class(self, cfg: Any):
+        patch_transformers_import_compat()
         from transformers import AutoModel, AutoModelForCausalLM
 
         arch = " ".join(_cfg_get(cfg, "architectures", []) or []).lower()
@@ -71,6 +73,7 @@ class FamilyAdapter:
         return AutoModelForCausalLM
 
     def load_processor(self, model_id_or_path: str):
+        patch_transformers_import_compat()
         from transformers import AutoProcessor, AutoTokenizer
 
         try:
