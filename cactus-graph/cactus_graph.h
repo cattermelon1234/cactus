@@ -666,6 +666,7 @@ public:
     size_t embedding(size_t embedding_tensor, size_t indices);
     size_t mmap_embeddings(const std::string& filename);
     size_t mmap_weights(const std::string& filename);
+    void bind_mmap_weights(size_t node_id, const std::string& filename);
     void release_weight_pages(size_t node_id);
     void prefetch_weight_pages(size_t node_id);
     void release_all_weight_pages();

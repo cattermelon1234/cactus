@@ -625,6 +625,17 @@ int cactus_graph_mmap_weights(cactus_graph_t graph, const char* filename, cactus
     }
 }
 
+int cactus_graph_bind_mmap_weights(cactus_graph_t graph, cactus_node_t node, const char* filename) {
+    if (!graph || !filename) return fail_invalid("Invalid args to cactus_graph_bind_mmap_weights");
+    try {
+        as_graph(graph)->graph.bind_mmap_weights(static_cast<size_t>(node), std::string(filename));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
 int cactus_graph_bilinear_interpolation(cactus_graph_t graph, cactus_node_t pos_embeds, size_t dst_height, size_t dst_width, cactus_node_t* out) {
     if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_bilinear_interpolation");
     try {

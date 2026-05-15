@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import re
+import struct
 import sys
 from collections.abc import Mapping
 from collections import Counter
@@ -25,6 +26,9 @@ if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
 from cactus.transpile.runtime_compat import Graph
+from cactus.convert.cactus_adapters.tensor_io import CACTUS_ALIGNMENT
+from cactus.convert.cactus_adapters.tensor_io import CACTUS_MAGIC
+from cactus.convert.cactus_adapters.tensor_io import compute_padding
 from cactus.transpile.audio_preprocess import generic_log_mel_features as _generic_log_mel_features
 from cactus.transpile.audio_preprocess import load_audio_waveform as _load_audio_waveform
 from cactus.transpile.audio_preprocess import prepare_cactus_audio_features
@@ -277,6 +281,65 @@ def _binding_entries_by_value_id(
     return result
 
 
+def _constant_precision_to_numpy_dtype(precision: int):
+    if int(precision) == int(Graph.FP16):
+        return np.float16
+    if int(precision) == int(Graph.FP32):
+        return np.float32
+    if int(precision) == int(Graph.INT8):
+        return np.int8
+    raise ValueError(f"materialized graph constants must be FP16/FP32/INT8, got precision={precision}")
+
+
+def _write_cactus_constant_tensor(
+    *,
+    output_path: Path,
+    value: object,
+    precision: int,
+) -> None:
+    if isinstance(value, torch.Tensor):
+        array = value.detach().cpu().numpy()
+    elif isinstance(value, np.ndarray):
+        array = value
+    else:
+        raise TypeError(f"unsupported materialized constant type: {type(value).__name__}")
+
+    dtype = _constant_precision_to_numpy_dtype(int(precision))
+    array = np.ascontiguousarray(array.astype(dtype, copy=False))
+    shape = list(array.shape)
+    if len(shape) > 4:
+        raise ValueError(f"Cactus tensor files support at most rank 4 constants, got shape={shape}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("wb") as handle:
+        data = array.reshape(-1)
+        data_bytes = int(data.nbytes)
+        handle.write(CACTUS_MAGIC)
+        handle.write(struct.pack("<I", 0))  # flags
+        handle.write(struct.pack("<I", CACTUS_ALIGNMENT))
+        handle.write(struct.pack("<I", len(shape)))
+        for index in range(4):
+            handle.write(struct.pack("<Q", int(shape[index]) if index < len(shape) else 0))
+        handle.write(struct.pack("<I", int(precision)))
+        handle.write(struct.pack("<Q", data_bytes))
+        handle.write(struct.pack("<Q", 0))  # scales_bytes
+        handle.write(struct.pack("<I", 0))  # group_size
+        handle.write(struct.pack("<I", 0))  # num_groups
+        handle.write(struct.pack("<Q", int(shape[0]) if shape else 0))
+        handle.write(compute_padding(84, CACTUS_ALIGNMENT))
+        handle.write(data.tobytes())
+
+
+def _constant_precision_from_array(array: np.ndarray) -> int:
+    if array.dtype == np.float16:
+        return int(Graph.FP16)
+    if array.dtype in (np.float32, np.float64, np.bool_, np.int16, np.int32, np.int64, np.uint8):
+        return int(Graph.FP32)
+    if array.dtype == np.int8:
+        return int(Graph.INT8)
+    return int(Graph.FP32)
+
+
 def _write_graph_binding_manifest(
     *,
     artifact_dir: Path,
@@ -393,10 +456,13 @@ def _write_component_bundle(
                 if node_id in existing_by_node_id:
                     continue
                 constant_dir.mkdir(parents=True, exist_ok=True)
-                constant_filename = f"node_{node_id}.npy"
+                constant_filename = f"node_{node_id}.weights"
                 constant_relpath = Path(component) / "bound_constants" / constant_filename
-                constant_array = constant_tensor.numpy().copy()
-                np.save(bundle_dir / constant_relpath, constant_array, allow_pickle=False)
+                _write_cactus_constant_tensor(
+                    output_path=bundle_dir / constant_relpath,
+                    value=constant_tensor.numpy(),
+                    precision=int(constant_tensor.dtype),
+                )
                 materialized_constant_bindings.append(
                     {
                         "node_id": node_id,
@@ -404,7 +470,7 @@ def _write_component_bundle(
                         "path": str((bundle_dir / constant_relpath).relative_to(artifact_dir)),
                         "kind": "saved_constant",
                         "source_name": str(constant_value_ids.get(node_id, f"materialized_constant_{node_id}")),
-                        "format": "npy",
+                        "format": "tensor_io",
                         "precision": int(constant_tensor.dtype),
                     }
                 )
@@ -421,11 +487,18 @@ def _write_component_bundle(
                     constant_array = np.ascontiguousarray(constant_value)
                 else:
                     continue
+                if value_id not in value_to_node_id:
+                    continue
                 constant_dir.mkdir(parents=True, exist_ok=True)
                 safe_value_id = re.sub(r"[^A-Za-z0-9._-]+", "_", value_id).strip("._-") or "constant"
-                constant_filename = f"{safe_value_id}.npy"
+                constant_filename = f"{safe_value_id}.weights"
                 constant_relpath = Path(component) / "bound_constants" / constant_filename
-                np.save(bundle_dir / constant_relpath, constant_array, allow_pickle=False)
+                precision = _constant_precision_from_array(constant_array)
+                _write_cactus_constant_tensor(
+                    output_path=bundle_dir / constant_relpath,
+                    value=constant_array,
+                    precision=precision,
+                )
                 materialized_constant_bindings.append(
                     {
                         "node_id": int(value_to_node_id.get(value_id, -1)),
@@ -433,13 +506,8 @@ def _write_component_bundle(
                         "path": str((bundle_dir / constant_relpath).relative_to(artifact_dir)),
                         "kind": "saved_constant",
                         "source_name": str(value_id),
-                        "format": "npy",
-                        "precision": int(
-                            Graph.FP16 if constant_array.dtype == np.float16
-                            else Graph.FP32 if constant_array.dtype == np.float32
-                            else Graph.INT8 if constant_array.dtype == np.int8
-                            else Graph.INT8
-                        ),
+                        "format": "tensor_io",
+                        "precision": int(precision),
                     }
                 )
 

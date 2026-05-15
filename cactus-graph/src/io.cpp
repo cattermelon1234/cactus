@@ -399,6 +399,89 @@ size_t CactusGraph::mmap_weights(const std::string& filename) {
     return node_id;
 }
 
+void CactusGraph::bind_mmap_weights(size_t node_id, const std::string& filename) {
+    const std::string resolved_filename = resolve_quantized_weight_file(filename);
+    auto node_it = node_index_map_.find(node_id);
+    if (node_it == node_index_map_.end()) {
+        throw std::out_of_range("Unknown input node id: " + std::to_string(node_id));
+    }
+
+    auto& node = *nodes_[node_it->second];
+    if (node.op_type != OpType::INPUT) {
+        throw std::invalid_argument("Can only bind mmap weights to input nodes");
+    }
+
+    auto mapped_file = std::make_unique<GraphFile::MappedFile>(resolved_filename);
+    const auto& shape = mapped_file->shape();
+    Precision precision = mapped_file->precision();
+    auto& buffer = node.output_buffer;
+    if (buffer.shape != shape) {
+        throw std::runtime_error("mmap weight shape mismatch for node " + std::to_string(node_id));
+    }
+    if (buffer.precision != precision) {
+        throw std::runtime_error("mmap weight precision mismatch for node " + std::to_string(node_id));
+    }
+
+    set_external_input(node_id, const_cast<void*>(mapped_file->data()), precision);
+    buffer.group_size = 0;
+    buffer.num_groups = 0;
+    buffer.activation_scales_data = nullptr;
+    buffer.owned_activation_scales.reset();
+    buffer.num_rows_for_activation_scales = 0;
+    buffer.cq_codebook = nullptr;
+    buffer.cq_input_scale = nullptr;
+    buffer.cq_input_scale_recip = nullptr;
+    buffer.cq_norms = nullptr;
+    buffer.cq_left_signs = nullptr;
+    buffer.cq_right_signs = nullptr;
+    buffer.cq_permutation = nullptr;
+    buffer.cq_rotation = nullptr;
+    buffer.cq_flags = 0;
+
+    if (PrecisionTraits::is_cq(precision) && mapped_file->group_size() > 0) {
+        buffer.group_size = mapped_file->group_size();
+        buffer.num_groups = mapped_file->num_groups();
+
+        const char* scales_base = static_cast<const char*>(mapped_file->scales_data());
+        uint32_t bits = PrecisionTraits::cq_bits(precision);
+        uint32_t cb_size = 1u << bits;
+        uint32_t gs = static_cast<uint32_t>(mapped_file->group_size());
+        uint32_t K = gs * static_cast<uint32_t>(mapped_file->num_groups());
+        uint32_t N = static_cast<uint32_t>(shape.size() >= 2 ? shape[0] : 1);
+
+        size_t off = 0;
+        buffer.cq_codebook = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += cb_size * sizeof(__fp16);
+        buffer.cq_input_scale = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += K * sizeof(__fp16);
+        buffer.cq_input_scale_recip = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += K * sizeof(__fp16);
+        buffer.cq_norms = reinterpret_cast<const __fp16*>(scales_base + off);
+        off += static_cast<size_t>(N) * mapped_file->num_groups() * sizeof(__fp16);
+
+        if (mapped_file->is_orthogonal_rotation()) {
+            buffer.cq_rotation = reinterpret_cast<const __fp16*>(scales_base + off);
+            buffer.cq_flags = CACTUS_QUANT_FLAG_ORTHOGONAL;
+        } else {
+            buffer.cq_left_signs = reinterpret_cast<const int8_t*>(scales_base + off);
+            off += gs;
+            buffer.cq_right_signs = reinterpret_cast<const int8_t*>(scales_base + off);
+            off += gs;
+            buffer.cq_permutation = reinterpret_cast<const uint32_t*>(scales_base + off);
+            buffer.cq_flags = 0;
+        }
+    } else if (precision == Precision::INT8 && mapped_file->group_size() > 0) {
+        buffer.group_size = mapped_file->group_size();
+        buffer.num_groups = mapped_file->num_groups();
+        buffer.set_activation_scales(const_cast<void*>(mapped_file->scales_data()), shape.empty() ? 0 : shape[0]);
+    }
+
+    size_t file_idx = mapped_files_.size();
+    mapped_files_.push_back(std::move(mapped_file));
+    node_to_mapped_file_[node_id] = file_idx;
+    weight_cache_[resolved_filename] = node_id;
+}
+
 void CactusGraph::release_weight_pages(size_t node_id) {
     auto it = node_to_mapped_file_.find(node_id);
     if (it != node_to_mapped_file_.end() && it->second < mapped_files_.size()) {

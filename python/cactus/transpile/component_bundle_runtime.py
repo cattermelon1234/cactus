@@ -51,6 +51,14 @@ _PRECISION_TO_DTYPE = {
     getattr(Graph, "CQ4", 6): np.uint8,
 }
 
+_COMPONENT_GRAPH_CACHE: dict[tuple[str, str | None, str], tuple[dict[str, "LoadedComponentGraph"], dict[str, object]]] = {}
+_MULTIMODAL_ENCODER_FEATURE_CACHE: dict[tuple[str, str, tuple[str, ...], str | None], dict[str, np.ndarray]] = {}
+
+
+def _has_runtime_symbol(name: str) -> bool:
+    symbol = getattr(_lib, name, None)
+    return symbol is not None and not getattr(symbol, "_cactus_missing_symbol", False)
+
 
 @dataclass
 class LoadedTensorFile:
@@ -141,7 +149,7 @@ def load_saved_component_graph(
     graph_relpath = component_entry.get("graph")
     has_graph = isinstance(graph_relpath, str) and bool(graph_relpath)
     graph_path = (root / str(graph_relpath)).resolve() if has_graph else None
-    prefer_saved_graph = os.environ.get("CACTUS_TRANSPILER_PREFER_SAVED_GRAPH") == "1"
+    prefer_saved_graph = os.environ.get("CACTUS_TRANSPILER_PREFER_SAVED_GRAPH", "1") != "0"
     if prefer_saved_graph and graph_path is not None and graph_path.exists():
         try:
             graph = Graph.load(graph_path)
@@ -272,6 +280,16 @@ def load_saved_component_graphs(
     weights_dir: str | Path | None = None,
 ) -> tuple[dict[str, LoadedComponentGraph], dict[str, object]]:
     bundle_root, manifest = load_component_bundle_manifest(bundle_dir_or_manifest)
+    cache_key = (
+        str(bundle_root),
+        None if weights_dir is None else str(Path(weights_dir).expanduser().resolve()),
+        os.environ.get("CACTUS_TRANSPILER_PREFER_SAVED_GRAPH", ""),
+    )
+    if os.environ.get("CACTUS_TRANSPILER_DISABLE_GRAPH_CACHE") != "1":
+        cached = _COMPONENT_GRAPH_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
     loaded: dict[str, LoadedComponentGraph] = {}
     for component_entry in manifest.get("components", []):
         if not isinstance(component_entry, dict):
@@ -284,7 +302,10 @@ def load_saved_component_graphs(
             component_entry=component_entry,
             weights_dir=weights_dir,
         )
-    return loaded, manifest
+    result = (loaded, manifest)
+    if os.environ.get("CACTUS_TRANSPILER_DISABLE_GRAPH_CACHE") != "1":
+        _COMPONENT_GRAPH_CACHE[cache_key] = result
+    return result
 
 
 def run_transpiled_bundle(
@@ -454,6 +475,8 @@ def _should_use_native_stateful_causal_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_STATEFUL_RUNNER") == "1":
         return False
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_STATEFUL_RUNNER") != "1":
+        return False
     return task.strip().lower() == "causal_lm_logits"
 
 
@@ -465,7 +488,7 @@ def _should_use_native_stateful_audio_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_AUDIO_RUNNER") == "1":
         return False
-    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_AUDIO_RUNNER") == "0":
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_AUDIO_RUNNER") != "1":
         return False
     return task.strip().lower() in {"tdt_transcription", "seq2seq_transcription", "ctc_logits"}
 
@@ -478,7 +501,7 @@ def _should_use_native_stateful_multimodal_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_MULTIMODAL_RUNNER") == "1":
         return False
-    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_MULTIMODAL_RUNNER") == "0":
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_MULTIMODAL_RUNNER") != "1":
         return False
     return task.strip().lower() == "multimodal_causal_lm_logits"
 
@@ -1027,14 +1050,22 @@ def _deserialize_saved_ir_constant(
 
     if isinstance(binding, Mapping):
         binding_format = str(binding.get("format", "tensor_io") or "tensor_io")
-        if binding_format == "npy":
-            tensor_path = _resolve_bound_tensor_path(
-                str(binding["path"]),
-                bundle_root=bundle_root,
-                weights_dir=weights_dir,
+        if binding_format != "tensor_io":
+            raise RuntimeError(
+                f"unsupported bound constant format {binding_format!r}; re-run cactus convert to rebuild the bundle"
             )
-            array = np.load(tensor_path, mmap_mode="r")
-            return torch.from_numpy(np.array(array, copy=True))
+        tensor_path = _resolve_bound_tensor_path(
+            str(binding["path"]),
+            bundle_root=bundle_root,
+            weights_dir=weights_dir,
+        )
+        value.meta = {
+            **meta,
+            "path": str(tensor_path),
+            "kind": str(binding.get("kind", "saved_constant") or "saved_constant"),
+            "source_name": str(binding.get("source_name", value.id) or value.id),
+        }
+        return 0
 
     if isinstance(serialized, (str, int, float, bool)) or serialized is None:
         return serialized
@@ -1104,6 +1135,45 @@ def execute_loaded_component_pipeline(
             store[output_name] = value
         outputs_by_component[component.component] = numpy_outputs
     return store, outputs_by_component
+
+
+def execute_loaded_component(
+    component: LoadedComponentGraph,
+    store: dict[str, np.ndarray],
+) -> list[np.ndarray]:
+    runtime_inputs = []
+    input_names = component_input_names(component)
+    for input_name in input_names:
+        if input_name not in store:
+            raise KeyError(
+                f"component {component.component} is missing pipeline input {input_name!r}"
+            )
+        runtime_inputs.append(store[input_name])
+    for tensor, value, input_name in zip(
+        component.runtime_inputs,
+        runtime_inputs,
+        input_names,
+        strict=True,
+    ):
+        expected_shape = tuple(int(dim) for dim in tensor.shape)
+        actual_shape = tuple(int(dim) for dim in np.asarray(value).shape)
+        if actual_shape != expected_shape:
+            raise ValueError(
+                f"component {component.component} input {input_name!r} shape mismatch: "
+                f"expected {expected_shape}, got {actual_shape}"
+            )
+    component.set_external_inputs(runtime_inputs)
+    raw_outputs = component.execute()
+    numpy_outputs = [output.numpy().copy() for output in raw_outputs]
+    output_names = component_output_names(component)
+    if len(numpy_outputs) != len(output_names):
+        raise ValueError(
+            f"component {component.component} produced {len(numpy_outputs)} outputs, "
+            f"expected {len(output_names)}"
+        )
+    for output_name, value in zip(output_names, numpy_outputs, strict=True):
+        store[output_name] = value
+    return numpy_outputs
 
 
 def component_input_names(component: LoadedComponentGraph) -> tuple[str, ...]:
@@ -1230,6 +1300,93 @@ def _run_parakeet_tdt_bundle(
     }
 
 
+def _execute_multimodal_component_pipeline_for_generation(
+    *,
+    component_graphs: dict[str, LoadedComponentGraph],
+    manifest: dict[str, object],
+    required_components: tuple[str, ...],
+    initial_store: dict[str, Any],
+    prompt_token_count: int,
+    image_files: tuple[str, ...],
+    audio_file: str | None,
+) -> tuple[dict[str, np.ndarray], dict[str, list[np.ndarray]]]:
+    store: dict[str, np.ndarray] = {
+        key: _to_numpy(value)
+        for key, value in initial_store.items()
+    }
+    outputs_by_component: dict[str, list[np.ndarray]] = {}
+    family = str(manifest.get("family", "") or "").strip().lower()
+    cache_key = (
+        str(manifest.get("model_id", "") or manifest.get("model_source", "") or ""),
+        family,
+        tuple(str(path) for path in image_files),
+        None if audio_file is None else str(audio_file),
+    )
+    cached_features = _MULTIMODAL_ENCODER_FEATURE_CACHE.get(cache_key)
+    if cached_features is not None:
+        for key, value in cached_features.items():
+            store[key] = np.ascontiguousarray(value)
+
+    for component_name in required_components:
+        component = component_graphs[component_name]
+        output_names = component_output_names(component)
+        if (
+            cached_features is not None
+            and component_name in {"vision_encoder", "audio_encoder"}
+            and output_names
+            and all(output_name in cached_features for output_name in output_names)
+        ):
+            for output_name in output_names:
+                store[output_name] = np.ascontiguousarray(cached_features[output_name])
+            continue
+        if family == "gemma4" and component_name == "decoder":
+            _right_align_gemma4_decoder_inputs_to_static_tail(
+                store,
+                component=component,
+                prompt_token_count=prompt_token_count,
+            )
+        outputs = execute_loaded_component(component, store)
+        outputs_by_component[component_name] = outputs
+
+        if component_name in {"vision_encoder", "audio_encoder"}:
+            if all(name in store for name in output_names):
+                feature_payload = _MULTIMODAL_ENCODER_FEATURE_CACHE.setdefault(cache_key, {})
+                for output_name in output_names:
+                    feature_payload[output_name] = np.asarray(store[output_name]).copy()
+
+    return store, outputs_by_component
+
+
+def _right_align_gemma4_decoder_inputs_to_static_tail(
+    store: dict[str, np.ndarray],
+    *,
+    component: LoadedComponentGraph,
+    prompt_token_count: int,
+) -> None:
+    if prompt_token_count <= 0:
+        return
+    input_names = component_input_names(component)
+    if "inputs_embeds" not in input_names:
+        return
+    embeds = store.get("inputs_embeds")
+    if not isinstance(embeds, np.ndarray) or embeds.ndim < 2:
+        return
+    static_token_count = int(embeds.shape[1])
+    valid_tokens = min(int(prompt_token_count), static_token_count)
+    if valid_tokens <= 0 or valid_tokens == static_token_count:
+        return
+
+    for key in input_names:
+        value = store.get(key)
+        if not isinstance(value, np.ndarray) or value.ndim < 2:
+            continue
+        if int(value.shape[0]) != 1 or int(value.shape[1]) != static_token_count:
+            continue
+        shifted = np.zeros_like(value)
+        shifted[:, static_token_count - valid_tokens :, ...] = value[:, :valid_tokens, ...]
+        store[key] = np.ascontiguousarray(shifted)
+
+
 def _run_multimodal_causal_lm_bundle(
     *,
     component_graphs: dict[str, LoadedComponentGraph],
@@ -1328,6 +1485,12 @@ def _run_multimodal_causal_lm_bundle(
         name: tensor.detach().cpu().numpy()
         for name, tensor in zip(prepared.names, prepared.tensors, strict=True)
     }
+    unpadded_input_ids = prepared_store.get("input_ids")
+    unpadded_token_count = (
+        int(unpadded_input_ids.shape[1])
+        if isinstance(unpadded_input_ids, np.ndarray) and unpadded_input_ids.ndim >= 2
+        else 0
+    )
     tokenizer = getattr(processor, "tokenizer", processor)
     _pad_prepared_store_to_static_input_shapes(
         prepared_store,
@@ -1335,9 +1498,14 @@ def _run_multimodal_causal_lm_bundle(
         tokenizer=tokenizer,
     )
     start = time.perf_counter()
-    store, _ = execute_loaded_component_pipeline(
-        [component_graphs[name] for name in required_components],
+    store, _ = _execute_multimodal_component_pipeline_for_generation(
+        component_graphs=component_graphs,
+        manifest=manifest,
+        required_components=required_components,
         initial_store=prepared_store,
+        prompt_token_count=unpadded_token_count,
+        image_files=resolved_image_files,
+        audio_file=resolved_audio,
     )
     end = time.perf_counter()
     logits = np.asarray(store["logits"], dtype=np.float32)
@@ -1364,6 +1532,9 @@ def _run_multimodal_causal_lm_bundle(
         },
         "output_shape": list(logits.shape),
         "total_ms": (end - start) * 1000.0,
+        "decode_tokens": 1,
+        "generated_token_ids": [next_token_id],
+        "response": "" if next_token is None else str(next_token),
         "next_token_id": next_token_id,
         "next_token": next_token,
     }
@@ -2217,6 +2388,8 @@ def _rebind_bound_constants(
     loaded: list[object] = []
     for binding in bindings:
         node_id = int(binding["node_id"])
+        if node_id < 0:
+            continue
         raw_path = str(binding["path"])
         tensor_path = _resolve_bound_tensor_path(
             raw_path,
@@ -2225,11 +2398,19 @@ def _rebind_bound_constants(
         )
         tensor = graph._tensor_from_node(node_id)
         binding_format = str(binding.get("format", "tensor_io") or "tensor_io")
-        if binding_format == "npy":
-            constant_array = np.load(tensor_path, mmap_mode="r")
-            precision = int(binding.get("precision", tensor.dtype))
-            graph.set_external_input(tensor, int(constant_array.ctypes.data), dtype=precision)
-            loaded.append(constant_array)
+        if binding_format != "tensor_io":
+            raise RuntimeError(
+                f"unsupported bound constant format {binding_format!r}; re-run cactus convert to rebuild the bundle"
+            )
+        if _has_runtime_symbol("cactus_graph_bind_mmap_weights"):
+            rc = _lib.cactus_graph_bind_mmap_weights(
+                graph.h,
+                cactus_node_t(tensor.id),
+                str(tensor_path).encode(),
+            )
+            if rc != 0:
+                raise RuntimeError("graph_bind_mmap_weights failed")
+            loaded.append(tensor_path)
             continue
 
         tensor_file = _open_cactus_tensor_file(tensor_path)

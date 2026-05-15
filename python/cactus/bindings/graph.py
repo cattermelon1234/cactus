@@ -415,6 +415,12 @@ class Graph:
             raise RuntimeError("graph_mmap_weights failed")
         return self._tensor_from_node(out.value)
 
+    def bind_mmap_weights(self, tensor, filename):
+        tensor = self._ensure_tensor(tensor)
+        rc = _lib.cactus_graph_bind_mmap_weights(self.h, cactus_node_t(tensor.id), str(filename).encode())
+        if rc != 0:
+            raise RuntimeError("graph_bind_mmap_weights failed")
+
     def bilinear_interpolation(self, pos_embeds, dst_height, dst_width):
         pos_embeds = self._ensure_tensor(pos_embeds)
         out = cactus_node_t()

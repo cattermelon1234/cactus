@@ -7,6 +7,44 @@ from cactus import cli
 from cactus.cli import convert as convert_cli
 
 
+def _write_gemma4_multimodal_config(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "hf_config.json").write_text(
+        (
+            '{"model_type":"gemma4",'
+            '"architectures":["Gemma4ForConditionalGeneration"],'
+            '"vision_config":{"model_type":"gemma4_vision"},'
+            '"audio_config":{"model_type":"gemma4_audio"}}'
+        ),
+        encoding="utf-8",
+    )
+
+
+def _gemma4_convert_transpile_extra_args(model_dir: Path) -> list[str]:
+    assets_dir = convert_cli.PROJECT_ROOT / "cactus-engine" / "tests" / "assets"
+    return [
+        "--weights-dir",
+        str(model_dir),
+        "--artifact-dir",
+        str(model_dir),
+        "--task",
+        "multimodal_causal_lm_logits",
+        "--max-new-tokens",
+        "32",
+        "--component-pipeline",
+        "on",
+        "--prompt",
+        convert_cli._DEFAULT_MULTIMODAL_PROMPT,
+        "--components",
+        "vision_encoder,audio_encoder,lm_encoder,decoder",
+        "--image-file",
+        str(assets_dir / "test_monkey.png"),
+        "--audio-file",
+        str(assets_dir / "test.wav"),
+        "--trust-remote-code",
+    ]
+
+
 def test_cmd_convert_transpiles_into_same_weights_folder(monkeypatch, tmp_path: Path) -> None:
     parser = cli.create_parser()
     args = parser.parse_args(["convert", "gemma4"])
@@ -16,6 +54,7 @@ def test_cmd_convert_transpiles_into_same_weights_folder(monkeypatch, tmp_path: 
 
     def _fake_cq_main(command):
         calls.append(("cq", list(command)))
+        _write_gemma4_multimodal_config(model_dir)
         return 0
 
     def _fake_cmd_transpile(transpile_args):
@@ -23,20 +62,7 @@ def test_cmd_convert_transpiles_into_same_weights_folder(monkeypatch, tmp_path: 
         assert transpile_args.model_id == "google/gemma-4-E2B-it"
         assert transpile_args.execute_after_transpile is False
         assert transpile_args.allow_unconverted_weights is False
-        assert transpile_args.extra_args == [
-            "--weights-dir",
-            str(model_dir),
-            "--artifact-dir",
-            str(model_dir),
-            "--task",
-            "auto",
-            "--prompt",
-            convert_cli._DEFAULT_MULTIMODAL_PROMPT,
-            "--max-new-tokens",
-            "32",
-            "--component-pipeline",
-            "auto",
-        ]
+        assert transpile_args.extra_args == _gemma4_convert_transpile_extra_args(model_dir)
         return 0
 
     monkeypatch.setattr(convert_cli, "get_weights_dir", lambda model_id: model_dir)
@@ -65,12 +91,14 @@ def test_cmd_convert_transpiles_into_same_weights_folder(monkeypatch, tmp_path: 
 
 def test_cmd_convert_honors_explicit_output_dir(monkeypatch, tmp_path: Path) -> None:
     parser = cli.create_parser()
-    args = parser.parse_args(["convert", "google/gemma-4-E2B-it", str(tmp_path / "custom")])
+    output_dir = tmp_path / "custom"
+    args = parser.parse_args(["convert", "google/gemma-4-E2B-it", str(output_dir)])
 
     cq_calls: list[list[str]] = []
 
     def _fake_cq_main(command):
         cq_calls.append(list(command))
+        _write_gemma4_multimodal_config(output_dir)
         return 0
 
     transpile_calls: list[Namespace] = []
@@ -93,25 +121,12 @@ def test_cmd_convert_honors_explicit_output_dir(monkeypatch, tmp_path: Path) -> 
         "--model",
         "google/gemma-4-E2B-it",
         "--out",
-        str(tmp_path / "custom"),
+        str(output_dir),
         "--bits",
         "4",
         "--force",
     ]
-    assert transpile_calls[0].extra_args == [
-        "--weights-dir",
-        str(tmp_path / "custom"),
-        "--artifact-dir",
-        str(tmp_path / "custom"),
-        "--task",
-        "auto",
-        "--prompt",
-        convert_cli._DEFAULT_MULTIMODAL_PROMPT,
-        "--max-new-tokens",
-        "32",
-        "--component-pipeline",
-        "auto",
-    ]
+    assert transpile_calls[0].extra_args == _gemma4_convert_transpile_extra_args(output_dir)
 
 
 def test_cmd_convert_supplies_default_audio_for_parakeet(monkeypatch, tmp_path: Path) -> None:

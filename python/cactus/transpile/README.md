@@ -621,7 +621,7 @@ bindings need to be reattached later. The manifests carry:
 
 - logical input/output names
 - runtime node ids
-- paths to bound weights or saved `.npy` constants
+- paths to bound weights or saved Cactus tensor constants
 
 ## 14. Optional Execution And Reference Compare
 
@@ -676,7 +676,7 @@ format that can be re-lowered on demand.
 
 ### Bound constant rebinding at runtime
 
-The runtime loader reattaches `.weights` and `.npy` files with
+The runtime loader reattaches Cactus `.weights` tensor files with
 `graph.set_external_input(...)`:
 
 ```python
@@ -808,7 +808,7 @@ Notes:
 - `graph.cactus` is the monolithic lowered graph, when one exists.
 - `components/manifest.json` is the portable bundle manifest.
 - `graph_bindings.json` and per-component `bound_constant_bindings` tell the loader
-  how to reattach mmap-backed weights or saved `.npy` constants.
+  how to reattach mmap-backed weights and saved Cactus tensor constants.
 
 ## File-By-File Map
 

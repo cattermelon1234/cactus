@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from cactus import cli
 from cactus.cli import run as run_cli
 from cactus.cli import transpile as transpile_cli
+from cactus.transpile import component_bundle_runtime
+from cactus.transpile import hf_model
 
 
 def test_cactus_run_detects_transpiled_bundle_and_uses_main_style_audio(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -63,3 +67,45 @@ def test_run_transpiled_human_result_prints_response(capsys) -> None:
     )
 
     assert capsys.readouterr().out == "generated text\n"
+
+
+def test_gemma4_multimodal_decoder_inputs_right_align_to_static_tail() -> None:
+    class FakeComponent:
+        _input_names = ("inputs_embeds", "per_layer_inputs", "position_ids")
+
+    store = {
+        "inputs_embeds": np.arange(1 * 6 * 2, dtype=np.float16).reshape(1, 6, 2),
+        "per_layer_inputs": np.arange(1 * 6 * 1 * 2, dtype=np.float16).reshape(1, 6, 1, 2),
+        "position_ids": np.arange(6, dtype=np.int64).reshape(1, 6),
+    }
+    original = {key: value.copy() for key, value in store.items()}
+
+    component_bundle_runtime._right_align_gemma4_decoder_inputs_to_static_tail(
+        store,
+        component=FakeComponent(),  # type: ignore[arg-type]
+        prompt_token_count=4,
+    )
+
+    assert np.all(store["inputs_embeds"][:, :2, :] == 0)
+    np.testing.assert_array_equal(store["inputs_embeds"][:, 2:, :], original["inputs_embeds"][:, :4, :])
+    assert np.all(store["per_layer_inputs"][:, :2, :, :] == 0)
+    np.testing.assert_array_equal(store["per_layer_inputs"][:, 2:, :, :], original["per_layer_inputs"][:, :4, :, :])
+    assert np.all(store["position_ids"][:, :2] == 0)
+    np.testing.assert_array_equal(store["position_ids"][:, 2:], original["position_ids"][:, :4])
+
+
+def test_materialized_transpile_constants_are_cactus_tensor_files(tmp_path: Path) -> None:
+    tensor_path = tmp_path / "constant.weights"
+    expected = np.arange(6, dtype=np.float16).reshape(2, 3)
+
+    hf_model._write_cactus_constant_tensor(
+        output_path=tensor_path,
+        value=expected,
+        precision=int(hf_model.Graph.FP16),
+    )
+
+    assert {path.name for path in tmp_path.iterdir()} == {"constant.weights"}
+    loaded = component_bundle_runtime._open_cactus_tensor_file(tensor_path)
+    assert loaded.precision == int(hf_model.Graph.FP16)
+    assert tuple(loaded.shape) == (2, 3)
+    np.testing.assert_array_equal(loaded.data.reshape(loaded.shape), expected)

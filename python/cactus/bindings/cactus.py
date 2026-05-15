@@ -255,6 +255,11 @@ _lib.cactus_graph_mmap_weights.argtypes = [
     cactus_graph_t, ctypes.c_char_p, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_mmap_weights.restype = ctypes.c_int
+_bind_optional(
+    "cactus_graph_bind_mmap_weights",
+    [cactus_graph_t, cactus_node_t, ctypes.c_char_p],
+    ctypes.c_int,
+)
 _lib.cactus_graph_bilinear_interpolation.argtypes = [
     cactus_graph_t, cactus_node_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.POINTER(cactus_node_t)
 ]
