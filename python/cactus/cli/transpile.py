@@ -284,10 +284,28 @@ def cmd_run_transpiled(args) -> int:
         max_new_tokens=getattr(args, "max_new_tokens", None),
         stop_sequences=tuple(getattr(args, "stop_sequence", []) or ()),
     )
-    print(json.dumps(result, indent=2, sort_keys=True))
+    if getattr(args, "_transpiled_from_run", False):
+        _print_transpiled_run_result(result)
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
     if getattr(args, "result_json", None):
         result_path = Path(args.result_json).expanduser().resolve()
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
         print_color(GREEN, f"Saved result to {result_path}")
     return 0
+
+
+def _print_transpiled_run_result(result: dict[str, object]) -> None:
+    for key in ("response", "transcript"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            print(value.strip())
+            return
+
+    next_token = result.get("next_token")
+    if isinstance(next_token, str) and next_token:
+        print(next_token)
+        return
+
+    print(json.dumps(result, indent=2, sort_keys=True))

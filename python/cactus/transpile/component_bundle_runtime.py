@@ -450,6 +450,8 @@ def _should_use_native_stateful_audio_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_AUDIO_RUNNER") == "1":
         return False
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_AUDIO_RUNNER") != "1":
+        return False
     model_id = str(manifest.get("model_id", "") or "").lower()
     normalized_family = family.strip().lower()
     if task == "tdt_transcription" and "parakeet" in normalized_family:
@@ -1631,6 +1633,17 @@ def _run_seq2seq_transcription_bundle(
     eos_token_id = inputs_meta.get("eos_token_id", getattr(tokenizer, "eos_token_id", None))
     suppress_tokens = [int(value) for value in inputs_meta.get("suppress_tokens", []) if isinstance(value, int)]
     begin_suppress_tokens = [int(value) for value in inputs_meta.get("begin_suppress_tokens", []) if isinstance(value, int)]
+    if tokenizer is not None and (
+        "whisper" in str(manifest.get("family", "") or "").lower()
+        or "whisper" in str(manifest.get("model_id", "") or "").lower()
+    ):
+        eos_int = int(eos_token_id) if isinstance(eos_token_id, int) else None
+        whisper_special_ids = [
+            int(token_id)
+            for token_id in getattr(tokenizer, "all_special_ids", []) or []
+            if eos_int is None or int(token_id) != eos_int
+        ]
+        suppress_tokens = sorted(set(suppress_tokens).union(whisper_special_ids))
 
     generated_ids: list[int] = []
     logits_shape: list[int] | None = None

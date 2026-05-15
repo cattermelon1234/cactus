@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import inspect
+from contextlib import contextmanager
 from typing import Any
 from typing import Iterable
 
@@ -182,6 +183,38 @@ def _prepare_import_graph_module(ep: Any, args: tuple[Any, ...], kwargs: dict[st
         return ep.graph_module
     return graph_module
 
+
+@contextmanager
+def _suppress_transformers_model_output_registration():
+    """Avoid tracing a Transformers global-set mutation inside ModelOutput init.
+
+    Recent Transformers versions lazily register ModelOutput dataclasses as
+    PyTrees from their __post_init__. That side effect is irrelevant for our
+    capture wrapper because the exported boundary returns tensors, but Dynamo
+    sees the intermediate set membership check and rejects it.
+    """
+
+    try:
+        import transformers.utils.generic as hf_generic
+    except Exception:
+        yield
+        return
+
+    original = getattr(hf_generic, "_register_model_output_pytree_node", None)
+    if original is None:
+        yield
+        return
+
+    def _noop_register_model_output_pytree_node(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    hf_generic._register_model_output_pytree_node = _noop_register_model_output_pytree_node
+    try:
+        yield
+    finally:
+        hf_generic._register_model_output_pytree_node = original
+
+
 def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
     if not isinstance(model, torch.nn.Module):
         raise TypeError("model must be a torch.nn.Module")
@@ -197,7 +230,8 @@ def capture_model(model, args, kwargs=None, *, strict=True) -> CapturedModel:
     transpile_metadata = _collect_transpile_metadata(model, example_args, example_kwargs)
 
     try:
-        ep = export(model, args=example_args, kwargs=example_kwargs, strict=strict)
+        with _suppress_transformers_model_output_registration():
+            ep = export(model, args=example_args, kwargs=example_kwargs, strict=strict)
     except Exception as exc:
         raise CapturePhaseError(
             "export",

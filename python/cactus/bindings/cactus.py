@@ -450,6 +450,10 @@ _lib.cactus_graph_conv1d_pointwise.argtypes = [
     cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.c_bool, cactus_node_t, ctypes.POINTER(cactus_node_t)
 ]
 _lib.cactus_graph_conv1d_pointwise.restype = ctypes.c_int
+_lib.cactus_graph_clamp.argtypes = [
+    cactus_graph_t, cactus_node_t, ctypes.c_float, ctypes.c_float, ctypes.POINTER(cactus_node_t)
+]
+_lib.cactus_graph_clamp.restype = ctypes.c_int
 _lib.cactus_graph_conv2d_k3s2p1.argtypes = [
     cactus_graph_t, cactus_node_t, cactus_node_t, ctypes.c_bool, cactus_node_t, ctypes.POINTER(cactus_node_t)
 ]

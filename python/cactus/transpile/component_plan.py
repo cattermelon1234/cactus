@@ -144,6 +144,16 @@ def infer_component_plan_from_config(
     )
     has_audio = (
         _has_dict_config(config, "audio_config", "speech_config", "acoustic_config")
+        or (
+            _has_dict_config(config, "encoder_config")
+            and (
+                "audio" in model_type
+                or "speech" in model_type
+                or "audio_token_index" in config
+                or any(token in lowered_id for token in ("speech", "audio"))
+                or any(token in value for value in architectures for token in ("speech", "audio"))
+            )
+        )
         or _has_positive_txt_int(config_txt, "audio_num_layers")
     )
     if has_vision or has_audio:

@@ -225,6 +225,8 @@ def create_parser():
                                        help='Bundle root directory or manifest.json path from the transpiler')
     run_transpiled_parser.add_argument('--file', dest='audio_file', default=None,
                                        help='Audio file for transcription bundles such as parakeet-tdt')
+    run_transpiled_parser.add_argument('--audio', default=None,
+                                       help='Alias for --file, matching cactus run')
     run_transpiled_parser.add_argument('--image', default=None,
                                        help='Image file for multimodal transpiled bundles')
     run_transpiled_parser.add_argument('--image-file', action='append', default=[],

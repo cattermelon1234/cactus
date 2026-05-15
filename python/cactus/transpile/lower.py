@@ -459,12 +459,9 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         x = _ensure_fp16_tensor(g, _tensor(env, node.inputs[0]))
         min_value = node.attrs.get("min")
         max_value = node.attrs.get("max")
-        if min_value is not None and math.isfinite(float(min_value)):
-            x = g.scalar_add(g.relu(g.scalar_subtract(x, float(min_value))), float(min_value))
-        if max_value is not None and math.isfinite(float(max_value)):
-            upper_delta = g.relu(g.scalar_add(g.scalar_multiply(x, -1.0), float(max_value)))
-            x = g.scalar_add(g.scalar_multiply(upper_delta, -1.0), float(max_value))
-        return [x]
+        lo = float(min_value) if min_value is not None and math.isfinite(float(min_value)) else -65504.0
+        hi = float(max_value) if max_value is not None and math.isfinite(float(max_value)) else 65504.0
+        return [g.clamp(x, lo, hi)]
 
     if op == "negate":
         return [g.scalar_multiply(_tensor(env, node.inputs[0]), -1.0)]
@@ -645,7 +642,19 @@ def _lower_ir_node(g: Graph, node: IRNode, env: dict[str, Any], ir: IRGraph) -> 
         out = _trim_padded_last_dim(g, out, output_value.shape if output_value is not None else None)
         if node.attrs.get("has_bias"):
             bias = _ensure_tensor_dtype(g, bias, matmul_output_dtype)
-            out = g.add(out, bias)
+            if output_value is not None and output_value.shape is not None:
+                expected_last_dim = int(output_value.shape[-1])
+                if len(bias.shape) >= 1 and int(bias.shape[-1]) > expected_last_dim:
+                    bias = g.slice(bias, len(bias.shape) - 1, 0, expected_last_dim)
+            out, bias = _legalize_elementwise_binary_inputs(g, out, bias)
+            try:
+                out = g.add(out, bias)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "linear bias add failed while lowering "
+                    f"{node.id}: out_shape={tuple(out.shape)} bias_shape={tuple(bias.shape)} "
+                    f"expected_shape={None if output_value is None else output_value.shape}"
+                ) from exc
         if reshape_back is not None:
             out = g.reshape(out, reshape_back)
         if out.dtype != output_dtype:

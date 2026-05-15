@@ -213,6 +213,20 @@ class Graph:
     def scalar_log(self, x):
         return self._scalar("cactus_graph_scalar_log", x)
 
+    def clamp(self, x, lo, hi):
+        x = self._ensure_tensor(x)
+        out = cactus_node_t()
+        rc = _lib.cactus_graph_clamp(
+            self.h,
+            cactus_node_t(x.id),
+            ctypes.c_float(float(lo)),
+            ctypes.c_float(float(hi)),
+            ctypes.byref(out),
+        )
+        if rc != 0:
+            raise RuntimeError(_err("graph_clamp failed"))
+        return self._tensor_from_node(out.value)
+
     def masked_select_prefix(self, x, mask):
         return self._binary("cactus_graph_masked_select_prefix", x, mask)
 
@@ -1228,6 +1242,9 @@ class Tensor:
 
     def scalar_log(self):
         return self.g.scalar_log(self)
+
+    def clamp(self, lo, hi):
+        return self.g.clamp(self, lo, hi)
 
     def relu(self):
         return self.g.relu(self)

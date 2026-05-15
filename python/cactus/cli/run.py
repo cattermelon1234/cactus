@@ -1,5 +1,6 @@
 import os
 import platform
+import sys
 from pathlib import Path
 
 from .common import (
@@ -12,6 +13,70 @@ from .common import (
 from .download import cmd_download
 
 
+def _transpiled_bundle_root_from_manifest(manifest_path: Path) -> Path:
+    if manifest_path.parent.name == "components":
+        return manifest_path.parent.parent
+    return manifest_path.parent
+
+
+def _clear_terminal_for_chat() -> None:
+    if sys.stdout.isatty():
+        os.system('clear' if platform.system() != 'Windows' else 'cls')
+
+
+def _validate_image_path(image_path: str) -> str | None:
+    resolved = str(Path(image_path).expanduser().resolve())
+    path = Path(resolved)
+    if not path.exists():
+        print_color(RED, f"Error: Image file not found: {resolved}")
+        return None
+    valid_exts = {'.png', '.jpg', '.jpeg', '.bmp'}
+    if path.suffix.lower() not in valid_exts:
+        print_color(RED, f"Error: Unsupported image format. Supported: {', '.join(valid_exts)}")
+        return None
+    return resolved
+
+
+def _validate_audio_path(audio_path: str) -> str | None:
+    resolved = str(Path(audio_path).expanduser().resolve())
+    if not Path(resolved).exists():
+        print_color(RED, f"Error: Audio file not found: {resolved}")
+        return None
+    return resolved
+
+
+def _prepare_transpiled_run_args(args, *, manifest_path: Path) -> int:
+    args.bundle_dir = str(_transpiled_bundle_root_from_manifest(manifest_path))
+    args._transpiled_from_run = True
+
+    image_path = getattr(args, 'image', None)
+    if image_path:
+        resolved = _validate_image_path(image_path)
+        if resolved is None:
+            return 1
+        args.image = resolved
+
+    image_files = []
+    for image_file in getattr(args, 'image_file', []) or []:
+        if not image_file:
+            continue
+        resolved = _validate_image_path(str(image_file))
+        if resolved is None:
+            return 1
+        image_files.append(resolved)
+    args.image_file = image_files
+
+    audio_path = getattr(args, 'audio', None) or getattr(args, 'audio_file', None)
+    if audio_path:
+        resolved = _validate_audio_path(str(audio_path))
+        if resolved is None:
+            return 1
+        args.audio = resolved
+        args.audio_file = resolved
+
+    return 0
+
+
 def cmd_run(args):
     """Download model if needed and start interactive chat."""
     model_id = args.model_id
@@ -20,9 +85,13 @@ def cmd_run(args):
 
     manifest_path = _resolve_transpiled_manifest(model_id)
     if manifest_path is not None:
-        args.bundle_dir = str(
-            manifest_path.parent.parent if manifest_path.parent.name == "components" else manifest_path.parent
-        )
+        if getattr(args, 'no_cloud_tele', False):
+            os.environ["CACTUS_NO_CLOUD_TELE"] = "1"
+        if _prepare_transpiled_run_args(args, manifest_path=manifest_path) != 0:
+            return 1
+        _clear_terminal_for_chat()
+        print_color(GREEN, f"Starting Cactus Chat with model: {model_id}")
+        print()
         return cmd_run_transpiled(args)
 
     from .config_utils import CactusConfig
@@ -69,7 +138,7 @@ def cmd_run(args):
         print_color(RED, f"Error: {exc}")
         return 1
 
-    os.system('clear' if platform.system() != 'Windows' else 'cls')
+    _clear_terminal_for_chat()
     print_color(GREEN, f"Starting Cactus Chat with model: {model_id}")
     print()
 

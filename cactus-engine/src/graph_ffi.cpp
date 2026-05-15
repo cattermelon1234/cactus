@@ -1092,6 +1092,17 @@ int cactus_graph_conv1d_pointwise(cactus_graph_t graph, cactus_node_t input, cac
     }
 }
 
+int cactus_graph_clamp(cactus_graph_t graph, cactus_node_t input, float lo, float hi, cactus_node_t* out) {
+    if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_clamp");
+    try {
+        *out = static_cast<cactus_node_t>(as_graph(graph)->graph.clamp(static_cast<size_t>(input), lo, hi));
+        return 0;
+    } catch (const std::exception& e) {
+        last_error_message = e.what();
+        return -1;
+    }
+}
+
 int cactus_graph_conv2d_k3s2p1(cactus_graph_t graph, cactus_node_t input, cactus_node_t weight, bool has_bias, cactus_node_t bias, cactus_node_t* out) {
     if (!graph || !out) return fail_invalid("Invalid args to cactus_graph_conv2d_k3s2p1");
     try {

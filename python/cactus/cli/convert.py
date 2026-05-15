@@ -66,7 +66,7 @@ def cmd_convert(args):
         cq_main(cq_args)
 
         task = getattr(args, "task", "auto") or "auto"
-        prompt = getattr(args, "prompt", None) or _DEFAULT_MULTIMODAL_PROMPT
+        prompt = getattr(args, "prompt", None)
         image_files = [str(path) for path in (getattr(args, "image_file", None) or []) if str(path).strip()]
         audio_file = getattr(args, "audio_file", None)
         component_pipeline = getattr(args, "component_pipeline", "auto") or "auto"
@@ -76,6 +76,9 @@ def cmd_convert(args):
 
         if task == "auto":
             task = plan.task if plan is not None else "auto"
+
+        if prompt is None and task in {"causal_lm_logits", "multimodal_causal_lm_logits"}:
+            prompt = _DEFAULT_MULTIMODAL_PROMPT
 
         if task == "multimodal_causal_lm_logits":
             needs_image = bool(plan.needs_image) if plan is not None else bool(image_files)
@@ -127,13 +130,13 @@ def cmd_convert(args):
             str(output_dir),
             "--task",
             task,
-            "--prompt",
-            prompt,
             "--max-new-tokens",
             str(getattr(args, "max_new_tokens", 32) or 32),
             "--component-pipeline",
             component_pipeline,
         ]
+        if prompt is not None:
+            extra_args.extend(["--prompt", prompt])
         if components:
             extra_args.extend(["--components", str(components)])
         for image_file in image_files:

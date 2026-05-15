@@ -22,12 +22,24 @@ def policy_for_tensor(match: NameMatch, shape: tuple[int, ...], user_bits: int, 
     out = match.output_name or ""
     if match.output_name is None:
         return TensorPolicy("ignored", "none", None, component, False, "none", "no output filename")
+    if "norm" in out.lower():
+        return TensorPolicy("fallback", "FP16", None, component, False, "none", "norm tensor")
     if family in {"parakeet", "parakeet_tdt"} and out.endswith(".bias") and (
         "conv_" in out or out.startswith("subsampling_") or out.startswith("ctc_head_")
     ):
         return TensorPolicy("fallback", "FP16", None, component, False, "none", "conv bias tensor")
+    if family in {"parakeet", "parakeet_tdt"} and "lstm" in out.lower():
+        return TensorPolicy("fallback", "FP16", None, component, False, "none", "lstm recurrent tensor")
+    if family == "parakeet_tdt" and out.startswith("tdt_"):
+        return TensorPolicy("fallback", "FP16", None, component, False, "none", "tdt decoder tensor")
+    if family in {"parakeet", "parakeet_tdt"} and out.startswith("layer_") and (
+        "conv_pointwise" in out or "conv_depthwise" in out
+    ):
+        return TensorPolicy("fallback", "FP16", None, component, False, "none", "conformer conv tensor")
+    if family == "whisper" and out.startswith("encoder.layer_"):
+        return TensorPolicy("fallback", "FP16", None, component, False, "none", "whisper encoder tensor")
     if name.endswith(".bias") or out.endswith(".bias") or ".bias." in out:
-        return TensorPolicy("fallback", "INT8", 8, component, False, "none", "bias tensor")
+        return TensorPolicy("fallback", "FP16", None, component, False, "none", "bias tensor")
     if family in {"parakeet", "parakeet_tdt"} and "conv_pointwise" in out and len(shape) == 3 and shape[2] == 1:
         return TensorPolicy("fallback", "INT8", 8, component, False, "none", "pointwise conv tensor")
     if "conv_depthwise.weights" in out and len(shape) == 3 and shape[1] == 1:
@@ -36,8 +48,6 @@ def policy_for_tensor(match: NameMatch, shape: tuple[int, ...], user_bits: int, 
         return TensorPolicy("fallback", "FP16", None, component, False, "none", "non-2d tensor")
     if "position_embedding" in out.lower() or "pos_embed" in out.lower() or "embed_positions" in out.lower():
         return TensorPolicy("fallback", "FP16", None, component, False, "none", "position embedding tensor")
-    if "norm" in out.lower():
-        return TensorPolicy("fallback", "FP16", None, component, False, "none", "norm tensor")
     if family == "gemma4" and name == "model.language_model.embed_tokens_per_layer.weight":
         return TensorPolicy("convert", "CQ2", 2, component, False, "hadamard")
     if component == "embedding" or out in {"token_embeddings.weights", "output_weight.weights"}:

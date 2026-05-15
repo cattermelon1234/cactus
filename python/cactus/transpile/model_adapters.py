@@ -1283,7 +1283,7 @@ class CausalLMLogitsAdapter(torch.nn.Module):
                 if self.pad_token_id is not None
                 else None,
                 "use_cache": False,
-                "return_dict": True,
+                "return_dict": False,
             }
             outputs = backbone(**_filter_supported_kwargs(backbone, backbone_kwargs))
             hidden_states = _extract_tensor_output(outputs, preferred_field="last_hidden_state")
@@ -1297,7 +1297,7 @@ class CausalLMLogitsAdapter(torch.nn.Module):
         outputs = self.model(
             input_ids=input_ids,
             use_cache=False,
-            return_dict=True,
+            return_dict=False,
         )
         logits = _extract_tensor_output(outputs, preferred_field="logits")
         return _select_last_non_pad_token(

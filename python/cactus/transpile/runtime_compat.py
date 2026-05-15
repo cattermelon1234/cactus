@@ -99,6 +99,7 @@ def _patch_graph_runtime(graph_module, cactus_module) -> None:
     orig_scalar_cos = Graph.scalar_cos
     orig_scalar_sin = Graph.scalar_sin
     orig_scalar_log = Graph.scalar_log
+    orig_clamp = getattr(Graph, "clamp", None)
     orig_add = Graph.add
     orig_subtract = Graph.subtract
     orig_multiply = Graph.multiply
@@ -255,6 +256,11 @@ def _patch_graph_runtime(graph_module, cactus_module) -> None:
     def scalar_log(self, x):
         return orig_scalar_log(self, _ensure_scalar_tensor(self, x))
 
+    def clamp(self, x, lo, hi):
+        if orig_clamp is None:
+            raise RuntimeError("Cactus runtime is missing required symbol: cactus_graph_clamp")
+        return orig_clamp(self, _ensure_scalar_tensor(self, x), lo, hi)
+
     def add(self, a, b):
         return orig_add(self, _ensure_scalar_tensor(self, a), _ensure_scalar_tensor(self, b))
 
@@ -296,6 +302,7 @@ def _patch_graph_runtime(graph_module, cactus_module) -> None:
     Graph.scalar_cos = scalar_cos
     Graph.scalar_sin = scalar_sin
     Graph.scalar_log = scalar_log
+    Graph.clamp = clamp
     Graph.add = add
     Graph.subtract = subtract
     Graph.multiply = multiply
