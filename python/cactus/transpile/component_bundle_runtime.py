@@ -305,22 +305,29 @@ def run_transpiled_bundle(
     resolved_weights_dir = _default_weights_dir_for_manifest(manifest, explicit=weights_dir)
     family = str(manifest.get("family", "") or "")
     task = str(manifest.get("task", "") or "")
+    native_weights_dir = _resolve_native_stateful_weights_dir(
+        bundle_root=bundle_root,
+        manifest=manifest,
+        weights_dir=resolved_weights_dir,
+    )
     if (
         task == "causal_lm_logits"
         and input_ids is None
-        and _should_use_native_stateful_causal_runner(family)
+        and native_weights_dir is not None
+        and _should_use_native_stateful_causal_runner(family=family, task=task, manifest=manifest)
     ):
         return _run_native_stateful_causal_lm_bundle(
             bundle_root=bundle_root,
             manifest=manifest,
             prompt=prompt,
-            weights_dir=resolved_weights_dir,
+            weights_dir=native_weights_dir,
             enable_thinking=enable_thinking,
             max_new_tokens=max_new_tokens,
             stop_sequences=stop_sequences,
         )
     if (
         audio_file is not None
+        and native_weights_dir is not None
         and _should_use_native_stateful_audio_runner(family=family, task=task, manifest=manifest)
     ):
         return _run_native_stateful_audio_bundle(
@@ -328,17 +335,20 @@ def run_transpiled_bundle(
             manifest=manifest,
             audio_file=audio_file,
             prompt=prompt,
-            weights_dir=resolved_weights_dir,
+            weights_dir=native_weights_dir,
             max_new_tokens=max_new_tokens,
         )
-    if _should_use_native_stateful_multimodal_runner(family=family, task=task, manifest=manifest):
+    if (
+        native_weights_dir is not None
+        and _should_use_native_stateful_multimodal_runner(family=family, task=task, manifest=manifest)
+    ):
         return _run_native_stateful_multimodal_bundle(
             bundle_root=bundle_root,
             manifest=manifest,
             prompt=prompt,
             image_files=image_files,
             audio_file=audio_file,
-            weights_dir=resolved_weights_dir,
+            weights_dir=native_weights_dir,
             system_prompt=system_prompt,
             enable_thinking=enable_thinking,
             max_new_tokens=max_new_tokens,
@@ -436,10 +446,15 @@ def _default_weights_dir_for_manifest(
     return candidate if candidate.exists() else None
 
 
-def _should_use_native_stateful_causal_runner(family: str) -> bool:
+def _should_use_native_stateful_causal_runner(
+    *,
+    family: str,
+    task: str,
+    manifest: Mapping[str, object],
+) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_STATEFUL_RUNNER") == "1":
         return False
-    return family.strip().lower() in {"qwen", "qwen3", "qwen3_5", "qwen3.5", "lfm", "lfm2", "lfm2_vl"}
+    return task.strip().lower() == "causal_lm_logits"
 
 
 def _should_use_native_stateful_audio_runner(
@@ -452,13 +467,7 @@ def _should_use_native_stateful_audio_runner(
         return False
     if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_AUDIO_RUNNER") == "0":
         return False
-    model_id = str(manifest.get("model_id", "") or "").lower()
-    normalized_family = family.strip().lower()
-    if task == "tdt_transcription" and "parakeet" in normalized_family:
-        return True
-    if task == "seq2seq_transcription" and ("whisper" in normalized_family or "whisper" in model_id):
-        return True
-    return False
+    return task.strip().lower() in {"tdt_transcription", "seq2seq_transcription", "ctc_logits"}
 
 
 def _should_use_native_stateful_multimodal_runner(
@@ -471,13 +480,7 @@ def _should_use_native_stateful_multimodal_runner(
         return False
     if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_MULTIMODAL_RUNNER") == "0":
         return False
-    model_id = str(manifest.get("model_id", "") or "").lower()
-    normalized_family = family.strip().lower()
-    return task == "multimodal_causal_lm_logits" and (
-        normalized_family in {"gemma4", "lfm2_vl"}
-        or "gemma-4" in model_id
-        or "gemma4" in model_id
-    )
+    return task.strip().lower() == "multimodal_causal_lm_logits"
 
 
 def _run_native_stateful_audio_bundle(

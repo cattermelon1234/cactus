@@ -302,6 +302,10 @@ def _run_transpiled_once(args, run_transpiled_bundle, *, bundle_dir: str | os.Pa
 
 
 def _run_transpiled_interactive_chat(args, run_transpiled_bundle) -> int:
+    native_result = _try_run_native_transpiled_interactive_chat(args)
+    if native_result is not None:
+        return native_result
+
     bundle_dir = getattr(args, "bundle_dir", None) or getattr(args, "model_id", None)
     print(f"Loading model from {bundle_dir}...")
     print("Model loaded.")
@@ -410,6 +414,381 @@ def _run_transpiled_interactive_chat(args, run_transpiled_bundle) -> int:
             history.append(("assistant", response_text))
         current_image = None
         current_audio = None
+
+    print("Goodbye.")
+    return 0
+
+
+def _try_run_native_transpiled_interactive_chat(args) -> int | None:
+    if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_INTERACTIVE") == "1":
+        return None
+
+    bundle_dir = getattr(args, "bundle_dir", None) or getattr(args, "model_id", None)
+    try:
+        from cactus.transpile.component_bundle_runtime import (
+            _resolve_native_stateful_weights_dir,
+            load_component_bundle_manifest,
+        )
+
+        bundle_root, manifest = load_component_bundle_manifest(bundle_dir)
+    except Exception:
+        return None
+
+    task = str(manifest.get("task", "") or "").strip().lower()
+    native_mode = _native_transpiled_interactive_mode(task)
+    if native_mode is None:
+        return None
+
+    native_weights_dir = _resolve_native_stateful_weights_dir(
+        bundle_root=bundle_root,
+        manifest=manifest,
+        weights_dir=getattr(args, "weights_dir", None),
+    )
+    if native_weights_dir is None:
+        return None
+
+    try:
+        if native_mode == "complete":
+            return _run_native_transpiled_interactive_chat(
+                args,
+                native_weights_dir=native_weights_dir,
+                manifest=manifest,
+            )
+        if native_mode == "transcribe":
+            return _run_native_transpiled_interactive_transcribe(
+                args,
+                native_weights_dir=native_weights_dir,
+                manifest=manifest,
+            )
+    except RuntimeError as exc:
+        print_color(
+            YELLOW,
+            f"Native Cactus fast path unavailable for this bundle ({exc}); falling back to graph execution.",
+        )
+        return None
+    return None
+
+
+def _native_transpiled_interactive_mode(task: str) -> str | None:
+    normalized = task.strip().lower()
+    if normalized in {"causal_lm_logits", "multimodal_causal_lm_logits"}:
+        return "complete"
+    if normalized in {"tdt_transcription", "seq2seq_transcription", "ctc_logits"}:
+        return "transcribe"
+    return None
+
+
+def _run_native_transpiled_interactive_chat(args, *, native_weights_dir: Path, manifest: dict[str, object]) -> int:
+    from cactus.bindings.cactus import cactus_complete
+    from cactus.bindings.cactus import cactus_destroy
+    from cactus.bindings.cactus import cactus_init
+    from cactus.bindings.cactus import cactus_reset
+
+    print(f"Loading model from {native_weights_dir}...")
+    model_handle = cactus_init(str(native_weights_dir), None, False)
+    print("Model loaded.")
+    print("Commands: /image <path> [prompt], /audio <path> [prompt], /clear, reset, exit\n")
+
+    history: list[dict[str, object]] = []
+    current_image = getattr(args, "image", None)
+    image_files = list(getattr(args, "image_file", []) or [])
+    if current_image:
+        image_files.append(str(current_image))
+    current_image = image_files[-1] if image_files else None
+    current_audio = getattr(args, "audio_file", None) or getattr(args, "audio", None)
+    initial_prompt = getattr(args, "prompt", None)
+    auto_send = bool(initial_prompt or current_image or current_audio)
+
+    try:
+        while True:
+            if auto_send:
+                auto_send = False
+                user_input = initial_prompt or "Describe the attached input."
+                print(f"You: {user_input}")
+            else:
+                try:
+                    user_input = input("You: ")
+                except EOFError:
+                    break
+
+            user_input = user_input.rstrip(" \t")
+            if not user_input:
+                continue
+            if user_input in {"exit", "quit"}:
+                break
+            if user_input == "reset":
+                history.clear()
+                cactus_reset(model_handle)
+                current_image = None
+                current_audio = None
+                print("Conversation reset.")
+                continue
+            if user_input == "/clear":
+                current_image = None
+                current_audio = None
+                print("Attachments cleared.")
+                continue
+
+            parsed = _parse_transpiled_attachment_command(user_input, "/image ")
+            if parsed is not None:
+                path_value, remainder = parsed
+                if not Path(path_value).expanduser().exists():
+                    print(f"File not found: {path_value}", file=sys.stderr)
+                    continue
+                current_image = str(Path(path_value).expanduser().resolve())
+                if not remainder:
+                    print(f"Image attached: {current_image}")
+                    continue
+                user_input = remainder
+
+            parsed = _parse_transpiled_attachment_command(user_input, "/audio ")
+            if parsed is not None:
+                path_value, remainder = parsed
+                if not Path(path_value).expanduser().exists():
+                    print(f"File not found: {path_value}", file=sys.stderr)
+                    continue
+                current_audio = str(Path(path_value).expanduser().resolve())
+                if not remainder:
+                    print(f"Audio attached: {current_audio}")
+                    continue
+                user_input = remainder
+
+            if current_image:
+                print(f"[image: {current_image}]")
+            if current_audio:
+                print(f"[audio: {current_audio}]")
+            print("Assistant: ", end="", flush=True)
+
+            messages: list[dict[str, object]] = []
+            system_prompt = getattr(args, "system", None)
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.extend(history)
+            user_message: dict[str, object] = {"role": "user", "content": user_input}
+            if current_image:
+                user_message["images"] = [current_image]
+            if current_audio:
+                user_message["audio"] = [current_audio]
+            messages.append(user_message)
+
+            max_tokens = getattr(args, "max_new_tokens", None)
+            if max_tokens is None:
+                inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+                max_tokens = int(inputs_meta.get("max_new_tokens", 0) or 128)
+            options: dict[str, object] = {
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 1,
+                "min_p": 0.0,
+                "repetition_penalty": 1.0,
+                "max_tokens": max(1, int(max_tokens)),
+                "auto_handoff": False,
+                "confidence_threshold": -1.0,
+                "telemetry_enabled": False,
+                "enable_thinking_if_supported": bool(getattr(args, "thinking", False)),
+            }
+            stop_sequences = tuple(getattr(args, "stop_sequence", []) or ())
+            if stop_sequences:
+                options["stop_sequences"] = list(stop_sequences)
+
+            generated_token_ids: list[int] = []
+            token_pieces: list[str] = []
+
+            def _token_callback(token: str, token_id: int) -> None:
+                token_pieces.append(token)
+                generated_token_ids.append(int(token_id))
+                print(token, end="", flush=True)
+
+            started = time.perf_counter()
+            try:
+                response_json = cactus_complete(
+                    model_handle,
+                    json.dumps(messages),
+                    json.dumps(options),
+                    "",
+                    _token_callback,
+                    None,
+                )
+            except Exception as exc:
+                print()
+                print(f"Error: {exc}", file=sys.stderr)
+                continue
+            elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+
+            try:
+                payload = json.loads(response_json)
+            except Exception:
+                payload = {"response": response_json}
+            response_text = str(payload.get("response", "") or "").strip()
+            streamed_text = "".join(token_pieces).strip()
+            if not token_pieces and response_text:
+                print(response_text)
+            else:
+                print()
+            if not response_text:
+                response_text = streamed_text
+
+            result = {
+                "response": response_text,
+                "generated_token_ids": generated_token_ids,
+                "decode_tokens": int(payload.get("decode_tokens", len(generated_token_ids)) or 0),
+                "time_to_first_token_ms": float(payload.get("time_to_first_token_ms", 0.0) or 0.0),
+                "decode_tps": float(payload.get("decode_tps", 0.0) or 0.0),
+                "total_ms": float(payload.get("total_time_ms", elapsed_ms) or elapsed_ms),
+            }
+            _print_transpiled_interactive_stats(result, elapsed_ms=elapsed_ms)
+            print()
+
+            history.append({"role": "user", "content": user_input})
+            if response_text:
+                history.append({"role": "assistant", "content": response_text})
+            current_image = None
+            current_audio = None
+    finally:
+        cactus_destroy(model_handle)
+
+    print("Goodbye.")
+    return 0
+
+
+def _run_native_transpiled_interactive_transcribe(args, *, native_weights_dir: Path, manifest: dict[str, object]) -> int:
+    from cactus.bindings.cactus import cactus_destroy
+    from cactus.bindings.cactus import cactus_init
+    from cactus.bindings.cactus import cactus_reset
+    from cactus.bindings.cactus import cactus_transcribe
+
+    print(f"Loading model from {native_weights_dir}...")
+    model_handle = cactus_init(str(native_weights_dir), None, False)
+    print("Model loaded.")
+    print("Commands: /audio <path> [prompt], /clear, reset, exit\n")
+
+    current_audio = getattr(args, "audio_file", None) or getattr(args, "audio", None)
+    initial_prompt = getattr(args, "prompt", None)
+    auto_send = bool(initial_prompt or current_audio)
+
+    try:
+        while True:
+            if auto_send:
+                auto_send = False
+                user_input = initial_prompt or ""
+                print(f"You: {user_input if user_input else '[audio]'}")
+            else:
+                try:
+                    user_input = input("You: ")
+                except EOFError:
+                    break
+
+            user_input = user_input.rstrip(" \t")
+            if not user_input and not current_audio:
+                continue
+            if user_input in {"exit", "quit"}:
+                break
+            if user_input == "reset":
+                cactus_reset(model_handle)
+                current_audio = None
+                print("Conversation reset.")
+                continue
+            if user_input == "/clear":
+                current_audio = None
+                print("Attachments cleared.")
+                continue
+
+            parsed = _parse_transpiled_attachment_command(user_input, "/audio ")
+            if parsed is not None:
+                path_value, remainder = parsed
+                if not Path(path_value).expanduser().exists():
+                    print(f"File not found: {path_value}", file=sys.stderr)
+                    continue
+                current_audio = str(Path(path_value).expanduser().resolve())
+                if not remainder:
+                    print(f"Audio attached: {current_audio}")
+                    continue
+                user_input = remainder
+
+            if not current_audio:
+                maybe_path = Path(user_input).expanduser()
+                if maybe_path.exists():
+                    current_audio = str(maybe_path.resolve())
+                    user_input = ""
+                else:
+                    print("Attach audio with /audio <path> [prompt].")
+                    continue
+
+            print(f"[audio: {current_audio}]")
+            print("Assistant: ", end="", flush=True)
+
+            inputs_meta = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
+            max_tokens = getattr(args, "max_new_tokens", None)
+            if max_tokens is None:
+                max_tokens = int(
+                    inputs_meta.get("max_new_tokens", 0)
+                    or inputs_meta.get("target_token_count", 0)
+                    or 512
+                )
+            options: dict[str, object] = {
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 1,
+                "min_p": 0.0,
+                "repetition_penalty": 1.0,
+                "max_tokens": max(1, int(max_tokens)),
+                "auto_handoff": False,
+                "confidence_threshold": -1.0,
+                "telemetry_enabled": False,
+            }
+
+            generated_token_ids: list[int] = []
+            token_pieces: list[str] = []
+
+            def _token_callback(token: str, token_id: int) -> None:
+                token_pieces.append(token)
+                generated_token_ids.append(int(token_id))
+                print(token, end="", flush=True)
+
+            started = time.perf_counter()
+            try:
+                response_text = cactus_transcribe(
+                    model_handle,
+                    str(current_audio),
+                    user_input,
+                    json.dumps(options),
+                    _token_callback,
+                    None,
+                )
+            except Exception as exc:
+                print()
+                print(f"Error: {exc}", file=sys.stderr)
+                continue
+            elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+
+            try:
+                payload = json.loads(response_text)
+            except Exception:
+                payload = {"response": response_text}
+            transcript = str(payload.get("response", response_text) or "").strip()
+            streamed_text = "".join(token_pieces).strip()
+            if not token_pieces and transcript:
+                print(transcript)
+            else:
+                print()
+            if not transcript:
+                transcript = streamed_text
+
+            result = {
+                "response": transcript,
+                "transcript": transcript,
+                "generated_token_ids": generated_token_ids,
+                "decode_tokens": int(payload.get("decode_tokens", len(generated_token_ids)) or 0),
+                "time_to_first_token_ms": float(payload.get("time_to_first_token_ms", 0.0) or 0.0),
+                "decode_tps": float(payload.get("decode_tps", 0.0) or 0.0),
+                "total_ms": float(payload.get("total_time_ms", elapsed_ms) or elapsed_ms),
+            }
+            _print_transpiled_interactive_stats(result, elapsed_ms=elapsed_ms)
+            print()
+
+            current_audio = None
+    finally:
+        cactus_destroy(model_handle)
 
     print("Goodbye.")
     return 0
