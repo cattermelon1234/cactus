@@ -85,7 +85,6 @@ set(CACTUS_KERNELS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cactus-kernels")
 target_include_directories(cactus_engine
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/models
             ${CACTUS_KERNELS_DIR}/src
             ${CACTUS_KERNELS_DIR}/libs
 )
