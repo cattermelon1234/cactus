@@ -450,7 +450,7 @@ def _should_use_native_stateful_audio_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_AUDIO_RUNNER") == "1":
         return False
-    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_AUDIO_RUNNER") != "1":
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_AUDIO_RUNNER") == "0":
         return False
     model_id = str(manifest.get("model_id", "") or "").lower()
     normalized_family = family.strip().lower()
@@ -469,12 +469,14 @@ def _should_use_native_stateful_multimodal_runner(
 ) -> bool:
     if os.environ.get("CACTUS_TRANSPILER_DISABLE_NATIVE_MULTIMODAL_RUNNER") == "1":
         return False
-    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_MULTIMODAL_RUNNER") != "1":
+    if os.environ.get("CACTUS_TRANSPILER_ENABLE_NATIVE_MULTIMODAL_RUNNER") == "0":
         return False
     model_id = str(manifest.get("model_id", "") or "").lower()
     normalized_family = family.strip().lower()
     return task == "multimodal_causal_lm_logits" and (
-        normalized_family == "gemma4" or "gemma-4" in model_id or "gemma4" in model_id
+        normalized_family in {"gemma4", "lfm2_vl"}
+        or "gemma-4" in model_id
+        or "gemma4" in model_id
     )
 
 
@@ -1073,7 +1075,20 @@ def execute_loaded_component_pipeline(
                     f"component {component.component} is missing pipeline input {input_name!r}"
                 )
             runtime_inputs.append(store[input_name])
-        component.set_inputs(runtime_inputs)
+        for tensor, value, input_name in zip(
+            component.runtime_inputs,
+            runtime_inputs,
+            input_names,
+            strict=True,
+        ):
+            expected_shape = tuple(int(dim) for dim in tensor.shape)
+            actual_shape = tuple(int(dim) for dim in np.asarray(value).shape)
+            if actual_shape != expected_shape:
+                raise ValueError(
+                    f"component {component.component} input {input_name!r} shape mismatch: "
+                    f"expected {expected_shape}, got {actual_shape}"
+                )
+        component.set_external_inputs(runtime_inputs)
         raw_outputs = component.execute()
         numpy_outputs = [output.numpy().copy() for output in raw_outputs]
         output_names = component_output_names(component)
@@ -1310,30 +1325,12 @@ def _run_multimodal_causal_lm_bundle(
         name: tensor.detach().cpu().numpy()
         for name, tensor in zip(prepared.names, prepared.tensors, strict=True)
     }
-    if family == "lfm2_vl":
-        tokenizer = getattr(processor, "tokenizer", processor)
-        padding_token_id = _resolve_bundle_padding_token_id(inputs_meta, tokenizer)
-        input_shapes = inputs_meta.get("input_shapes") if isinstance(inputs_meta, Mapping) else None
-        if isinstance(input_shapes, Mapping):
-            for name, pad_value in (("input_ids", padding_token_id), ("attention_mask", 0)):
-                target_shape = input_shapes.get(name)
-                value = prepared_store.get(name)
-                if (
-                    isinstance(target_shape, list)
-                    and len(target_shape) == 2
-                    and isinstance(value, np.ndarray)
-                    and value.ndim == 2
-                ):
-                    target_len = int(target_shape[1])
-                    if value.shape[1] > target_len:
-                        raise ValueError(
-                            f"{name} length {value.shape[1]} exceeds transpiled LFM2-VL context {target_len}; "
-                            "re-transpile with a longer representative prompt."
-                        )
-                    if value.shape[1] < target_len:
-                        padded = np.full((value.shape[0], target_len), pad_value, dtype=value.dtype)
-                        padded[:, : value.shape[1]] = value
-                        prepared_store[name] = padded
+    tokenizer = getattr(processor, "tokenizer", processor)
+    _pad_prepared_store_to_static_input_shapes(
+        prepared_store,
+        inputs_meta=inputs_meta,
+        tokenizer=tokenizer,
+    )
     start = time.perf_counter()
     store, _ = execute_loaded_component_pipeline(
         [component_graphs[name] for name in required_components],
@@ -2002,6 +1999,57 @@ def _resolve_bundle_padding_token_id(inputs_meta: Mapping[str, object] | None, t
         if isinstance(token_id, int) and token_id >= 0:
             return int(token_id)
     return 0
+
+
+def _static_input_pad_value(name: str, *, padding_token_id: int) -> int | float:
+    normalized = name.strip().lower()
+    if normalized in {"input_ids", "decoder_input_ids"}:
+        return int(padding_token_id)
+    if normalized.endswith("position_ids") and "pixel" in normalized:
+        return -1
+    if normalized.endswith("mask") or normalized in {"attention_mask", "token_type_ids"}:
+        return 0
+    return 0.0
+
+
+def _pad_prepared_store_to_static_input_shapes(
+    prepared_store: dict[str, np.ndarray],
+    *,
+    inputs_meta: Mapping[str, object],
+    tokenizer: object | None,
+) -> None:
+    input_shapes = inputs_meta.get("input_shapes") if isinstance(inputs_meta, Mapping) else None
+    if not isinstance(input_shapes, Mapping):
+        return
+
+    padding_token_id = _resolve_bundle_padding_token_id(inputs_meta, tokenizer)
+    for name, raw_target_shape in input_shapes.items():
+        if not isinstance(name, str):
+            continue
+        value = prepared_store.get(name)
+        if not isinstance(value, np.ndarray):
+            continue
+        if not isinstance(raw_target_shape, (list, tuple)):
+            continue
+        target_shape = tuple(int(dim) for dim in raw_target_shape)
+        if tuple(int(dim) for dim in value.shape) == target_shape:
+            continue
+        if value.ndim != len(target_shape):
+            raise ValueError(
+                f"{name} rank {value.ndim} does not match transpiled bundle input rank {len(target_shape)}; "
+                "re-transpile with representative inputs for this model."
+            )
+        if any(int(current) > int(target) for current, target in zip(value.shape, target_shape, strict=True)):
+            raise ValueError(
+                f"{name} shape {list(value.shape)} exceeds transpiled bundle input shape {list(target_shape)}; "
+                "re-transpile with a longer representative prompt/media sample."
+            )
+
+        pad_value = _static_input_pad_value(name, padding_token_id=padding_token_id)
+        padded = np.full(target_shape, pad_value, dtype=value.dtype)
+        copy_slices = tuple(slice(0, int(dim)) for dim in value.shape)
+        padded[copy_slices] = value
+        prepared_store[name] = np.ascontiguousarray(padded)
 
 
 def _encode_stop_sequences(tokenizer: object | None, stop_sequences: tuple[str, ...]) -> list[list[int]]:
